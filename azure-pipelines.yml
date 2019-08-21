@@ -94,7 +94,7 @@ steps:
   condition: and(succeeded(), or(variables['Endjin.ForcePublish'], eq(variables['GitVersion.PreReleaseTag'], '')))
   inputs:
     gitHubConnection: 'corvus-dotnet-github'
-    repositoryName: 'corvus-dotnet/Corvus.Extensions'
+    repositoryName: $(BUILD_REPOSITORY_NAME)
     tagSource: manual
     tag: $(GitVersion.SemVer) 
     isPreRelease: $(Endjin_IsPreRelease)
