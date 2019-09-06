@@ -36,6 +36,11 @@ namespace Corvus.Retry.Strategies
         /// <remarks>The  minimum backoff is 1 second, and the maximum backoff is 30 seconds.</remarks>
         public Backoff(int maxTries, TimeSpan deltaBackoff)
         {
+            if (maxTries <= 0)
+            {
+                throw new ArgumentException("Max tries must be > 0", nameof(maxTries));
+            }
+
             this.maxTries = maxTries;
             this.DeltaBackoff = deltaBackoff;
             this.MinBackoff = this.DefaultMinBackoff;
@@ -87,6 +92,11 @@ namespace Corvus.Retry.Strategies
         /// <inheritdoc/>
         public override TimeSpan PrepareToRetry(Exception lastException)
         {
+            if (lastException is null)
+            {
+                throw new ArgumentNullException(nameof(lastException));
+            }
+
             this.AddException(lastException);
 
             this.tryCount += 1;

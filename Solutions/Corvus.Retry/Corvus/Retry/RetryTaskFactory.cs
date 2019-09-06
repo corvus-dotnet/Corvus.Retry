@@ -40,6 +40,11 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action action)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
             return this.StartNew(action, new Count(), new AnyException());
         }
 
@@ -51,6 +56,11 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action action, CancellationToken cancellationToken)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
             return this.StartNew(action, cancellationToken, new Count(), new AnyException());
         }
 
@@ -62,6 +72,11 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action action, TaskCreationOptions taskCreationOptions)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
             return this.StartNew(action, taskCreationOptions, new Count(), new AnyException());
         }
 
@@ -73,6 +88,11 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action<object> action, object state)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
             return this.StartNew(action, state, new Count(), new AnyException());
         }
 
@@ -85,6 +105,11 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action<object> action, object state, TaskCreationOptions taskCreationOptions)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
             return this.StartNew(action, state, taskCreationOptions, new Count(), new AnyException());
         }
 
@@ -99,6 +124,11 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action<object> action, object state, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
             return this.StartNew(action, state, cancellationToken, taskCreationOptions, scheduler, new Count(), new AnyException());
         }
 
@@ -112,6 +142,11 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action action, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
             return this.StartNew(action, cancellationToken, taskCreationOptions, scheduler, new Count(), new AnyException());
         }
 
@@ -123,6 +158,16 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action action, IRetryPolicy policy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (policy is null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
             return this.StartNew(action, new Count(), policy);
         }
 
@@ -135,6 +180,16 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action action, CancellationToken cancellationToken, IRetryPolicy policy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (policy is null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
             return this.StartNew(action, cancellationToken, new Count(), policy);
         }
 
@@ -147,6 +202,16 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action action, TaskCreationOptions taskCreationOptions, IRetryPolicy policy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (policy is null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
             return this.StartNew(action, taskCreationOptions, new Count(), policy);
         }
 
@@ -159,6 +224,16 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action<object> action, object state, IRetryPolicy policy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (policy is null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
             return this.StartNew(action, state, new Count(), policy);
         }
 
@@ -172,6 +247,16 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action<object> action, object state, TaskCreationOptions taskCreationOptions, IRetryPolicy policy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (policy is null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
             return this.StartNew(action, state, taskCreationOptions, new Count(), policy);
         }
 
@@ -187,6 +272,16 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action<object> action, object state, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryPolicy policy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (policy is null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
             return this.StartNew(action, state, cancellationToken, taskCreationOptions, scheduler, new Count(), policy);
         }
 
@@ -201,6 +296,16 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action action, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryPolicy policy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (policy is null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
             return this.StartNew(action, cancellationToken, taskCreationOptions, scheduler, new Count(), policy);
         }
 
@@ -212,6 +317,16 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action action, IRetryStrategy strategy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
             return this.StartNew(action, strategy, new AnyException());
         }
 
@@ -224,6 +339,16 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action action, CancellationToken cancellationToken, IRetryStrategy strategy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
             return this.StartNew(action, cancellationToken, strategy, new AnyException());
         }
 
@@ -236,6 +361,16 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action action, TaskCreationOptions taskCreationOptions, IRetryStrategy strategy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
             return this.StartNew(action, taskCreationOptions, strategy, new AnyException());
         }
 
@@ -248,6 +383,16 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action<object> action, object state, IRetryStrategy strategy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
             return this.StartNew(action, state, strategy, new AnyException());
         }
 
@@ -261,6 +406,16 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action<object> action, object state, TaskCreationOptions taskCreationOptions, IRetryStrategy strategy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
             return this.StartNew(action, state, taskCreationOptions, strategy, new AnyException());
         }
 
@@ -276,6 +431,16 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action<object> action, object state, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
             return this.StartNew(action, state, cancellationToken, taskCreationOptions, scheduler, strategy, new AnyException());
         }
 
@@ -290,6 +455,16 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action action, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
             return this.StartNew(action, cancellationToken, taskCreationOptions, scheduler, strategy, new AnyException());
         }
 
@@ -302,6 +477,16 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action action, IRetryStrategy strategy, IRetryPolicy policy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
             return Task.Factory.StartNew(action).ContinueWith(t => HandleTask(t, () => new Task(action), strategy, policy));
         }
 
@@ -315,6 +500,21 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action action, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
+            if (policy is null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
             return Task.Factory.StartNew(action, cancellationToken).ContinueWith(t => HandleTask(t, () => new Task(action, cancellationToken), strategy, policy));
         }
 
@@ -328,6 +528,21 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action action, TaskCreationOptions taskCreationOptions, IRetryStrategy strategy, IRetryPolicy policy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
+            if (policy is null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
             return Task.Factory.StartNew(action, taskCreationOptions).ContinueWith(t => HandleTask(t, () => new Task(action, taskCreationOptions), strategy, policy));
         }
 
@@ -341,6 +556,21 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action<object> action, object state, IRetryStrategy strategy, IRetryPolicy policy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
+            if (policy is null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
             return Task.Factory.StartNew(action, state).ContinueWith(t => HandleTask(t, () => new Task(action, state), strategy, policy));
         }
 
@@ -355,6 +585,21 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action<object> action, object state, TaskCreationOptions taskCreationOptions, IRetryStrategy strategy, IRetryPolicy policy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
+            if (policy is null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
             return Task.Factory.StartNew(action, state, taskCreationOptions).ContinueWith(t => HandleTask(t, () => new Task(action, state, taskCreationOptions), strategy, policy));
         }
 
@@ -369,6 +614,21 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action<object> action, object state, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
+            if (policy is null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
             return Task.Factory.StartNew(action, state, cancellationToken).ContinueWith(t => HandleTask(t, () => new Task(action, state, cancellationToken), strategy, policy));
         }
 
@@ -385,6 +645,21 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action<object> action, object state, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy, IRetryPolicy policy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
+            if (policy is null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
             return Task.Factory.StartNew(action, state, cancellationToken, taskCreationOptions, scheduler).ContinueWith(t => HandleTask(t, () => new Task(action, state, cancellationToken, taskCreationOptions), strategy, policy));
         }
 
@@ -400,6 +675,21 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the action is complete.</returns>
         public Task StartNew(Action action, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy, IRetryPolicy policy)
         {
+            if (action is null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
+            if (policy is null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
             return Task.Factory.StartNew(action, cancellationToken, taskCreationOptions, scheduler).ContinueWith(t => HandleTask(t, () => new Task(action, cancellationToken, taskCreationOptions), strategy, policy));
         }
 
@@ -418,6 +708,16 @@ namespace Corvus.Retry
         /// </remarks>
         internal static void HandleException(Task task, IRetryStrategy strategy)
         {
+            if (task is null)
+            {
+                throw new ArgumentNullException(nameof(task));
+            }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
             AggregateException exception = strategy.Exception;
             if (exception != null && task.Exception != null)
             {
@@ -445,6 +745,26 @@ namespace Corvus.Retry
         /// </remarks>
         internal static Task HandleRetry(Task task, Func<Task> createTask, IRetryStrategy strategy, IRetryPolicy policy)
         {
+            if (task is null)
+            {
+                throw new ArgumentNullException(nameof(task));
+            }
+
+            if (createTask is null)
+            {
+                throw new ArgumentNullException(nameof(createTask));
+            }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
+            if (policy is null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
             while (task.Exception != null)
             {
                 TimeSpan delay = strategy.PrepareToRetry(task.Exception);

@@ -36,6 +36,11 @@ namespace Corvus.Retry.Strategies
         /// <param name="step">The increment step per retry.</param>
         public Incremental(int maxTries, TimeSpan intialDelay, TimeSpan step)
         {
+            if (maxTries <= 0)
+            {
+                throw new ArgumentException("Max tries must be > 0", nameof(maxTries));
+            }
+
             this.maxTries = maxTries;
             this.initialDelay = intialDelay;
             this.step = step;
@@ -53,6 +58,11 @@ namespace Corvus.Retry.Strategies
         /// <inheritdoc/>
         public override TimeSpan PrepareToRetry(Exception lastException)
         {
+            if (lastException is null)
+            {
+                throw new ArgumentNullException(nameof(lastException));
+            }
+
             this.AddException(lastException);
 
             this.tryCount++;

@@ -57,6 +57,11 @@ namespace Corvus.Retry.Strategies
         /// <remarks>This will flatten an aggregate exception into the list.</remarks>
         protected void AddException(Exception exception)
         {
+            if (exception is null)
+            {
+                throw new ArgumentNullException(nameof(exception));
+            }
+
             if (exception is AggregateException aggregateException)
             {
                 foreach (Exception ex in aggregateException.InnerExceptions)

@@ -38,6 +38,11 @@ namespace Corvus.Retry
         /// <returns>An instance of a runner which can be used to control the long-running function.</returns>
         public static ReliableTaskRunner Run(Func<CancellationToken, Task> runFunction)
         {
+            if (runFunction is null)
+            {
+                throw new ArgumentNullException(nameof(runFunction));
+            }
+
             return Run(runFunction, new AnyException());
         }
 
@@ -49,6 +54,16 @@ namespace Corvus.Retry
         /// <returns>An instance of a runner which can be used to control the long-running function.</returns>
         public static ReliableTaskRunner Run(Func<CancellationToken, Task> runFunction, IRetryPolicy retryPolicy)
         {
+            if (runFunction is null)
+            {
+                throw new ArgumentNullException(nameof(runFunction));
+            }
+
+            if (retryPolicy is null)
+            {
+                throw new ArgumentNullException(nameof(retryPolicy));
+            }
+
             var runner = new ReliableTaskRunner();
             runner.RunInternal(runFunction, retryPolicy);
             return runner;

@@ -29,6 +29,11 @@ namespace Corvus.Retry.Policies
         /// <inheritdoc/>
         public bool CanRetry(Exception exception)
         {
+            if (exception is null)
+            {
+                throw new ArgumentNullException(nameof(exception));
+            }
+
             return this.policies.All(p => p.CanRetry(exception));
         }
     }

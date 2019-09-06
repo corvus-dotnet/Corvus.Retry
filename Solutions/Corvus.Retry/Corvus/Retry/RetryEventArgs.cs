@@ -22,7 +22,7 @@ namespace Corvus.Retry
         /// <param name="delayBeforeRetry">The delay before the next retrying.</param>
         public RetryEventArgs(Exception lastException, TimeSpan delayBeforeRetry)
         {
-            this.LastException = lastException;
+            this.LastException = lastException ?? throw new ArgumentNullException(nameof(lastException));
             this.DelayBeforeRetry = delayBeforeRetry;
         }
 
