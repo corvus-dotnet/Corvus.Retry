@@ -3,13 +3,206 @@
 [![GitHub license](https://img.shields.io/badge/License-Apache%202-blue.svg)](https://raw.githubusercontent.com/corvus-dotnet/Corvus.Retry/master/LICENSE)
 [![IMM](https://endimmfuncdev.azurewebsites.net/api/imm/github/corvus-dotnet/Corvus.Retry/total?cache=false)](https://endimmfuncdev.azurewebsites.net/api/imm/github/corvus-dotnet/Corvus.Retry/total?cache=false)
 
-This provides a library of useful retry operations.
+This provides support for retriable and reliable/long running methods.
 
 It is built for netstandard2.0.
 
 ## Features
 
-<TODO>
+There are three types of retry operation in this library:
+
+### `RetryTask`
+Starting a task to execute a function asynchronously, with retry
+### `Retriable`
+Wrapping a synchronous or asynchronous operation with retry semantics
+### `ReliableTaskRunner`
+Wrapping a long-running asynchronous operation in a host that ensures it continues to run even after failure.
+
+## Usage
+
+### `Retriable`
+
+This is the most common usage pattern. It wraps an existing method, and allows you to re-execute the method if it throws an exception.
+
+```
+Retriable.Retry(() => DoSomethingThatMightFail());
+```
+
+You can return values from your method
+
+```
+SomeResult result = Retriable.Retry(() => new SomeResult());
+```
+
+You can also use asynchronous methods
+
+```
+Task resultTask = Retriable.RetryAsync(() => SomeOperationAsync());
+```
+
+### Policy and Strategy
+
+Two types help you to control when a failed operation is retried, and how that retry occurs. `IRetryPolicy` and `IRetryStrategy`.
+
+#### `IRetryPolicy`
+
+The retry policy gives you the ability to determine whether the operation should be retried or not, based on the exception that has been thrown.
+
+This typically means you can distinguish between terminal exceptions (like bad input) and transient exceptions (like a network timeout).
+
+There are three built-in retry policies:
+
+##### `AnyException`
+This will always retry on any exception, and is the default for `Retriable`.
+
+##### `DoNotRetryPolicy`
+This will never retry, regardless of the exception. You use this to disable retry, without having to comment out your retry code.
+
+Typically, you would do this with some kind of conditional
+
+```
+IRetryPolicy policy = isDebuggingOrWhatever ? new DoNotRetryPolicy() : new AnyException();
+
+var result = Retriable.Retry(() => DoSomething(), new Count(10), policy);
+```
+##### `AggregatePolicy`
+This gives you a means of ANDing together mutiple policies. The `AggregatePolicy` only succeeds if ALL of its children succeed.
+
+```
+var aggregatePolicy =
+  new AggregatePolicy
+  {
+    Policies =
+    {
+      new CustomPolicy1(),
+      new CustomPolicy2(),
+    },
+  }
+```
+
+##### Implementing a custom policy
+It is very simple to create your own custom policy, and you will frequently do so. You implement the `IRetryPolicy` interface, and its `bool CanRetry(Exception exception);` method.
+
+For example, let's imagine we were consuming an HttpService which occasionally gives us a `429 - Too Many Requests` error in an `HttpServiceException`.
+
+We can implement a policy which will only retry if we recieve this exception.
+
+```
+public class RetryOnTooManyRequestsPolicy : IHttpPolicy
+{
+  bool CanRetry(Exception exception)
+  {
+    return (exception is HttpServiceException httpException && httpException.StatusCode == 429);
+  }
+}
+```
+
+#### `IRetryStrategy`
+The `IRetryStrategy` controls the way in which the operation is retried. It controls both the _delay between each retry_ and the _number of times that it will be retried_.
+
+There are several strategies provided out-of-the-box
+
+##### `Count`
+This simply retries a specified number of times, with no delay. `Retriable` operations default to a `new Count(10)` strategy.
+
+##### `DoNotRetry`
+This is the strategy equivalent of the `DoNotRetryPolicy`. It forces a retry to be abandoned, regardless of policy.
+
+##### `Linear`
+This retries a specified number of times, with an constant delay between each retry.
+
+For example, `new Linear(TimeSpan.FromSeconds(1), 10)` will retry up to 10 times. Each time it will  delay by 1s. So the first retry will be after 1s (wall clock time 1s), the second after another 1s (wall clock time 2s), the third after another 1s (wall clock time 3s).
+
+##### `Incremental`
+This retries a specified number of times, with an arithmetically increasing delay between each retry.
+
+For example, `new Incremental(TimeSpan.FromSeconds(1), 10)` will retry up to 10 times. Each time it will increase the delay by 1s. So the first retry will be after 1s (wall clock time 1s), the second after another 2s (wall clock time 3s), the third after another 3s (wall clock time 6s).
+
+This allows a slowly increasing delay.
+
+##### `Backoff`
+This retries a specified number of times, with a delay that increases geometrically between each retry.
+
+For example, `new Backoff(10, TimeSpan.FromSeconds(1))` will retry up to 10 times. Each time it will increase the delay by a value calculated roughly like this: `2^n * (delta +/- a small random fudge)`.
+
+This allows a rapidly increasing delay, with a bit of random jitter addded to avoid contention.
+
+You can also set a `MinBackoff` and `MaxBackoff` to limit the lower and upper bounds of the delay.
+
+##### Implementing a custom strategy
+It is slightly more complex to implement a custom retry strategy than it was to implement a retry policy. Although you can directly implemet the `IRetryStrategy` interface, it is usually simpler to derive from the abstract `RetryStrategy` class.
+
+In that case, you need to override the `TimeSpan PrepareToRetry(Exception lastException)` method. You can examine the exception and use your internal state to determine two things:
+
+1) Should we record this exception, or filter it out? Typically, we will want to record the exception, and, if so, we call `this.AddException(lastException)`.
+2) For how long should we delay before retrying? We return a `TimeSpan` from the method to determine this.
+
+So, for example, `Count` implements the method like this:
+
+```
+public override TimeSpan PrepareToRetry(Exception lastException)
+{
+  if (lastException is null)
+  {
+    throw new ArgumentNullException(nameof(lastException));
+  }
+
+  this.AddException(lastException);
+  this.tryCount++;
+  return TimeSpan.Zero;
+}
+```
+
+It updates its internal state to keep a count of the number of retries, adds the exception to the list of exceptions we have seen, and tells the strategy not to delay before retrying.
+
+We also override the `bool CanRetry { get; }` property to determine wether this strategy still allows us to retry.
+
+The `Count` strategy, for example, simply uses its internal state to determine whether to continue.
+
+```
+/// <inheritdoc/>
+public override bool CanRetry
+{
+  get
+  {
+    return this.tryCount < this.maxTries;
+  }
+}
+```
+
+#### `ISleepService`
+`Retriable` uses an implementation of an `ISleepService` to delay between retries. The sleep service offers synchronous `Sleep(TimeSpan)` and asynchronous `SleepAsync(TimeSpan)` methods to achieve a delay.
+
+The default `SleepService` implementation uses `Thread.Sleep()` for the synchronous delay, and `Task.Delay()` for the asynchronous implementation.
+
+For test purposes, for example, you could create an `ISleepService` implementation that incremented a virtual wallclock, and/or removed the delay entirely. You would set this using the `Retriable.SleepServices` static property.
+
+### `RetryTask`
+
+The `RetryTask` is an analog of `Task` which has built-in retry semantics.
+
+Instead of calling `Task.Factory.StartNew()` you can call `RetryTask.Factory.StartNew()` with all the familiar parameters.
+
+In addition to those usual parameters, you can pass an `IRetryPolicy` and an `IRetryStrategy` to control the retry behaviour. The defaults are the same as for `Retriable`.
+
+You can also control the sleep behaviour in the same was as `Retriable` by setting an `ISleepService` on 
+
+### `ReliableTaskRunner`
+This is used to run a service-like operation that is supposed to execute 'forever' (or, at least, until cancellation). If the method fails, it should be re-started.
+
+You start a task using the static `ReliableTaskRunner.Run()` method. For example
+
+```
+ReliableTaskRunner runner = ReliableTaskRunner.Run(cancellationToken => DoSomeOperationAsync(cancellationToken));
+```
+
+When you want to terminate the task, you call the `StopAsync()` method e.g.
+
+```
+await runner.StopAsync();
+```
+
+As with the other retry methods, there are overloads where you can pass an `IRetryPolicy` and an and `IRetryStrategy` to control the restart behaviour. 
 
 ## Licenses
 
