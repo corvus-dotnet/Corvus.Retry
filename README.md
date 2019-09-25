@@ -16,7 +16,7 @@ Starting a task to execute a function asynchronously, with retry
 ### `Retriable`
 Wrapping a synchronous or asynchronous operation with retry semantics
 ### `ReliableTaskRunner`
-Wrapping a long-running asynchronous operation in a host that ensures it continues to run even after failure.
+Wrapping a long-running asynchronous operation in a host that ensures it continues to run even after a transient failure.
 
 ## Usage
 
