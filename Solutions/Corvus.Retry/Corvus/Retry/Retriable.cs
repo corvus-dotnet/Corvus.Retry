@@ -51,7 +51,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(func));
             }
 
-            return Retry(func, CancellationToken.None, new Count(10), new AnyException());
+            return Retry(func, CancellationToken.None, new Count(10), new AnyExceptionPolicy());
         }
 
         /// <summary>
@@ -85,7 +85,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(asyncFunc));
             }
 
-            return RetryAsync(asyncFunc, CancellationToken.None, new Count(10), new AnyException(), continueOnCapturedContext);
+            return RetryAsync(asyncFunc, CancellationToken.None, new Count(10), new AnyExceptionPolicy(), continueOnCapturedContext);
         }
 
         /// <summary>
@@ -99,7 +99,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(func));
             }
 
-            Retry(func, CancellationToken.None, new Count(10), new AnyException());
+            Retry(func, CancellationToken.None, new Count(10), new AnyExceptionPolicy());
         }
 
         /// <summary>
@@ -114,7 +114,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(func));
             }
 
-            Retry(func, cancellationToken, new Count(10), new AnyException());
+            Retry(func, cancellationToken, new Count(10), new AnyExceptionPolicy());
         }
 
         /// <summary>
@@ -147,7 +147,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(asyncFunc));
             }
 
-            return RetryAsync(asyncFunc, cancellationToken, new Count(10), new AnyException());
+            return RetryAsync(asyncFunc, cancellationToken, new Count(10), new AnyExceptionPolicy());
         }
 
         /// <summary>
@@ -163,7 +163,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(asyncFunc));
             }
 
-            return RetryAsync(asyncFunc, CancellationToken.None, new Count(10), new AnyException(), continueOnCapturedContext);
+            return RetryAsync(asyncFunc, CancellationToken.None, new Count(10), new AnyExceptionPolicy(), continueOnCapturedContext);
         }
 
         /// <summary>
@@ -257,7 +257,7 @@ namespace Corvus.Retry
         /// <remarks>This function does not continue on the captured context. See the overload if you want to override this default behaviour.</remarks>
         public static Task<T> RetryAsync<T>(Func<Task<T>> asyncFunc, CancellationToken cancellationToken)
         {
-            return RetryAsync(asyncFunc, cancellationToken, new Count(10), new AnyException(), false);
+            return RetryAsync(asyncFunc, cancellationToken, new Count(10), new AnyExceptionPolicy(), false);
         }
 
         /// <summary>

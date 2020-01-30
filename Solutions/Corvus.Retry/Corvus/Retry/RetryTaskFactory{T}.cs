@@ -40,7 +40,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(function));
             }
 
-            return this.StartNew(function, new Count(), new AnyException());
+            return this.StartNew(function, new Count(), new AnyExceptionPolicy());
         }
 
         /// <summary>
@@ -56,7 +56,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(function));
             }
 
-            return this.StartNew(function, cancellationToken, new Count(), new AnyException());
+            return this.StartNew(function, cancellationToken, new Count(), new AnyExceptionPolicy());
         }
 
         /// <summary>
@@ -72,7 +72,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(function));
             }
 
-            return this.StartNew(function, taskCreationOptions, new Count(), new AnyException());
+            return this.StartNew(function, taskCreationOptions, new Count(), new AnyExceptionPolicy());
         }
 
         /// <summary>
@@ -88,7 +88,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(function));
             }
 
-            return this.StartNew(function, state, new Count(), new AnyException());
+            return this.StartNew(function, state, new Count(), new AnyExceptionPolicy());
         }
 
         /// <summary>
@@ -105,7 +105,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(function));
             }
 
-            return this.StartNew(function, state, taskCreationOptions, new Count(), new AnyException());
+            return this.StartNew(function, state, taskCreationOptions, new Count(), new AnyExceptionPolicy());
         }
 
         /// <summary>
@@ -124,7 +124,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(function));
             }
 
-            return this.StartNew(function, state, cancellationToken, taskCreationOptions, scheduler, new Count(), new AnyException());
+            return this.StartNew(function, state, cancellationToken, taskCreationOptions, scheduler, new Count(), new AnyExceptionPolicy());
         }
 
         /// <summary>
@@ -142,7 +142,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(function));
             }
 
-            return this.StartNew(function, cancellationToken, taskCreationOptions, scheduler, new Count(), new AnyException());
+            return this.StartNew(function, cancellationToken, taskCreationOptions, scheduler, new Count(), new AnyExceptionPolicy());
         }
 
         /// <summary>
@@ -163,7 +163,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(strategy));
             }
 
-            return this.StartNew(function, strategy, new AnyException());
+            return this.StartNew(function, strategy, new AnyExceptionPolicy());
         }
 
         /// <summary>
@@ -185,7 +185,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(strategy));
             }
 
-            return this.StartNew(function, cancellationToken, strategy, new AnyException());
+            return this.StartNew(function, cancellationToken, strategy, new AnyExceptionPolicy());
         }
 
         /// <summary>
@@ -207,7 +207,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(strategy));
             }
 
-            return this.StartNew(function, taskCreationOptions, strategy, new AnyException());
+            return this.StartNew(function, taskCreationOptions, strategy, new AnyExceptionPolicy());
         }
 
         /// <summary>
@@ -229,7 +229,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(strategy));
             }
 
-            return this.StartNew(function, state, strategy, new AnyException());
+            return this.StartNew(function, state, strategy, new AnyExceptionPolicy());
         }
 
         /// <summary>
@@ -252,7 +252,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(strategy));
             }
 
-            return this.StartNew(function, state, taskCreationOptions, strategy, new AnyException());
+            return this.StartNew(function, state, taskCreationOptions, strategy, new AnyExceptionPolicy());
         }
 
         /// <summary>
@@ -277,7 +277,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(strategy));
             }
 
-            return this.StartNew(function, state, cancellationToken, taskCreationOptions, scheduler, strategy, new AnyException());
+            return this.StartNew(function, state, cancellationToken, taskCreationOptions, scheduler, strategy, new AnyExceptionPolicy());
         }
 
         /// <summary>
@@ -301,7 +301,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(strategy));
             }
 
-            return this.StartNew(function, cancellationToken, taskCreationOptions, scheduler, strategy, new AnyException());
+            return this.StartNew(function, cancellationToken, taskCreationOptions, scheduler, strategy, new AnyExceptionPolicy());
         }
 
         /// <summary>
