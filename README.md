@@ -3,7 +3,7 @@
 [![GitHub license](https://img.shields.io/badge/License-Apache%202-blue.svg)](https://raw.githubusercontent.com/corvus-dotnet/Corvus.Retry/master/LICENSE)
 [![IMM](https://endimmfuncdev.azurewebsites.net/api/imm/github/corvus-dotnet/Corvus.Retry/total?cache=false)](https://endimmfuncdev.azurewebsites.net/api/imm/github/corvus-dotnet/Corvus.Retry/total?cache=false)
 
-This provides support for retriable and reliable/long running methods.
+This provides support for retriable and reliable/long running methods. This was written before https://github.com/App-vNext/Polly was invented. For new code, we suggest you look at Polly.
 
 It is built for netstandard2.0.
 
