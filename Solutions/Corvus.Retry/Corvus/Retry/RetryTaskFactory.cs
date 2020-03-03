@@ -29,11 +29,6 @@ namespace Corvus.Retry
     public class RetryTaskFactory
     {
         /// <summary>
-        /// Gets or sets the sleep service for the retry operations.
-        /// </summary>
-        public static ISleepService SleepService { get; set; }
-
-        /// <summary>
         /// Start a new retriable task for an action.
         /// </summary>
         /// <param name="action">The action for which to start a retriable tasks.</param>
@@ -778,7 +773,7 @@ namespace Corvus.Retry
 
                 if (delay != TimeSpan.Zero)
                 {
-                    SleepService?.Sleep(delay);
+                    SleepService.Instance.Sleep(delay);
                 }
 
                 task = createTask();

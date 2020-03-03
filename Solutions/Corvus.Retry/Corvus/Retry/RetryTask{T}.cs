@@ -24,28 +24,11 @@ namespace Corvus.Retry
     /// </remarks>
     public static class RetryTask<T>
     {
-        private static RetryTaskFactory<T> factory;
-
-        /// <summary>
-        /// Gets or sets the global sleep service to use for all tasks.
-        /// </summary>
-        public static ISleepService SleepService { get; set; }
+        private static RetryTaskFactory<T>? factory;
 
         /// <summary>
         /// Gets the Factory used to create retry tasks.
         /// </summary>
-        public static RetryTaskFactory<T> Factory
-        {
-            get
-            {
-                if (factory == null)
-                {
-                    factory = new RetryTaskFactory<T>();
-                    RetryTaskFactory.SleepService = SleepService ?? new SleepService();
-                }
-
-                return factory;
-            }
-        }
+        public static RetryTaskFactory<T> Factory => factory ??= new RetryTaskFactory<T>();
     }
 }

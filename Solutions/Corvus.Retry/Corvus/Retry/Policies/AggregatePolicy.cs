@@ -16,7 +16,7 @@ namespace Corvus.Retry.Policies
     /// </remarks>
     public class AggregatePolicy : IRetryPolicy
     {
-        private List<IRetryPolicy> policies;
+        private List<IRetryPolicy>? policies;
 
         /// <summary>
         /// Gets the collection of policies to be aggregated.

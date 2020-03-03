@@ -12,9 +12,9 @@ namespace Corvus.Retry.Policies
     public class PolicyStepBindings
     {
         private bool canRetryResult;
-        private Exception exceptionThrownByCanRetry;
+        private Exception? exceptionThrownByCanRetry;
 
-        public IRetryPolicy Policy { get; set; }
+        public IRetryPolicy? Policy { get; set; }
 
         [Given("I have a DoNotRetryPolicy")]
         public void GivenIHaveADoNotRetryPolicy()
@@ -39,6 +39,11 @@ namespace Corvus.Retry.Policies
                 _ => throw new ArgumentException($"Unknown exception type {exceptionType}", nameof(exceptionType))
             };
 
+            if (this.Policy is null)
+            {
+                throw new ArgumentNullException(nameof(this.Policy));
+            }
+
             this.canRetryResult = this.Policy.CanRetry(exception);
         }
 
@@ -47,7 +52,12 @@ namespace Corvus.Retry.Policies
         {
             try
             {
-                this.Policy.CanRetry(null);
+                if (this.Policy is null)
+                {
+                    throw new ArgumentNullException(nameof(this.Policy));
+                }
+
+                this.Policy.CanRetry(null!);
             }
             catch (Exception x)
             {

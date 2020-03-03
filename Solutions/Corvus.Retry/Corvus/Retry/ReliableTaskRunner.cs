@@ -24,11 +24,19 @@ namespace Corvus.Retry
     /// </remarks>
     public sealed class ReliableTaskRunner
     {
-        private readonly CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
+        private readonly CancellationTokenSource cancellationTokenSource;
         private Task processingTask;
 
-        private ReliableTaskRunner()
+        /// <summary>
+        /// In order to ensure that processingTask has been initialised, we need to envoke runFunction before returning.
+        /// This is more work than we would normally do in a constructor, but as the constructor is private we think this
+        /// is tolerable.
+        /// </summary>
+        private ReliableTaskRunner(Func<CancellationToken, Task> runFunction, IRetryPolicy retryPolicy)
         {
+            this.cancellationTokenSource = new CancellationTokenSource();
+
+            this.RunAndAttachFailureContinuation(runFunction, retryPolicy, out this.processingTask);
         }
 
         /// <summary>
@@ -64,9 +72,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(retryPolicy));
             }
 
-            var runner = new ReliableTaskRunner();
-            runner.RunInternal(runFunction, retryPolicy);
-            return runner;
+            return new ReliableTaskRunner(runFunction, retryPolicy);
         }
 
         /// <summary>
@@ -75,26 +81,22 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the function terminates.</returns>
         public Task StopAsync()
         {
-            if (this.processingTask == null)
-            {
-                return Task.CompletedTask;
-            }
-
             this.cancellationTokenSource.Cancel();
             return this.processingTask;
         }
 
-        private void RunInternal(Func<CancellationToken, Task> runFunction, IRetryPolicy retryPolicy)
+        private void RunAndAttachFailureContinuation(Func<CancellationToken, Task> runFunction, IRetryPolicy retryPolicy, out Task task)
         {
-            this.processingTask = runFunction(this.cancellationTokenSource.Token);
-            this.processingTask.ContinueWith(
+            task = runFunction(this.cancellationTokenSource.Token);
+
+            task.ContinueWith(
             t =>
             {
                 t.Exception.Handle(_ => true);
                 if (retryPolicy.CanRetry(t.Exception))
                 {
                     // Run again if we were allowed to
-                    this.RunInternal(runFunction, retryPolicy);
+                    this.RunAndAttachFailureContinuation(runFunction, retryPolicy, out this.processingTask);
                 }
             },
             this.cancellationTokenSource.Token,

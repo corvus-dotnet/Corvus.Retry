@@ -27,17 +27,6 @@ namespace Corvus.Retry
     /// </remarks>
     public static class Retriable
     {
-        private static ISleepService sleepService;
-
-        /// <summary>
-        /// Gets or sets a service that provides 'sleep' functionality.
-        /// </summary>
-        public static ISleepService SleepService
-        {
-            get => sleepService ?? (sleepService = new SleepService());
-            set => sleepService = value;
-        }
-
         /// <summary>
         /// Retries an operation.
         /// </summary>
@@ -211,7 +200,7 @@ namespace Corvus.Retry
 
                     if (delay != TimeSpan.Zero)
                     {
-                        SleepService.Sleep(delay);
+                        SleepService.Instance.Sleep(delay);
                     }
                 }
             }
@@ -296,7 +285,7 @@ namespace Corvus.Retry
 
                 if (delay != TimeSpan.Zero)
                 {
-                    await SleepService.SleepAsync(delay).ConfigureAwait(continueOnCapturedContext);
+                    await SleepService.Instance.SleepAsync(delay).ConfigureAwait(continueOnCapturedContext);
                 }
             }
         }
@@ -346,7 +335,7 @@ namespace Corvus.Retry
 
                     if (delay != TimeSpan.Zero)
                     {
-                        SleepService.Sleep(delay);
+                        SleepService.Instance.Sleep(delay);
                     }
                 }
             }
@@ -432,7 +421,7 @@ namespace Corvus.Retry
 
                 if (delay != TimeSpan.Zero)
                 {
-                    await SleepService.SleepAsync(delay).ConfigureAwait(continueOnCapturedContext);
+                    await SleepService.Instance.SleepAsync(delay).ConfigureAwait(continueOnCapturedContext);
                 }
             }
         }
