@@ -28,7 +28,7 @@ namespace Corvus.Retry
         private Task processingTask;
 
         /// <summary>
-        /// In order to ensure that processingTask has been initialised, we need to envoke runFunction before returning.
+        /// In order to ensure that processingTask has been initialised, we need to invoke runFunction before returning.
         /// This is more work than we would normally do in a constructor, but as the constructor is private we think this
         /// is tolerable.
         /// </summary>

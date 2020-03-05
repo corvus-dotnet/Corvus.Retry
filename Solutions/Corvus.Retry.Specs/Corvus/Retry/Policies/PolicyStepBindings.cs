@@ -39,12 +39,7 @@ namespace Corvus.Retry.Policies
                 _ => throw new ArgumentException($"Unknown exception type {exceptionType}", nameof(exceptionType))
             };
 
-            if (this.Policy is null)
-            {
-                throw new ArgumentNullException(nameof(this.Policy));
-            }
-
-            this.canRetryResult = this.Policy.CanRetry(exception);
+            this.canRetryResult = this.Policy!.CanRetry(exception);
         }
 
         [When("I ask if I can retry with a null exception argument")]
@@ -52,12 +47,7 @@ namespace Corvus.Retry.Policies
         {
             try
             {
-                if (this.Policy is null)
-                {
-                    throw new ArgumentNullException(nameof(this.Policy));
-                }
-
-                this.Policy.CanRetry(null!);
+                this.Policy!.CanRetry(null!);
             }
             catch (Exception x)
             {

@@ -6,7 +6,7 @@ Proposed
 
 ## Context
 
-When implementing nullability we found that the code around `ISleepService` did not fit well with nullable references. There were static properties which never returned null but could usefully be set to `null` at the end of a unit test (to revert to the default behaviour).
+When implementing nullability we found that the code around `ISleepService` did not fit well with nullable references. There were static properties which never returned `null` but could usefully be set to `null` at the end of a unit test (to revert to the default behaviour).
 
 We began to update the implementation so that the intent of the property was clearer (using methods for setting and unsetting the property) but found that there were many places within the codebase which had their own versions of the `ISleepService`. 
 

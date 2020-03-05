@@ -70,6 +70,8 @@ namespace Corvus.Retry
                 asyncFunction = () => Task.FromResult(this.function());
             }
 
+            // This code is used when testing the case where different arguments are null, therefore the null forgiving operator is intentionally used
+            // to accurately describe the intention of the test.
             switch (actionType)
             {
                 case RetryActionType.Action:

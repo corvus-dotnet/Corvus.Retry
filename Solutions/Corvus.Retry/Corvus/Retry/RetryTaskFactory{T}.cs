@@ -692,11 +692,6 @@ namespace Corvus.Retry
         {
             task = (Task<T>)RetryTaskFactory.HandleRetry(task, createTask, strategy, policy);
 
-            if (task is null)
-            {
-                throw new ArgumentNullException(nameof(task));
-            }
-
             RetryTaskFactory.HandleException(task, strategy);
 
             return task.Result;
