@@ -12,11 +12,11 @@ namespace Corvus.Retry
     [Binding]
     public class DefaultRetrySteps
     {
-        private Func<object> function;
+        private Func<object>? function;
         private int callCount;
-        private object lastObjectReturnedByFunction;
-        private object retryResult;
-        private Exception exceptionThrownByRetry;
+        private object? lastObjectReturnedByFunction;
+        private object? retryResult;
+        private Exception? exceptionThrownByRetry;
 
         [Given("I have an operation that succeeds first time")]
         public void GivenIHaveAnOperationThatSucceedsFirstTime()
@@ -56,9 +56,9 @@ namespace Corvus.Retry
         [When(@"I invoke the operation with Retriable type ([^\s]*) passing no additional arguments")]
         public async Task WhenIInvokeTheOperationWithRetriableTypeActionPassingNoAdditionalArguments(RetryActionType actionType)
         {
-            Action action = null;
-            Func<Task> asyncAction = null;
-            Func<Task<object>> asyncFunction = null;
+            Action? action = null;
+            Func<Task>? asyncAction = null;
+            Func<Task<object>>? asyncFunction = null;
             if (this.function != null)
             {
                 action = () => this.function();
@@ -70,25 +70,27 @@ namespace Corvus.Retry
                 asyncFunction = () => Task.FromResult(this.function());
             }
 
+            // This code is used when testing the case where different arguments are null, therefore the null forgiving operator is intentionally used
+            // to accurately describe the intention of the test.
             switch (actionType)
             {
                 case RetryActionType.Action:
-                    Retriable.Retry(action);
+                    Retriable.Retry(action!);
                     break;
                 case RetryActionType.Function:
-                    this.retryResult = Retriable.Retry(this.function);
+                    this.retryResult = Retriable.Retry(this.function!);
                     break;
                 case RetryActionType.AsyncAction:
-                    await Retriable.RetryAsync(asyncAction).ConfigureAwait(false);
+                    await Retriable.RetryAsync(asyncAction!).ConfigureAwait(false);
                     break;
                 case RetryActionType.AsyncActionSpecifyingContinueContext:
-                    await Retriable.RetryAsync(asyncAction, false).ConfigureAwait(false);
+                    await Retriable.RetryAsync(asyncAction!, false).ConfigureAwait(false);
                     break;
                 case RetryActionType.AsyncFunction:
-                    this.retryResult = await Retriable.RetryAsync(asyncFunction).ConfigureAwait(false);
+                    this.retryResult = await Retriable.RetryAsync(asyncFunction!).ConfigureAwait(false);
                     break;
                 case RetryActionType.AsyncFunctionSpecifyingContinueContext:
-                    this.retryResult = await Retriable.RetryAsync(asyncFunction, false).ConfigureAwait(false);
+                    this.retryResult = await Retriable.RetryAsync(asyncFunction!, false).ConfigureAwait(false);
                     break;
                 default:
                     throw new ArgumentException("Unknown action: " + actionType);

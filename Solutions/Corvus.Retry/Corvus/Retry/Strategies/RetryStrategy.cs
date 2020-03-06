@@ -24,7 +24,7 @@ namespace Corvus.Retry.Strategies
         private readonly List<Exception> exceptions = new List<Exception>();
 
         /// <inheritdoc/>
-        public event EventHandler<RetryEventArgs> Retrying;
+        public event EventHandler<RetryEventArgs>? Retrying;
 
         /// <inheritdoc/>
         public AggregateException Exception

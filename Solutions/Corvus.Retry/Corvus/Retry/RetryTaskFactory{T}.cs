@@ -690,9 +690,7 @@ namespace Corvus.Retry
 
         private static T HandleTask(Task<T> task, Func<Task<T>> createTask, IRetryStrategy strategy, IRetryPolicy policy)
         {
-            task = RetryTaskFactory.HandleRetry(task, createTask, strategy, policy) as Task<T>;
-
-            Debug.Assert(task != null, "task != null");
+            task = (Task<T>)RetryTaskFactory.HandleRetry(task, createTask, strategy, policy);
 
             RetryTaskFactory.HandleException(task, strategy);
 

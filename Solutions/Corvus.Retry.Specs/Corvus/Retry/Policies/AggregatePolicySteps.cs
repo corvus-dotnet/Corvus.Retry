@@ -23,7 +23,7 @@ namespace Corvus.Retry.Policies
 
         private AggregatePolicy Policy
         {
-            get => (AggregatePolicy)this.policyBindings.Policy;
+            get => (AggregatePolicy?)this.policyBindings.Policy ?? throw new InvalidOperationException();
             set => this.policyBindings.Policy = value;
         }
 
