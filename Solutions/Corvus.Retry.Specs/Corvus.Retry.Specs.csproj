@@ -4,7 +4,6 @@
     <TargetFramework>netcoreapp3.1</TargetFramework>
     <LangVersion>latest</LangVersion>
     <IsPackable>false</IsPackable>
-    <Copyright>Copyright (c) Endjin Limited 2020. All rights reserved.</Copyright>
     <RootNamespace></RootNamespace>
     <Nullable>enable</Nullable>
     <!-- Disabling SA1204 because it prioritizes static/non-static over public/non-public, which doesn't fit very well
