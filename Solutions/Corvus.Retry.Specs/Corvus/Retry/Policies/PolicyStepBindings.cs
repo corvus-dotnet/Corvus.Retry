@@ -36,7 +36,7 @@ namespace Corvus.Retry.Policies
                 "InvalidOperationException" => new InvalidOperationException(),
                 "ArgumentNullException"     => new ArgumentNullException(),
                 "NullReferenceException"    => new NullReferenceException(),
-                _ => throw new ArgumentException($"Unknown exception type {exceptionType}", nameof(exceptionType))
+                _ => throw new ArgumentException($"Unknown exception type {exceptionType}", nameof(exceptionType)),
             };
 
             this.canRetryResult = this.Policy!.CanRetry(exception);

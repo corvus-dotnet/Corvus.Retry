@@ -21,7 +21,7 @@ namespace Corvus.Retry.Async
         /// </summary>
         internal static ISleepService Instance
         {
-            get => instance ?? (instance = new DefaultSleepService());
+            get => instance ??= new DefaultSleepService();
         }
 
         /// <summary>

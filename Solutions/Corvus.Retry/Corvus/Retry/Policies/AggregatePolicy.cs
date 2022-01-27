@@ -23,7 +23,7 @@ namespace Corvus.Retry.Policies
         /// </summary>
         public List<IRetryPolicy> Policies
         {
-            get { return this.policies ?? (this.policies = new List<IRetryPolicy>()); }
+            get => this.policies ??= new List<IRetryPolicy>();
         }
 
         /// <inheritdoc/>

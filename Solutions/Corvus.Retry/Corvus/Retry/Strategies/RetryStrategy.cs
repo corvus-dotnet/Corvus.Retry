@@ -21,7 +21,7 @@ namespace Corvus.Retry.Strategies
     /// </remarks>
     public abstract class RetryStrategy : IRetryStrategy
     {
-        private readonly List<Exception> exceptions = new List<Exception>();
+        private readonly List<Exception> exceptions = new();
 
         /// <inheritdoc/>
         public event EventHandler<RetryEventArgs>? Retrying;
