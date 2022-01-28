@@ -24,7 +24,7 @@ namespace Corvus.Retry
             this.function = () =>
             {
                 this.callCount += 1;
-                object o = new object();
+                object o = new();
                 this.lastObjectReturnedByFunction = o;
                 return o;
             };
@@ -41,7 +41,7 @@ namespace Corvus.Retry
                     throw new InvalidOperationException();
                 }
 
-                object o = new object();
+                object o = new();
                 this.lastObjectReturnedByFunction = o;
                 return o;
             };
