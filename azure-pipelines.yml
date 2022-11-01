@@ -25,3 +25,4 @@ jobs:
     netSdkVersion: '6.x'
     additionalNetSdkVersions:
     - '3.x'
+    compileTasksServiceConnection: endjin-acr-reader
