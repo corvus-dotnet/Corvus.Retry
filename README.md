@@ -61,7 +61,7 @@ This will never retry, regardless of the exception. You use this to disable retr
 Typically, you would do this with some kind of conditional
 
 ```
-IRetryPolicy policy = isDebuggingOrWhatever ? new DoNotRetryPolicy() : new AnyException();
+IRetryPolicy policy = isDebuggingOrWhatever ? new DoNotRetryPolicy() : new AnyExceptionPolicy();
 
 var result = Retriable.Retry(() => DoSomething(), new Count(10), policy);
 ```
