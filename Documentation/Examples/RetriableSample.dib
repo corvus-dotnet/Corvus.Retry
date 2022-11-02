@@ -1,6 +1,6 @@
 #!markdown
 
-## Corvus.Retry.Retriable - Sample Notebook
+# Corvus.Retry.Retriable - Sample Notebook
 
 #!markdown
 
@@ -17,7 +17,10 @@ Add using statement for `Corvus.Retry` namespace
 #!csharp
 
 using Corvus.Retry;
+using Corvus.Retry.Strategies;
+using Corvus.Retry.Policies;
 using System.Net.NetworkInformation;
+using System.Threading;
 
 #!markdown
 
@@ -31,7 +34,16 @@ Retriable.Retry(() => DoSomethingThatMightFail());
 
 ### `Retriable.Retry` – basic example
 
-The following example uses `Retriable` to wrap a method that pings an internet address and receives a response.
+The following example uses `Retry` to wrap a method that pings an internet host.
+
+#!csharp
+
+Ping pingSender = new Ping();
+Retriable.Retry(() => pingSender.Send("www.endjin.com"));
+
+#!markdown
+
+You can also return the values from the method. The following example uses the `PingReply` object returned by `Ping.Send()`:
 
 #!csharp
 
@@ -40,3 +52,73 @@ PingReply reply = Retriable.Retry(() => pingSender.Send("www.endjin.com"));
 
 // Print a property from the response
 Console.WriteLine($"Address:\t{reply.Address.ToString()}");
+
+#!markdown
+
+### `Retriable.RetryAsync` – basic example
+
+The `RetryAsync` method allows you to wrap an asynchronous method to re-execute it.
+
+#!markdown
+
+The following example uses `Retriable` to wrap an asynchronous method that sends a ping to a internet host and receives a response.
+
+#!csharp
+
+Ping pingSender = new Ping();
+PingReply reply = await Retriable.RetryAsync(() => pingSender.SendPingAsync("www.endjin.com"));
+
+// Print a property from the response
+Console.WriteLine($"Address:\t{reply.Address.ToString()}");
+
+#!markdown
+
+## Cancellation token
+
+You can pass a cancellation token to `Retry` to signal cancellation of the retry process.
+
+### Using a cancellation token - examples
+
+The default behavior of `Retry` is to not use a cancellation token: `CancellationToken.None`.
+
+#!csharp
+
+Ping pingSender = new Ping();
+Retriable.Retry(() => pingSender.Send("www.endjin.com"), CancellationToken.None);
+
+#!markdown
+
+## Policy and Strategy
+
+Two types help you to control when a failed operation is retried, and how that retry occurs. `IRetryPolicy` and `IRetryStrategy`. You can pass these policies as arguments to the parameters `strategy` and `policy` on the `Retry` and `RetryAsync` methods.
+
+#!markdown
+
+### `IRetryPolicy`
+
+The retry policy gives you the ability to determine whether the operation should be retried or not, based on the exception that has been thrown.
+
+This typically means you can distinguish between terminal exceptions (like bad input) and transient exceptions (like a network timeout).
+
+There are three built-in retry policies:
+
+#### `AnyException`
+   
+This will always retry on any exception, and is the default for `Retriable`.
+
+#!markdown
+
+#### `DoNotRetryPolicy`
+
+This will never retry, regardless of the exception. You use this to disable retry, without having to comment out your retry code.
+
+Typically, you would do this with some kind of conditional:
+
+#!csharp
+
+bool isDebuggingOrWhatever = true;
+
+IRetryPolicy policy = isDebuggingOrWhatever ? new DoNotRetryPolicy() : new AnyExceptionPolicy();
+
+Ping pingSender = new Ping();
+PingReply reply = Retriable.Retry(() => pingSender.Send("www.endjin.com"), CancellationToken.None, strategy: new Count(10), policy: policy);
