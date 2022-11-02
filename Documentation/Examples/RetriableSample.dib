@@ -1,0 +1,42 @@
+#!markdown
+
+## Corvus.Retry.Retriable - Sample Notebook
+
+#!markdown
+
+First, add a reference to the `Corvus.Retry` NuGet package.
+
+#!csharp
+
+#r "nuget: Corvus.Retry, 1.0.2"
+
+#!markdown
+
+Add using statement for `Corvus.Retry` namespace
+
+#!csharp
+
+using Corvus.Retry;
+using System.Net.NetworkInformation;
+
+#!markdown
+
+`Retriable` is the most common usage pattern from the Corvus.Retry library. It wraps an existing method and allows you to re-execute the method if it throws an exception.
+
+```csharp
+Retriable.Retry(() => DoSomethingThatMightFail());
+```
+
+#!markdown
+
+### `Retriable.Retry` – basic example
+
+The following example uses `Retriable` to wrap a method that pings an internet address and receives a response.
+
+#!csharp
+
+Ping pingSender = new Ping();
+PingReply reply = Retriable.Retry(() => pingSender.Send("www.endjin.com"));
+
+// Print a property from the response
+Console.WriteLine($"Address:\t{reply.Address.ToString()}");
