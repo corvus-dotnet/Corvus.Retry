@@ -88,7 +88,7 @@ For example, let's imagine we were consuming an HttpService which occasionally g
 We can implement a policy which will only retry if we recieve this exception.
 
 ```
-public class RetryOnTooManyRequestsPolicy : IHttpPolicy
+public class RetryOnTooManyRequestsPolicy : IRetryPolicy
 {
   bool CanRetry(Exception exception)
   {
