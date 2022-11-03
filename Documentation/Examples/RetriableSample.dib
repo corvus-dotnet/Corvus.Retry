@@ -135,23 +135,15 @@ PingReply reply = Retriable.Retry(() => pingSender.Send("www.endjin.com"), Cance
 
 #!markdown
 
-#### `AggrregatePolicy`
-
-This gives you a means of combining together multiple policies.
-
-The `AggregatePolicy` only succeeds if *ALL* of its children succeed.
-
-#!csharp
-
-// Code example for AggregatePolicy her=
-
-#!markdown
-
 ####  Implementing a custom policy
 
 To create your own custom policy implement the `IRetryPolicy` interface, and its `bool CanRetry(Exception exception)` method which allows define the behavior for determining whether to retry based on the exception that was raised.
 
-#### Example
+##### Example - basic
+
+Continuing with the `Ping.Send()` method, we can define a policy that will retry when a `PingException` exception is detected.
+
+#!markdown
 
 For example, let's imagine we were consuming an HttpService which occasionally gives us a `429 - Too Many Requests` error in an `HttpServiceException`.
 
@@ -163,6 +155,56 @@ public class RetryOnTooManyRequestsPolicy : IRetryPolicy
 {
   public bool CanRetry(Exception exception)
   {
-    return (exception is HttpServiceException httpException && httpException.StatusCode == 429);
+    return (exception is HttpRequestException httpException && httpException.StatusCode.ToString() == "429");
   }
 }
+
+#!markdown
+
+#### `AggrregatePolicy`
+
+This gives you a means of combining together multiple policies.
+
+The `AggregatePolicy` only succeeds if *ALL* of its children succeed.
+
+An aggregate following takes the following form:
+
+```csharp
+var aggregatePolicy =
+  new AggregatePolicy
+  {
+    Policies =
+    {
+      new CustomPolicy1(),
+      new CustomPolicy2(),
+    },
+  }
+```
+
+##### Example
+
+The example below defines a new custom policy that will retry upon detecting an exception of type `PingException`, and combines it with the `RetryOnTooManyRequestsPolicy` policy to produce an `AggregatePolicy`
+
+#!csharp
+
+public class RetryOnPingExceptionPolicy: IRetryPolicy
+{
+    public bool CanRetry(Exception exception)
+    {
+        return exception is PingException;
+    }
+}
+
+#!csharp
+
+AggregatePolicy aggregatePolicy = new AggregatePolicy()
+{
+    Policies = 
+    {
+        new RetryOnPingExceptionPolicy(),
+        new RetryOnTooManyRequestsPolicy()
+    }
+};
+
+Ping pingSender = new Ping();
+PingReply reply = Retriable.Retry(() => pingSender.Send("www.endjin.com"), CancellationToken.None, strategy: new Count(10), policy: aggregatePolicy);
