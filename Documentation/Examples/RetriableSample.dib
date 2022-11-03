@@ -21,6 +21,7 @@ using Corvus.Retry.Strategies;
 using Corvus.Retry.Policies;
 using System.Net.NetworkInformation;
 using System.Threading;
+using System.Net.Http;
 
 #!markdown
 
@@ -106,6 +107,15 @@ There are three built-in retry policies:
    
 This will always retry on any exception, and is the default for `Retriable`.
 
+#!csharp
+
+Ping pingSender = new Ping();
+PingReply reply = Retriable.Retry(() => pingSender.Send("www.endjin.com"), CancellationToken.None, strategy: new Count(10), policy: new AnyExceptionPolicy());
+
+#!markdown
+
+**Note**: the argument to the `strategy` parameter in the example above is specifying that the function should be retried a maximum of 10 times. `IRetryStrategy` is covered [later in the notebook](#iretrystrategy).
+
 #!markdown
 
 #### `DoNotRetryPolicy`
@@ -122,3 +132,37 @@ IRetryPolicy policy = isDebuggingOrWhatever ? new DoNotRetryPolicy() : new AnyEx
 
 Ping pingSender = new Ping();
 PingReply reply = Retriable.Retry(() => pingSender.Send("www.endjin.com"), CancellationToken.None, strategy: new Count(10), policy: policy);
+
+#!markdown
+
+#### `AggrregatePolicy`
+
+This gives you a means of combining together multiple policies.
+
+The `AggregatePolicy` only succeeds if *ALL* of its children succeed.
+
+#!csharp
+
+// Code example for AggregatePolicy her=
+
+#!markdown
+
+####  Implementing a custom policy
+
+To create your own custom policy implement the `IRetryPolicy` interface, and its `bool CanRetry(Exception exception)` method which allows define the behavior for determining whether to retry based on the exception that was raised.
+
+#### Example
+
+For example, let's imagine we were consuming an HttpService which occasionally gives us a `429 - Too Many Requests` error in an `HttpServiceException`.
+
+We can implement a policy which will only retry if we receive this exception.
+
+#!csharp
+
+public class RetryOnTooManyRequestsPolicy : IRetryPolicy
+{
+  public bool CanRetry(Exception exception)
+  {
+    return (exception is HttpServiceException httpException && httpException.StatusCode == 429);
+  }
+}
