@@ -23,6 +23,7 @@ using System.Net.NetworkInformation;
 using System.Threading;
 using System.Net.Http;
 using System.Web;
+using System.Diagnostics;
 
 #!markdown
 
@@ -171,7 +172,7 @@ We can implement a policy which will only retry if we receive this exception.
 
 Let's first create a mock http service: `MockHttpService` and a mock http service exception: `MockHttpServiceException`.
 
-`MockHttpService` has a single method, `MakeLotsOfRequest`, that always throws a `MockHttpServiceException` with a status code of `"429"`; the method also writes "method called" to the console so that we can see the number of times it is called later.
+`MockHttpService` has a single method, `MakeLotsOfRequest`, that always throws a `MockHttpServiceException` with a status code of `"429"`; the method also writes "MakeLotsOfRequests() method called" to the console so that we can see the number of times it is called later.
 
 #!csharp
 
@@ -323,3 +324,136 @@ public class MockHttpService
 
 MockHttpService mockHttpService = new();
 Retriable.Retry(() => mockHttpService.MakeRandomRequests(), CancellationToken.None, strategy: new Count(10), policy: aggregatePolicy);
+
+#!markdown
+
+### IRetryStrategy
+
+The `IRetryStrategy` controls the way in which the operation is retried. It controls both the _delay between each retry_ and the _number of times that it will be retried_.
+
+There are several strategies provided out-of-the-box: `Count`, `DoNotRetry`, `Linear`, `Incremental`, and `Backoff`.
+
+#!markdown
+
+#### `Count`
+
+We've seen this retry strategy in the `IRetryPolicy` examples earlier.
+
+This simply retries a specified number of times, with no delay. `Retriable` operations default to a `new Count(10)` strategy.
+
+##### Example
+
+Reusing the `MockHttpService` from earlier, if we call the `MakeLotsOfRequests()` method (which always throws a "429 - Too Many Requests" `MockHttpServiceException` exception type) and supply a `RetryWhenTooManyRequestsPolicy` for the policy, and supply `new Count(10)` for the strategy, we should expect to see the method call retried 10 times. 
+
+#!csharp
+
+MockHttpService mockHttpService = new();
+Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.None, strategy: new Count(10), policy: new RetryOnTooManyRequestsPolicy());
+
+#!markdown
+
+#### `DoNotRetry`
+This is the strategy equivalent of the `DoNotRetryPolicy`. It forces a retry to be abandoned, regardless of policy.
+
+##### Example
+
+Using the same example as in the `Count` retry policy above, the method will be called once and not retried.
+
+#!csharp
+
+MockHttpService mockHttpService = new();
+Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.None, strategy: new DoNotRetry(), policy: new RetryOnTooManyRequestsPolicy());
+
+#!markdown
+
+#### `Linear`
+This retries a specified number of times (specified by `maxTries`), with an constant delay between each retry (specified by `periodicity`).
+
+For example, `new Linear(TimeSpan.FromSeconds(1), 10)` will retry up to 5 times. Each time it will  delay by 1s. So the first retry will be after 1s (wall clock time 1s), the second after another 1s (wall clock time 2s), the third after another 1s (wall clock time 3s).
+
+#!csharp
+
+MockHttpService mockHttpService = new();
+Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.None, strategy: new Linear(periodicity: TimeSpan.FromSeconds(1), maxTries: 5), policy: new RetryOnTooManyRequestsPolicy());
+
+#!csharp
+
+public class MockHttpService
+{
+    private Random rand;
+
+    public MockHttpService()
+    {
+        this.rand = new Random();
+    }
+
+    public void MakeLotsOfRequests()
+    {
+        Console.WriteLine("MakeLotsOfRequests() method called");
+        throw new MockHttpServiceException("429 - Too Many Requests", "429");
+    }
+
+    public void MakeLotsOfRequests(bool recordTimeBetweenRetries)
+    {
+        
+        
+        Console.WriteLine("MakeLotsOfRequests() method called");
+        throw new MockHttpServiceException("429 - Too Many Requests", "429");
+    }
+
+    public void MakeRequestThatWillTimeOut()
+    {
+        Console.WriteLine("MakeRequestThatWillTimeOut() method called");
+        throw new MockHttpServiceException("408 - Request timed out", "408");
+    }
+
+    public void MakeRandomRequests()
+    {
+        // Randomly generate 0 or 1
+        int randomNumber = rand.Next(0, 2);
+        if (randomNumber == 0) {this.MakeLotsOfRequests();}
+        else {this.MakeRequestThatWillTimeOut();}
+        
+    }
+}
+
+#!csharp
+
+public class Clock
+{
+    int count;
+    StopWatch stopWatch;
+    
+    Clock()
+    {
+        
+    }
+}
+
+#!csharp
+
+public static void TimeInterval(Action func)
+{
+    func();
+    
+}
+
+#!markdown
+
+#### `Incremental`
+This retries a specified number of times, with an arithmetically increasing delay between each retry.
+
+For example, `new Incremental(TimeSpan.FromSeconds(1), 10)` will retry up to 10 times. Each time it will increase the delay by 1s. So the first retry will be after 1s (wall clock time 1s), the second after another 2s (wall clock time 3s), the third after another 3s (wall clock time 6s).
+
+This allows a slowly increasing delay.
+
+#!markdown
+
+#### `Backoff`
+This retries a specified number of times, with a delay that increases geometrically between each retry.
+
+For example, `new Backoff(10, TimeSpan.FromSeconds(1))` will retry up to 10 times. Each time it will increase the delay by a value calculated roughly like this: `2^n * (delta +/- a small random fudge)`.
+
+This allows a rapidly increasing delay, with a bit of random jitter addded to avoid contention.
+
+You can also set a `MinBackoff` and `MaxBackoff` to limit the lower and upper bounds of the delay.
