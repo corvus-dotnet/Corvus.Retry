@@ -22,6 +22,7 @@ using Corvus.Retry.Policies;
 using System.Net.NetworkInformation;
 using System.Threading;
 using System.Net.Http;
+using System.Web;
 
 #!markdown
 
@@ -137,17 +138,71 @@ PingReply reply = Retriable.Retry(() => pingSender.Send("www.endjin.com"), Cance
 
 ####  Implementing a custom policy
 
-To create your own custom policy implement the `IRetryPolicy` interface, and its `bool CanRetry(Exception exception)` method which allows define the behavior for determining whether to retry based on the exception that was raised.
+To create your own custom policy implement the `IRetryPolicy` interface, and its `bool CanRetry(Exception exception)` method which allows you to define the behavior for determining whether to retry based on the exception that was raised.
 
 ##### Example - basic
 
 Continuing with the `Ping.Send()` method, we can define a policy that will retry when a `PingException` exception is detected.
 
+#!csharp
+
+public class RetryOnPingExceptionPolicy : IRetryPolicy
+{
+  public bool CanRetry(Exception exception)
+  {
+    return (exception is PingException httpException);
+  }
+}
+
+#!csharp
+
+Ping pingSender = new Ping();
+PingReply reply = Retriable.Retry(() => pingSender.Send("www.endjin.com"), CancellationToken.None, strategy: new Count(10), policy: new RetryOnPingExceptionPolicy());
+
 #!markdown
 
-For example, let's imagine we were consuming an HttpService which occasionally gives us a `429 - Too Many Requests` error in an `HttpServiceException`.
+##### Example - mock http service 
+
+Let's imagine we were consuming an HttpService which occasionally gives us a `429 - Too Many Requests` error in an `HttpServiceException`.
 
 We can implement a policy which will only retry if we receive this exception.
+
+#!markdown
+
+Let's first create a mock http service: `MockHttpService` and a mock http service exception: `MockHttpServiceException`.
+
+`MockHttpService` has a single method, `MakeLotsOfRequest`, that always throws a `MockHttpServiceException` with a status code of `"429"`; the method also writes "method called" to the console so that we can see the number of times it is called later.
+
+#!csharp
+
+public class MockHttpService
+{
+    public void MakeLotsOfRequests()
+    {
+        Console.WriteLine("MakeLotsOfRequests() method called");
+        throw new MockHttpServiceException("429 - Too Many Requests", "429");
+    }
+}
+
+#!csharp
+
+[Serializable]
+public class MockHttpServiceException: Exception
+{
+
+    override public string Message { get; }
+    public string StatusCode { get; }
+
+    public MockHttpServiceException(string message, string statusCode)
+    {
+        this.Message = message;
+        this.StatusCode = statusCode;
+    }
+}
+
+#!markdown
+
+Now, implement a custom policy that that will only retry when a `MockHttpServiceException` exception type is detected and the status code is `"429"`.
 
 #!csharp
 
@@ -155,9 +210,20 @@ public class RetryOnTooManyRequestsPolicy : IRetryPolicy
 {
   public bool CanRetry(Exception exception)
   {
-    return (exception is HttpRequestException httpException && httpException.StatusCode.ToString() == "429");
+    return (exception is MockHttpServiceException httpException && httpException.StatusCode == "429");
   }
 }
+
+#!markdown
+
+Now, create an instance of `MockHttpService`, and call its `MakeLotsOfRequests` method - wrapping it with `Retriable.Retry` and passing it our `RetryOnTooManyRequestsPolicy` policy.
+
+For the strategy I'm passing in `new Count(10)`, which means the method will be retried at most 10 times. Therefore we should expect to see "Method called" printed to the console 10 times.
+
+#!csharp
+
+MockHttpService mockHttpService = new();
+Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.None, strategy: new Count(10), policy: new RetryOnTooManyRequestsPolicy());
 
 #!markdown
 
@@ -181,19 +247,27 @@ var aggregatePolicy =
   }
 ```
 
-##### Example
+##### Example - mock http service
 
-The example below defines a new custom policy that will retry upon detecting an exception of type `PingException`, and combines it with the `RetryOnTooManyRequestsPolicy` policy to produce an `AggregatePolicy`
+Continuing with the mock http service example from earlier, let's say, in addition to retrying on detecting a "429 - too many requests" exception, you would also like to retry upon detecting a "408 - request timed out" exception.
+
+#!markdown
+
+First let's create another custom policy that will retry when a "408 - request timed out" exception is detected.
 
 #!csharp
 
-public class RetryOnPingExceptionPolicy: IRetryPolicy
+public class RetryOnRequestTimeoutPolicy: IRetryPolicy
 {
     public bool CanRetry(Exception exception)
     {
-        return exception is PingException;
+        return (exception is MockHttpServiceException httpException && httpException.StatusCode == "408");
     }
 }
+
+#!markdown
+
+Now, define an aggregate policy that combines `RetryOnRequestTimeoutPolicy` & `RetryOnTooManyRequestsPolicy`
 
 #!csharp
 
@@ -201,10 +275,51 @@ AggregatePolicy aggregatePolicy = new AggregatePolicy()
 {
     Policies = 
     {
-        new RetryOnPingExceptionPolicy(),
-        new RetryOnTooManyRequestsPolicy()
+        new RetryOnTooManyRequestsPolicy(),
+        new RetryOnRequestTimeoutPolicy(),
     }
 };
 
-Ping pingSender = new Ping();
-PingReply reply = Retriable.Retry(() => pingSender.Send("www.endjin.com"), CancellationToken.None, strategy: new Count(10), policy: aggregatePolicy);
+#!markdown
+
+We need to update the `MockHttpService` class to contain a method that will throw a `MockHttpServiceException` exception type with a `"408"` status code: `MakeRequestThatWillTimeOut()`
+
+Let's also add a `MakeRandomRequest()` method that will randomly call either `MakeRequestThatWillTimeOut` or `MakeLotsOfRequests()`, so that we can see the aggregate policy triggering on both exceptions.
+
+#!csharp
+
+public class MockHttpService
+{
+    private Random rand;
+
+    public MockHttpService()
+    {
+        this.rand = new Random();
+    }
+
+    public void MakeLotsOfRequests()
+    {
+        Console.WriteLine("MakeLotsOfRequests() method called");
+        throw new MockHttpServiceException("429 - Too Many Requests", "429");
+    }
+
+    public void MakeRequestThatWillTimeOut()
+    {
+        Console.WriteLine("MakeRequestThatWillTimeOut() method called");
+        throw new MockHttpServiceException("408 - Request timed out", "408");
+    }
+
+    public void MakeRandomRequests()
+    {
+        // Randomly generate 0 or 1
+        int randomNumber = rand.Next(0, 2);
+        if (randomNumber == 0) {this.MakeLotsOfRequests();}
+        else {this.MakeRequestThatWillTimeOut();}
+        
+    }
+}
+
+#!csharp
+
+MockHttpService mockHttpService = new();
+Retriable.Retry(() => mockHttpService.MakeRandomRequests(), CancellationToken.None, strategy: new Count(10), policy: aggregatePolicy);
