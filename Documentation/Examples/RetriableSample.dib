@@ -393,11 +393,19 @@ public class MockHttpService
         throw new MockHttpServiceException("429 - Too Many Requests", "429");
     }
 
-    public void MakeLotsOfRequests(bool recordTimeBetweenRetries)
+    public void MakeLotsOfRequests(MyClock clock)
     {
-        
-        
         Console.WriteLine("MakeLotsOfRequests() method called");
+
+        if (clock.Count != 0)
+        {
+            clock.stopwatch.Stop();
+            TimeSpan timeElapsed = clock.stopwatch.Elapsed;
+            Console.WriteLine($"Time elapsed: {timeElapsed.Seconds}");
+        }
+
+        clock.IncrementCounter();
+        clock.stopwatch.Start();
         throw new MockHttpServiceException("429 - Too Many Requests", "429");
     }
 
@@ -419,24 +427,28 @@ public class MockHttpService
 
 #!csharp
 
-public class Clock
+public class MyClock
 {
-    int count;
-    StopWatch stopWatch;
+    public int Count { get; private set; }
+    public Stopwatch stopwatch { get; }
     
-    Clock()
+    public MyClock()
     {
-        
+        Count = 0;
+        stopwatch = new Stopwatch();
+    }
+
+    public void IncrementCounter()
+    {
+        this.Count += 1;
     }
 }
 
 #!csharp
 
-public static void TimeInterval(Action func)
-{
-    func();
-    
-}
+MockHttpService mockHttpService = new();
+MyClock myClock = new();
+Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(myClock), CancellationToken.None, strategy: new Linear(periodicity: TimeSpan.FromSeconds(1), maxTries: 5), policy: new RetryOnTooManyRequestsPolicy());
 
 #!markdown
 
