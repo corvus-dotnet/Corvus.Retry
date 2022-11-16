@@ -1,0 +1,39 @@
+#!markdown
+
+# Corvus.RetryTask - Sample Notebook
+
+#!markdown
+
+First, add a reference to the `Corvus.Retry` NuGet package.
+
+#!csharp
+
+#r "nuget: Corvus.Retry, 1.0.2"
+
+#!markdown
+
+Add a using statement for `Corvus.Retry` namespace and the others we'll be using in this notebook.
+
+#!csharp
+
+using Corvus.Retry;
+using Corvus.Retry.Strategies;
+using Corvus.Retry.Policies;
+using System.Net.NetworkInformation;
+using System.Threading;
+using System.Net.Http;
+using System.Web;
+using System.Diagnostics;
+using System.Threading;
+
+#!markdown
+
+## `RetryTask`
+
+The `RetryTask` is an analog of [`Task`](https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.task?view=net-7.0) which has built-in retry semantics.
+
+Instead of calling `Task.Factory.StartNew()` you can call `RetryTask.Factory.StartNew()` with all the familiar parameters.
+
+In addition to those usual parameters, you can pass an `IRetryPolicy` and an `IRetryStrategy` to control the retry behaviour. The defaults are the same as for `Retriable`.
+
+(See the [`RetriableSample` notebook](link) in the repository for examples on `Retriable`, `IRetryPolicy` and `IRetryStrategy`)
