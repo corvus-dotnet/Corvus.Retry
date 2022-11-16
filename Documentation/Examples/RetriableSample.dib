@@ -12,7 +12,7 @@ First, add a reference to the `Corvus.Retry` NuGet package.
 
 #!markdown
 
-Add a using statement for `Corvus.Retry` namespace and the other we'll be using this notebook.
+Add a using statement for `Corvus.Retry` namespace and the others we'll be using in this notebook.
 
 #!csharp
 
@@ -28,7 +28,7 @@ using System.Threading;
 
 #!markdown
 
-`Retriable` is the most common usage pattern from the Corvus.Retry library. It wraps an existing method and allows you to re-execute the method if it throws an exception.
+`Retriable` is the most common usage pattern from the `Corvus.Retry` library. It wraps an existing method and allows you to re-execute the method if it throws an exception.
 
 ```csharp
 Retriable.Retry(() => DoSomethingThatMightFail());
@@ -81,7 +81,7 @@ Console.WriteLine($"Address:\t{reply.Address.ToString()}");
 
 You can pass a cancellation token to `Retry` to signal cancellation of the retry process.
 
-### Using a cancellation token - examples
+### Using a cancellation token - example
 
 The default behavior of `Retry` is to not use a cancellation token: `CancellationToken.None`.
 
@@ -104,7 +104,7 @@ The retry policy gives you the ability to determine whether the operation should
 
 This typically means you can distinguish between terminal exceptions (like bad input) and transient exceptions (like a network timeout).
 
-There are three built-in retry policies:
+There are three built-in retry policies: `AnyException`, `DoNotRetryPolicy`, and `AggregatePolicy`.
 
 #### `AnyException`
    
@@ -196,11 +196,17 @@ public class MockHttpService
         Console.WriteLine("MakeLotsOfRequests() method called");
         throw new MockHttpServiceException("429 - Too Many Requests", "429");
     }
+
+    public void MakeRequestThatWillTimeOut()
+    {
+        Console.WriteLine("MakeRequestThatWillTimeOut() method called");
+        throw new MockHttpServiceException("408 - Request timed out", "408");
+    }
 }
 
 #!markdown
 
-`MockHttpService` has a single method, `MakeLotsOfRequest`, that always throws a `MockHttpServiceException` with a status code of `"429"`; the method also writes "MakeLotsOfRequests() method called" to the console so that we can see the number of times it is called later.
+`MockHttpService` has a two methods: `MakeLotsOfRequest`, that always throws a `MockHttpServiceException` with a status code of `"429"`; and `MakeRequestThatWillTimeOut`, that always throws a `MockHttpServiceException` with a status code of `"408"`. Both methods also write a message to the console containing their name so that we can see the number of times they get called later.
 
 Now, implement a custom policy that that will only retry when a `MockHttpServiceException` exception type is detected and the status code is `"429"`.
 
@@ -227,13 +233,22 @@ Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.No
 
 #!markdown
 
+Now, instead of calling `MakeLotsOfRequests()`, let's call `MakeRequestThatWillTimeOut()`, whilst keeping the policy the same. The condition in `RetryOnTooManyRequestsPolicy` will not pass, and therefore the method will not be retried; we should expect to see `MakeRequestThatWillTimeOut() method called` printed just once to the console for the initial method execution, and the `408 - Request timed out` exception thrown.
+
+#!csharp
+
+MockHttpService mockHttpService = new();
+Retriable.Retry(() => mockHttpService.MakeRequestThatWillTimeOut(), CancellationToken.None, strategy: new Count(10), policy: new RetryOnTooManyRequestsPolicy());
+
+#!markdown
+
 #### `AggrregatePolicy`
 
 This gives you a means of combining together multiple policies.
 
 The `AggregatePolicy` only succeeds if *ALL* of its children succeed.
 
-An aggregate following takes the following form:
+An aggregate policy takes the following form:
 
 ```csharp
 var aggregatePolicy =
@@ -249,9 +264,9 @@ var aggregatePolicy =
 
 ##### Example - mock http service
 
-In this example we create a policy that checks configuration to see if retry is disabled. This could be some configuration to allow you to disable retry whilst the application is running in production.
+In this example we create a policy that checks configuration to see if retry is disabled. You could have such configuration to allow you to disable retry whilst the application is running in production.
 
-First create a class containing configuration stating whether retry is disabled or not:
+First create a class encapsulating configuration which says whether retry is disable or not:
 
 #!csharp
 
@@ -262,7 +277,7 @@ public class RetryConfiguration
 
 #!markdown
 
-Now the custom policy which takes a `RetryConfiguration` to construct and uses its `isRetryDisabled` property to determine whether to retry or not.
+Next, create a custom policy which takes a `RetryConfiguration` to construct, and uses its `isRetryDisabled` property to determine whether to retry or not.
 
 #!csharp
 
@@ -310,7 +325,7 @@ Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.No
 
 #!markdown
 
-If we make set  the `isRetryDisabled` property on `RetryConfiguration` to `false`, the condition in `RetryOnRetryEnabledPolicy` will not pass, and therefore `aggregatePolicy` will not trigger a retry.
+If we set  the `isRetryDisabled` property on `RetryConfiguration` to `false`, the condition in `RetryOnRetryEnabledPolicy` will not pass, and therefore `aggregatePolicy` will not trigger a retry.
 
 #!csharp
 
@@ -334,7 +349,7 @@ Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.No
 
 #!markdown
 
-If something similar were running in production, there may be a config change that prevents retries *whilst* a retry run is happening. Let's simulate that by starting a retry run (using the `Linear` strategy such that the delay between each retry is 2 seconds) asynchronously, and change the `isRetryDisabled` config property whilst it's running.
+If something similar were running in production, there may be a config change that prevents retries *whilst* a retry run is progress. Let's simulate that by starting a retry run (using the [`Linear`](#linear) strategy such that the delay between each retry is 2 seconds) asynchronously, and change the `isRetryDisabled` config property whilst it's running.
 
 #!csharp
 
@@ -356,8 +371,8 @@ AggregatePolicy aggregatePolicy = new AggregatePolicy()
 MockHttpService mockHttpService = new();
 Action retryAction = () => Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.None, strategy: new Linear(TimeSpan.FromSeconds(2), 10), policy: aggregatePolicy);
 Task retryTask = Task.Factory.StartNew(retryAction);
-Thread.Sleep(5000);
-retryConfiguration.isRetryDisabled = true;
+Thread.Sleep(5000); // Wait some time before disabling retry
+retryConfiguration.isRetryDisabled = true; // Disble retry via the config
 retryTask.Wait();
 
 #!markdown
