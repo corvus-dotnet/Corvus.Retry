@@ -377,86 +377,6 @@ retryTask.Wait();
 
 #!markdown
 
-#### Semi-obsolete example start 
-
---------------------------------------------------------------------------------------
-
-#!markdown
-
-First let's create another custom policy that will retry when a "408 - request timed out" exception is detected.
-
-#!csharp
-
-public class RetryOnRequestTimeoutPolicy: IRetryPolicy
-{
-    public bool CanRetry(Exception exception)
-    {
-        return (exception is MockHttpServiceException httpException && httpException.StatusCode == "408");
-    }
-}
-
-#!markdown
-
-We need to update the `MockHttpService` class to contain a method that will throw a `MockHttpServiceException` exception type with a `"408"` status code: `MakeRequestThatWillTimeOut()`
-
-Let's also add a `MakeRandomRequest()` method that will randomly call either `MakeRequestThatWillTimeOut` or `MakeLotsOfRequests()`, so that we can see the aggregate policy triggering on both exceptions.
-
-#!csharp
-
-public class MockHttpService
-{
-    private Random rand;
-
-    public MockHttpService()
-    {
-        this.rand = new Random();
-    }
-
-    public void MakeLotsOfRequests()
-    {
-        Console.WriteLine("MakeLotsOfRequests() method called");
-        throw new MockHttpServiceException("429 - Too Many Requests", "429");
-    }
-
-    public void MakeRequestThatWillTimeOut()
-    {
-        Console.WriteLine("MakeRequestThatWillTimeOut() method called");
-        throw new MockHttpServiceException("408 - Request timed out", "408");
-    }
-
-    public void MakeRandomRequests()
-    {
-        // Randomly generate 0 or 1
-        int randomNumber = rand.Next(0, 2);
-        if (randomNumber == 0) {this.MakeLotsOfRequests();}
-        else {this.MakeRequestThatWillTimeOut();}
-        
-    }
-}
-
-#!markdown
-
-Run the cell above and you will see *Submission#{number}+MockHttpService*. Now re-compile `MockHttpService` and re-run the cell above; you will see a different number. This is pointing to the fact that, in .NET interactive notebooks, each compilation of a type leads to a new type (indicated by the different submission number). This can lead to strange behavior, especially when matching against exceptions - if you try to match against an exception type defined in the notebook, and then re-compile the exception type, the type thrown by the method is going to be different to the one you're trying to match against.
-
-You therefore need to make sure that you can do a *run all* in the notebook and have every cell in the right order so that it works properly, and that you don't have to go back and recompile things out of order.
-
-#!csharp
-
-Console.WriteLine(typeof(MockHttpService).FullName)
-
-#!csharp
-
-MockHttpService mockHttpService = new();
-Retriable.Retry(() => mockHttpService.MakeRandomRequests(), CancellationToken.None, strategy: new Count(10), policy: aggregatePolicy);
-
-#!markdown
-
-#### Semi-obsolete example end
-
---------------------------------------------------------------------------------------------
-
-#!markdown
-
 ### `IRetryStrategy`
 
 The `IRetryStrategy` controls the way in which the operation is retried. It controls both the _delay between each retry_ and the _number of times that it will be retried_.
@@ -497,7 +417,7 @@ Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.No
 #!markdown
 
 #### `Linear`
-This retries a specified number of times (specified by `maxTries`), with an constant delay between each retry (specified by `periodicity`).
+This retries a specified number of times (specified by `maxTries`), with a constant delay between each retry (specified by `periodicity`).
 
 For example, `new Linear(TimeSpan.FromSeconds(1), 5)` will retry up to 5 times. Each time it will  delay by 1s. So the first retry will be after 1s (wall clock time 1s), the second after another 1s (wall clock time 2s), the third after another 1s (wall clock time 3s).
 
@@ -508,7 +428,7 @@ Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.No
 
 #!markdown
 
-If we introduce a `Clock` object and add an overload for `MockHttpService.MakeLotsOfRequests()` that records the time elapsed between each retry, we can see the how the `Linear` retry policy retries over time.
+If we introduce a `Clock` object and add an overload for `MockHttpService.MakeLotsOfRequests()` that records the time elapsed for each retry since the initial execution, we can see the how the `Linear` retry policy retries over time.
 
 #!csharp
 
@@ -533,13 +453,6 @@ public class Clock
 
 public class MockHttpService
 {
-    private Random rand;
-
-    public MockHttpService()
-    {
-        this.rand = new Random();
-    }
-
     public void MakeLotsOfRequests()
     {
         Console.WriteLine("MakeLotsOfRequests() method called");
@@ -566,15 +479,6 @@ public class MockHttpService
     {
         Console.WriteLine("MakeRequestThatWillTimeOut() method called");
         throw new MockHttpServiceException("408 - Request timed out", "408");
-    }
-
-    public void MakeRandomRequests()
-    {
-        // Randomly generate 0 or 1
-        int randomNumber = rand.Next(0, 2);
-        if (randomNumber == 0) {this.MakeLotsOfRequests();}
-        else {this.MakeRequestThatWillTimeOut();}
-        
     }
 }
 
