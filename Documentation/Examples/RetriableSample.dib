@@ -332,6 +332,10 @@ retryConfiguration.isRetryDisabled = true;
 MockHttpService mockHttpService = new();
 Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.None, strategy: new Count(10), policy: aggregatePolicy);
 
+#!markdown
+
+If something similar were running in production, there may be a config change that prevents retries *whilst* a retry run is happening. Let's simulate that by starting a retry run (using the `Linear` strategy such that the delay between each retry is 2 seconds) asynchronously, and change the `isRetryDisabled` config property whilst it's running.
+
 #!csharp
 
 var retryConfiguration = new RetryConfiguration();
