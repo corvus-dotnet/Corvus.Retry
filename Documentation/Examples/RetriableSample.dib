@@ -168,22 +168,7 @@ Let's imagine we were consuming an HttpService which occasionally gives us a `42
 
 We can implement a policy which will only retry if we receive this exception.
 
-#!markdown
-
 Let's first create a mock http service: `MockHttpService` and a mock http service exception: `MockHttpServiceException`.
-
-`MockHttpService` has a single method, `MakeLotsOfRequest`, that always throws a `MockHttpServiceException` with a status code of `"429"`; the method also writes "MakeLotsOfRequests() method called" to the console so that we can see the number of times it is called later.
-
-#!csharp
-
-public class MockHttpService
-{
-    public void MakeLotsOfRequests()
-    {
-        Console.WriteLine("MakeLotsOfRequests() method called");
-        throw new MockHttpServiceException("429 - Too Many Requests", "429");
-    }
-}
 
 #!csharp
 
@@ -201,7 +186,20 @@ public class MockHttpServiceException: Exception
     }
 }
 
+#!csharp
+
+public class MockHttpService
+{
+    public void MakeLotsOfRequests()
+    {
+        Console.WriteLine("MakeLotsOfRequests() method called");
+        throw new MockHttpServiceException("429 - Too Many Requests", "429");
+    }
+}
+
 #!markdown
+
+`MockHttpService` has a single method, `MakeLotsOfRequest`, that always throws a `MockHttpServiceException` with a status code of `"429"`; the method also writes "MakeLotsOfRequests() method called" to the console so that we can see the number of times it is called later.
 
 Now, implement a custom policy that that will only retry when a `MockHttpServiceException` exception type is detected and the status code is `"429"`.
 
@@ -251,6 +249,41 @@ var aggregatePolicy =
 ##### Example - mock http service
 
 Continuing with the mock http service example from earlier, let's say, in addition to retrying on detecting a "429 - too many requests" exception, you would also like to retry upon detecting a "408 - request timed out" exception.
+
+As a basic example we could pull out the two conditions in the `RetryOnTooManyRequestsPolicy` into their own policies.
+
+**Where would the config live for Matthew's suggested config example?**
+
+#!csharp
+
+public class MockHttpService
+{
+    public bool isRetryDisabled { get; set; }
+
+    public void MakeLotsOfRequests()
+    {
+        Console.WriteLine("MakeLotsOfRequests() method called");
+        throw new MockHttpServiceException("429 - Too Many Requests", "429");
+    }
+}
+
+#!csharp
+
+public class RetryOnHttpServiceExceptionPolicy : IRetryPolicy
+{
+  public bool CanRetry(Exception exception)
+  {
+    return (exception is MockHttpServiceException httpException);
+  }
+}
+
+public class RetryOnStatusCode429Policy : IRetryPolicy
+{
+  public bool CanRetry(Exception exception)
+  {
+    return (exception.StatusCode == "429");
+  }
+}
 
 #!markdown
 
@@ -320,6 +353,16 @@ public class MockHttpService
     }
 }
 
+#!markdown
+
+Run the cell above and you will see *Submission#{number}+MockHttpService*. Now re-compile `MockHttpService` and re-run the cell above; you will see a different number. This is pointing to the fact that, in .NET interactive notebooks, each compilation of a type leads to a new type (indicated by the different submission number). This can lead to strange behavior, especially when matching against exceptions - if you try to match against an exception type defined in the notebook, and then re-compile the exception type, the type thrown by the method is going to be different to the one you're trying to match against.
+
+You therefore need to make sure that you can do a *run all* in the notebook and have every cell in the right order so that it works properly, and that you don't have to go back and recompile things out of order.
+
+#!csharp
+
+Console.WriteLine(typeof(MockHttpService).FullName)
+
 #!csharp
 
 MockHttpService mockHttpService = new();
@@ -327,7 +370,7 @@ Retriable.Retry(() => mockHttpService.MakeRandomRequests(), CancellationToken.No
 
 #!markdown
 
-### IRetryStrategy
+### `IRetryStrategy`
 
 The `IRetryStrategy` controls the way in which the operation is retried. It controls both the _delay between each retry_ and the _number of times that it will be retried_.
 
@@ -369,12 +412,35 @@ Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.No
 #### `Linear`
 This retries a specified number of times (specified by `maxTries`), with an constant delay between each retry (specified by `periodicity`).
 
-For example, `new Linear(TimeSpan.FromSeconds(1), 10)` will retry up to 5 times. Each time it will  delay by 1s. So the first retry will be after 1s (wall clock time 1s), the second after another 1s (wall clock time 2s), the third after another 1s (wall clock time 3s).
+For example, `new Linear(TimeSpan.FromSeconds(1), 5)` will retry up to 5 times. Each time it will  delay by 1s. So the first retry will be after 1s (wall clock time 1s), the second after another 1s (wall clock time 2s), the third after another 1s (wall clock time 3s).
 
 #!csharp
 
 MockHttpService mockHttpService = new();
 Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.None, strategy: new Linear(periodicity: TimeSpan.FromSeconds(1), maxTries: 5), policy: new RetryOnTooManyRequestsPolicy());
+
+#!markdown
+
+If we introduce a `Clock` object and add an overload for `MockHttpService.MakeLotsOfRequests()` that records the time elapsed between each retry, we can see the how the `Linear` retry policy retries over time.
+
+#!csharp
+
+public class Clock
+{
+    public int Count { get; private set; }
+    public Stopwatch stopwatch { get; }
+    
+    public Clock()
+    {
+        Count = 0;
+        stopwatch = new Stopwatch();
+    }
+
+    public void IncrementCounter()
+    {
+        this.Count += 1;
+    }
+}
 
 #!csharp
 
@@ -393,7 +459,7 @@ public class MockHttpService
         throw new MockHttpServiceException("429 - Too Many Requests", "429");
     }
 
-    public void MakeLotsOfRequests(MyClock clock)
+    public void MakeLotsOfRequests(Clock clock)
     {
         Console.WriteLine("MakeLotsOfRequests() method called");
 
@@ -427,45 +493,177 @@ public class MockHttpService
 
 #!csharp
 
-public class MyClock
-{
-    public int Count { get; private set; }
-    public Stopwatch stopwatch { get; }
-    
-    public MyClock()
-    {
-        Count = 0;
-        stopwatch = new Stopwatch();
-    }
-
-    public void IncrementCounter()
-    {
-        this.Count += 1;
-    }
-}
-
-#!csharp
-
 MockHttpService mockHttpService = new();
-MyClock myClock = new();
-Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(myClock), CancellationToken.None, strategy: new Linear(periodicity: TimeSpan.FromSeconds(1), maxTries: 5), policy: new RetryOnTooManyRequestsPolicy());
+Clock clock = new();
+Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(clock), CancellationToken.None, strategy: new Linear(periodicity: TimeSpan.FromSeconds(1), maxTries: 5), policy: new RetryOnTooManyRequestsPolicy());
 
 #!markdown
 
 #### `Incremental`
 This retries a specified number of times, with an arithmetically increasing delay between each retry.
 
-For example, `new Incremental(TimeSpan.FromSeconds(1), 10)` will retry up to 10 times. Each time it will increase the delay by 1s. So the first retry will be after 1s (wall clock time 1s), the second after another 2s (wall clock time 3s), the third after another 3s (wall clock time 6s).
+For example, `new(maxTries: 5, intialDelay: TimeSpan.FromSeconds(1), step: TimeSpan.FromSeconds(1))` will retry up to 5 times. The initial delay will be one second. Each time it will increase the delay by 1s. So the first retry will be after 1s (wall clock time 1s), the second after another 2s (wall clock time 3s), the third after another 3s (wall clock time 6s).
 
 This allows a slowly increasing delay.
+
+##### Example
+
+Using the same example as with `Linear` above, we can see the how the `Incremental` policy retries over time.
+
+#!csharp
+
+MockHttpService mockHttpService = new();
+Clock clock = new();
+Incremental incrementalStrategy = new(maxTries: 5, intialDelay: TimeSpan.FromSeconds(1), step: TimeSpan.FromSeconds(1));
+Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(clock), CancellationToken.None, strategy: incrementalStrategy, policy: new RetryOnTooManyRequestsPolicy());
 
 #!markdown
 
 #### `Backoff`
 This retries a specified number of times, with a delay that increases geometrically between each retry.
 
-For example, `new Backoff(10, TimeSpan.FromSeconds(1))` will retry up to 10 times. Each time it will increase the delay by a value calculated roughly like this: `2^n * (delta +/- a small random fudge)`.
+For example, `new Backoff(maxTries: 5, deltaBackoff: TimeSpan.FromSeconds(1))` will retry up to 5 times. Each time it will increase the delay by a value calculated roughly like this: `2^n * (delta +/- a small random fudge)`, where `n` is the current number of retries.
 
 This allows a rapidly increasing delay, with a bit of random jitter addded to avoid contention.
 
 You can also set a `MinBackoff` and `MaxBackoff` to limit the lower and upper bounds of the delay.
+
+##### Example
+
+#!csharp
+
+MockHttpService mockHttpService = new();
+Clock clock = new();
+Backoff backoffStrategy = new(maxTries: 4, deltaBackoff: TimeSpan.FromSeconds(1));
+Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(clock), CancellationToken.None, strategy: backoffStrategy, policy: new RetryOnTooManyRequestsPolicy());
+
+#!markdown
+
+##### Example - using `MinBackoff` and `MaxBackoff`
+
+`MinBackoff` and `MaxBackoff` are available as settable properties on a `BackOff` object. If we use the same example as above but set the `MaxBackoff` to 5 seconds, we will see that once the number of retries reaches a number such that  delay > 5 seconds, the delay between each retry will be restricted to 5 seconds.
+
+#!csharp
+
+MockHttpService mockHttpService = new();
+Clock clock = new();
+Backoff backoffStrategy = new(maxTries: 5, deltaBackoff: TimeSpan.FromSeconds(1));
+backoffStrategy.MaxBackoff = TimeSpan.FromSeconds(5);
+Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(clock), CancellationToken.None, strategy: backoffStrategy, policy: new RetryOnTooManyRequestsPolicy());
+
+#!markdown
+
+And, if we set the `MinBackoff` to be 2 seconds (the default is 1 second), we will see the time elapsed between each retry increase by 1 second on average.
+
+#!csharp
+
+MockHttpService mockHttpService = new();
+Clock clock = new();
+Backoff backoffStrategy = new(maxTries: 4, deltaBackoff: TimeSpan.FromSeconds(1));
+backoffStrategy.MinBackoff = TimeSpan.FromSeconds(2);
+Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(clock), CancellationToken.None, strategy: backoffStrategy, policy: new RetryOnTooManyRequestsPolicy());
+
+#!markdown
+
+#### Implementing a custom strategy
+
+It is slightly more complex to implement a custom retry strategy than it was to implement a retry policy. Although you can directly implemet the `IRetryStrategy` interface, it is usually simpler to derive from the abstract `RetryStrategy` class.
+
+In that case, you need to override the `TimeSpan PrepareToRetry(Exception lastException)` method. You can examine the exception and use your internal state to determine two things:
+
+1) Should we record this exception, or filter it out? Typically, we will want to record the exception, and, if so, we call `this.AddException(lastException)`.
+2) For how long should we delay before retrying? We return a `TimeSpan` from the method to determine this.
+
+So, for example, `Count` implements the method like this:
+
+```csharp
+public override TimeSpan PrepareToRetry(Exception lastException)
+{
+  if (lastException is null)
+  {
+    throw new ArgumentNullException(nameof(lastException));
+  }
+
+  this.AddException(lastException);
+  this.tryCount++;
+  return TimeSpan.Zero;
+}
+```
+
+It updates its internal state to keep a count of the number of retries, adds the exception to the list of exceptions we have seen, and tells the strategy not to delay before retrying.
+
+We also override the `bool CanRetry { get; }` property to determine wether this strategy still allows us to retry.
+
+The `Count` strategy, for example, simply uses its internal state to determine whether to continue.
+
+##### Example
+
+The following example defines a strategy that determines the delay by randomly selecting a number of seconds between user-provided upper and lower limits.
+
+#!csharp
+
+public class RandomDelay : RetryStrategy
+    {
+        private readonly int maxTries;
+        private readonly int lowerLimit;
+        private readonly int upperLimit;
+
+        private int tryCount;
+
+        public RandomDelay()
+            : this(maxTries: 5, lowerLimit: 1, upperLimit: 5)
+        {
+        }
+
+        public RandomDelay(int maxTries, int lowerLimit, int upperLimit)
+        {
+            if (maxTries <= 0)
+            {
+                throw new ArgumentException("Max tries must be > 0", nameof(maxTries));
+            }
+
+            this.maxTries = maxTries;
+            this.lowerLimit = lowerLimit;
+            this.upperLimit = upperLimit;
+        }
+
+        public override bool CanRetry
+        {
+            get
+            {
+                return this.tryCount < this.maxTries;
+            }
+        }
+
+        public override TimeSpan PrepareToRetry(Exception lastException)
+        {
+            if (lastException is null)
+            {
+                throw new ArgumentNullException(nameof(lastException));
+            }
+
+            this.AddException(lastException);
+
+            this.tryCount += 1;
+
+            if (this.CanRetry)
+            {
+                var rand = new Random();
+                TimeSpan delay = TimeSpan.FromSeconds(rand.Next(lowerLimit, upperLimit));
+                return delay;
+            }
+
+            return TimeSpan.Zero;
+        }
+    }
+
+#!markdown
+
+Let's try it...
+
+#!csharp
+
+MockHttpService mockHttpService = new();
+Clock clock = new();
+RandomDelay randomDelayStrategy = new(maxTries: 4, lowerLimit: 1, upperLimit: 5);
+Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(clock), CancellationToken.None, strategy: randomDelayStrategy, policy: new RetryOnTooManyRequestsPolicy());
