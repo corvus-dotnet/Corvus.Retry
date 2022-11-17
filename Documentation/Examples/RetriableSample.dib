@@ -351,6 +351,33 @@ Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.No
 
 If something similar were running in production, there may be a config change that prevents retries *whilst* a retry run is progress. Let's simulate that by starting a retry run (using the [`Linear`](#linear) strategy such that the delay between each retry is 2 seconds) asynchronously, and change the `isRetryDisabled` config property whilst it's running.
 
+First we should define an asynchronous version of `MakeLotsOfRequests()`.
+
+#!csharp
+
+public class MockHttpService
+{
+    public void MakeLotsOfRequests()
+    {
+        Console.WriteLine("MakeLotsOfRequests() method called");
+        throw new MockHttpServiceException("429 - Too Many Requests", "429");
+    }
+
+    public async Task MakeLotsOfRequestsAsync()
+    {
+        Console.WriteLine("MakeLotsOfRequests() method called");
+        await Task.Delay(100); // Takes some time. To simulate an HTTP transaction.
+        throw new MockHttpServiceException("429 - Too Many Requests", "429");
+    }
+
+    public void MakeRequestThatWillTimeOut()
+    {
+        Console.WriteLine("MakeRequestThatWillTimeOut() method called");
+        throw new MockHttpServiceException("408 - Request timed out", "408");
+    }
+
+}
+
 #!csharp
 
 var retryConfiguration = new RetryConfiguration();
@@ -365,12 +392,8 @@ AggregatePolicy aggregatePolicy = new AggregatePolicy()
     }
 };
 
-// Change isRetryDisabled to true
-//retryConfiguration.isRetryDisabled = true;
-
 MockHttpService mockHttpService = new();
-Action retryAction = () => Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.None, strategy: new Linear(TimeSpan.FromSeconds(2), 10), policy: aggregatePolicy);
-Task retryTask = Task.Factory.StartNew(retryAction);
+Task retryTask = Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(), CancellationToken.None, strategy: new Linear(TimeSpan.FromSeconds(2), 10), policy: aggregatePolicy);
 Thread.Sleep(5000); // Wait some time before disabling retry
 retryConfiguration.isRetryDisabled = true; // Disble retry via the config
 retryTask.Wait();
