@@ -106,7 +106,7 @@ task3.Wait();
 
 Let's imagine we were consuming an HttpService which occasionally gives us a `429 - Too Many Requests` error in an `HttpServiceException`.
 
-We may want to make requests asynchronously, so we can do other work whilst they're processing, and have they retry when a `429 - Too Many Requests` exception is detected.
+We may want to make requests synchronous client requests asynchronous, so we can do other work whilst they're processing, and have they retry when a `429 - Too Many Requests` exception is detected.
 
 Let's define a `HttpServiceException`, a `MockHttpService`, and a custom retry policy that will trigger a retry when a `429 - Too Many Requests` exception is detected.
 
@@ -130,17 +130,16 @@ public class MockHttpServiceException: Exception
 
 public class MockHttpService
 {
-    public async Task MakeLotsOfRequestsAsync()
+    public void MakeLotsOfRequests()
     {
         Console.WriteLine("MakeLotsOfRequests() method called");
-        await Task.Delay(1000);
+        Thread.Sleep(1000);
         throw new MockHttpServiceException("429 - Too Many Requests", "429");
     }
 
-    public async void MakeRequestThatWillTimeOutAsync()
+    public void MakeRequestThatWillTimeOut()
     {
         Console.WriteLine("MakeRequestThatWillTimeOut() method called");
-        await Task.Delay(1000);
         throw new MockHttpServiceException("408 - Request timed out", "408");
     }
 }
@@ -157,8 +156,23 @@ public class RetryOnTooManyRequestsPolicy : IRetryPolicy
 
 #!csharp
 
+public static void DoSomeWork()
+{
+    for(int i = 0; i < 5; i++)
+    {
+        Thread.Sleep(500);
+        Console.WriteLine("Doing some other work");
+    }
+}
+
+#!markdown
+
+Now, let's use `RetryTask.Factory.StartNew()` to call `MakeLotsOfRequests` and have it retry according to `RetryOnTooManyRequestsPolicy`, and do work on another thread whilst that retry proces is happening
+
+#!csharp
+
 MockHttpService mockHttpService = new();
 //Action retryActionOld = () => Retriable.Retry(() => mockHttpService.MakeLotsOfRequestsAsync(), CancellationToken.None, strategy: new Count(10), policy: RetryOnTooManyRequestsPolicy);
-Task retryTask = RetryTask.Factory.StartNew(() => mockHttpService.MakeLotsOfRequestsAsync(), CancellationToken.None, strategy: new Count(10), policy: new RetryOnTooManyRequestsPolicy());
-Thread.Sleep(5000); // Wait some time before disabling retry
+Task retryTask = RetryTask.Factory.StartNew(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.None, strategy: new Count(5), policy: new RetryOnTooManyRequestsPolicy());
+DoSomeWork();
 retryTask.Wait();
