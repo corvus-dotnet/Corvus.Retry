@@ -100,13 +100,65 @@ task1.Wait();
 task2.Wait();
 task3.Wait();
 
+#!markdown
+
+### Example - mock HTTP service
+
+Let's imagine we were consuming an HttpService which occasionally gives us a `429 - Too Many Requests` error in an `HttpServiceException`.
+
+We may want to make requests asynchronously, so we can do other work whilst they're processing, and have they retry when a `429 - Too Many Requests` exception is detected.
+
+Let's define a `HttpServiceException`, a `MockHttpService`, and a custom retry policy that will trigger a retry when a `429 - Too Many Requests` exception is detected.
+
 #!csharp
 
-Random rand =  new();
-Console.WriteLine(rand.Next(0,2));
-Console.WriteLine(rand.Next(0,2));
-Console.WriteLine(rand.Next(0,2));
-Console.WriteLine(rand.Next(0,2));
-Console.WriteLine(rand.Next(0,2));
-Console.WriteLine(rand.Next(0,2));
-Console.WriteLine(rand.Next(0,2));
+[Serializable]
+public class MockHttpServiceException: Exception
+{
+
+    override public string Message { get; }
+    public string StatusCode { get; }
+
+    public MockHttpServiceException(string message, string statusCode)
+    {
+        this.Message = message;
+        this.StatusCode = statusCode;
+    }
+}
+
+#!csharp
+
+public class MockHttpService
+{
+    public async Task MakeLotsOfRequestsAsync()
+    {
+        Console.WriteLine("MakeLotsOfRequests() method called");
+        await Task.Delay(1000);
+        throw new MockHttpServiceException("429 - Too Many Requests", "429");
+    }
+
+    public async void MakeRequestThatWillTimeOutAsync()
+    {
+        Console.WriteLine("MakeRequestThatWillTimeOut() method called");
+        await Task.Delay(1000);
+        throw new MockHttpServiceException("408 - Request timed out", "408");
+    }
+}
+
+#!csharp
+
+public class RetryOnTooManyRequestsPolicy : IRetryPolicy
+{
+  public bool CanRetry(Exception exception)
+  {
+    return (exception is MockHttpServiceException httpException && httpException.StatusCode == "429");
+  }
+}
+
+#!csharp
+
+MockHttpService mockHttpService = new();
+//Action retryActionOld = () => Retriable.Retry(() => mockHttpService.MakeLotsOfRequestsAsync(), CancellationToken.None, strategy: new Count(10), policy: RetryOnTooManyRequestsPolicy);
+Task retryTask = RetryTask.Factory.StartNew(() => mockHttpService.MakeLotsOfRequestsAsync(), CancellationToken.None, strategy: new Count(10), policy: new RetryOnTooManyRequestsPolicy());
+Thread.Sleep(5000); // Wait some time before disabling retry
+retryTask.Wait();
