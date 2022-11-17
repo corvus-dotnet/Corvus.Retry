@@ -37,3 +37,76 @@ Instead of calling `Task.Factory.StartNew()` you can call `RetryTask.Factory.Sta
 In addition to those usual parameters, you can pass an `IRetryPolicy` and an `IRetryStrategy` to control the retry behaviour. The defaults are the same as for `Retriable`.
 
 (See the [`RetriableSample` notebook](link) in the repository for examples on `Retriable`, `IRetryPolicy` and `IRetryStrategy`)
+
+### Example
+
+This basic example uses `RetryTask.Factory.StartNew()` just like you could use `Task.Factory.StartNew()`: to execute multiple operations concurrently.
+
+We have a `MockClient` class with a single method, `DoAnOperationWithAPotentialTransientError()`, that fails transiently - it throws a `MockClientException` with 80% probability. There's also a `RetryonMockClientExceptionPolicy`, which is a custom implementation of `IRetryPolicy` that will trigger a retry when a `MockClientException` is detected.
+
+#!csharp
+
+[Serializable]
+public class MockClientException: Exception
+{
+
+    override public string Message { get; }
+
+    public MockClientException(string message)
+    {
+        this.Message = message;
+    }
+}
+
+#!csharp
+
+public static class MockClient
+{
+    private static Random rand = new Random();
+
+    public static void DoAnOperationWithAPotentialTransientError()
+    {   
+        Console.WriteLine("method DoAnOperationWithAPotentialTransientError() called");
+        Thread.Sleep(500);
+        int randomNum = MockClient.rand.Next(1, 11);
+        if (randomNum < 9) {throw new MockClientException(message: "Too many requests");}
+        Console.WriteLine("Operation succeeded");
+    }
+}
+
+#!csharp
+
+public class RetryonMockClientExceptionPolicy : IRetryPolicy
+{
+  public bool CanRetry(Exception exception)
+  {
+    return (exception is MockClientException mockClientException);
+  }
+}
+
+#!markdown
+
+Now, let's call `DoAnOperationWithAPotentialTransientError()` three times via `RetryTask.Factory.StartNew()`. We should see the method being retried a number of times.
+
+#!csharp
+
+Task task1 = RetryTask.Factory.StartNew(() => MockClient.DoAnOperationWithAPotentialTransientError(), new Count(5), new RetryonMockClientExceptionPolicy());
+Thread.Sleep(200);
+Task task2 = RetryTask.Factory.StartNew(() => MockClient.DoAnOperationWithAPotentialTransientError(), new Count(5), new RetryonMockClientExceptionPolicy());
+Thread.Sleep(200);
+Task task3 = RetryTask.Factory.StartNew(() => MockClient.DoAnOperationWithAPotentialTransientError(), new Count(5), new RetryonMockClientExceptionPolicy());
+
+task1.Wait();
+task2.Wait();
+task3.Wait();
+
+#!csharp
+
+Random rand =  new();
+Console.WriteLine(rand.Next(0,2));
+Console.WriteLine(rand.Next(0,2));
+Console.WriteLine(rand.Next(0,2));
+Console.WriteLine(rand.Next(0,2));
+Console.WriteLine(rand.Next(0,2));
+Console.WriteLine(rand.Next(0,2));
+Console.WriteLine(rand.Next(0,2));
