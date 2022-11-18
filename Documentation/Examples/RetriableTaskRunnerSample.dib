@@ -1,0 +1,109 @@
+#!markdown
+
+# `RetriableTaskRunner` - Sample Notebook
+
+First, add a reference to the `Corvus.Retry` NuGet package.
+
+#!csharp
+
+#r "nuget: Corvus.Retry, 1.0.2"
+
+#!markdown
+
+Add a using statement for `Corvus.Retry` namespace and the others we'll be using in this notebook.
+
+#!csharp
+
+using Corvus.Retry;
+using Corvus.Retry.Strategies;
+using Corvus.Retry.Policies;
+using System.Net.NetworkInformation;
+using System.Threading;
+using System.Net.Http;
+using System.Web;
+using System.Diagnostics;
+using System.Threading;
+
+#!markdown
+
+### `ReliableTaskRunner`
+
+This is used to run a service-like operation that is supposed to execute 'forever' (or, at least, until cancellation). If the method fails, it should be re-started.
+
+You start a task using the static `ReliableTaskRunner.Run()` method. For example
+
+```
+ReliableTaskRunner runner = ReliableTaskRunner.Run(cancellationToken => DoSomeOperationAsync(cancellationToken));
+```
+
+When you want to terminate the task, you call the `StopAsync()` method e.g.
+
+```
+await runner.StopAsync();
+```
+
+As with the other retry methods, there are overloads where you can pass an `IRetryPolicy` and an and `IRetryStrategy` to control the restart behaviour.
+
+### Example
+
+Let's model a long running operation that fails transiently.
+
+Whilst time < 11000ms:
+    every 2000ms 
+
+Make the probability that the method will succeed decrease as the number of attempts increases. Ideally you want the probability to increase slowly at first and increasingly faster with attempts => exponential function
+
+#!csharp
+
+public class ModelALongRunningProcess
+{
+    private readonly Random rand;
+    private int methodExecutionCount;
+    private int maxLimit = 1000;
+    private int minRunTimeBeforeNotThrowing = 5;
+    private Stopwatch stopWatch;
+    private int maxRunTime = 20;
+
+    public ModelALongRunningProcess()
+    {
+        this.rand = new Random();
+        this.stopWatch = new Stopwatch();
+    }
+
+    public async Task ExecuteALongRunningTransientProcess(CancellationToken cancellationToken)
+    {   
+        if(methodExecutionCount == 0) { stopWatch.Start(); }
+        Console.WriteLine("ExecuteALongRunningTransientProcess method executed");
+        methodExecutionCount++;
+        // Wait some time to simulate long process
+        await Task.Delay(2000);
+        // Decide whether to throw an error
+        bool shouldThrowError = ShouldThrowError();
+        Console.WriteLine($"Should throw error:{shouldThrowError}");
+        if (shouldThrowError == true)
+        {
+            throw new Exception();
+        }
+    }
+
+    private bool ShouldThrowError()
+    {
+        int comparison = (int)((1/Math.Pow(1.2, methodExecutionCount)) * maxLimit);
+        int randomNum = rand.Next(1, maxLimit + 1);
+
+        if (randomNum <= comparison && stopWatch.Elapsed.Seconds < minRunTimeBeforeNotThrowing)
+        {
+            return true;
+        }
+        
+        return false;
+    }
+}
+
+#!csharp
+
+CancellationTokenSource cancelTokenSource = new CancellationTokenSource();
+CancellationToken token = cancelTokenSource.Token;
+
+ModelALongRunningProcess modelALongRunningProcess = new();
+ReliableTaskRunner runner =  ReliableTaskRunner.Run(token => modelALongRunningProcess.ExecuteALongRunningTransientProcess(token));
