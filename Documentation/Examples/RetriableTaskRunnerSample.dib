@@ -48,10 +48,7 @@ As with the other retry methods, there are overloads where you can pass an `IRet
 
 Let's model a long running operation that fails transiently.
 
-Whilst time < 11000ms:
-    every 2000ms 
-
-Make the probability that the method will succeed decrease as the number of attempts increases. Ideally you want the probability to increase slowly at first and increasingly faster with attempts => exponential function
+We have a method `ExecuteALongRunningTransientProcess()` whose probability of throwing an exception begins at one and decreases exponentially with the number of times executed, it will always throw an exception during the first 5 seconds after it is first executed.
 
 #!csharp
 
@@ -88,10 +85,10 @@ public class ModelALongRunningProcess
 
     private bool ShouldThrowError()
     {
-        int comparison = (int)((1/Math.Pow(1.2, methodExecutionCount)) * maxLimit);
+        int comparison = (int)((1/Math.Pow(1.1, methodExecutionCount)) * maxLimit);
         int randomNum = rand.Next(1, maxLimit + 1);
 
-        if (randomNum <= comparison && stopWatch.Elapsed.Seconds < minRunTimeBeforeNotThrowing)
+        if (randomNum <= comparison || stopWatch.Elapsed.Seconds < minRunTimeBeforeNotThrowing)
         {
             return true;
         }
@@ -107,3 +104,4 @@ CancellationToken token = cancelTokenSource.Token;
 
 ModelALongRunningProcess modelALongRunningProcess = new();
 ReliableTaskRunner runner =  ReliableTaskRunner.Run(token => modelALongRunningProcess.ExecuteALongRunningTransientProcess(token));
+await Task.Delay(10000);
