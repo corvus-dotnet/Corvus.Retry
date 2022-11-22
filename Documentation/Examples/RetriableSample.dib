@@ -59,7 +59,7 @@ Console.WriteLine($"Address:\t{reply.Address.ToString()}");
 
 #!markdown
 
-### `Retriable.RetryAsync` – basic example
+### `Retriable.RetryAsync` – example
 
 The `RetryAsync` method allows you to wrap an asynchronous method to re-execute it.
 
@@ -83,12 +83,25 @@ You can pass a cancellation token to `Retry` to signal cancellation of the retry
 
 ### Using a cancellation token - example
 
-The default behavior of `Retry` is to not use a cancellation token: `CancellationToken.None`.
+If we ping a non existing host, the method will be retried multiple times and the exception will eventually bubble up (after the default 10 retries)
 
 #!csharp
 
 Ping pingSender = new Ping();
-Retriable.Retry(() => pingSender.Send("www.endjin.com"), CancellationToken.None);
+PingReply pingReply = await Retriable.RetryAsync(() => pingSender.SendPingAsync("this-internet-host-does-not-exist"), cancellationToken);
+
+#!markdown
+
+We can now call the same method and cancel the retry operation using a cancellation token, the retry operation will not finish and the except will not bubble up.
+
+#!csharp
+
+CancellationTokenSource cancellationTokenSource = new();
+CancellationToken cancellationToken = cancellationTokenSource.Token;
+
+Ping pingSender = new Ping();
+Task<PingReply> task = Retriable.RetryAsync<PingReply>(() => pingSender.SendPingAsync("this-internet-host-does-not-exist"), cancellationToken);
+cancellationTokenSource.Cancel();
 
 #!markdown
 
