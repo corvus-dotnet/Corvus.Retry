@@ -44,11 +44,129 @@ await runner.StopAsync();
 
 As with the other retry methods, there are overloads where you can pass an `IRetryPolicy` and an and `IRetryStrategy` to control the restart behaviour.
 
-### Example
+#!markdown
 
-Let's model a long running operation that fails transiently.
+Example - Cancelling a non-ending operation
 
-We have a method `ExecuteALongRunningTransientProcess()` whose probability of throwing an exception begins at one and decreases exponentially with the number of times executed, it will always throw an exception during the first 5 seconds after it is first executed.
+Let's model an operation that needs to run forever, until it is explicitly cancelled
+
+The method, `ExecuteALongRunningTransientProcess()`, simply writes a message to the console, waits some time, then throws an exception.
+
+#!csharp
+
+class ModelALongRunningProcess
+{
+    public static async Task ExecuteALongRunningTransientProcess(CancellationToken cancellationToken)
+    {   
+        Console.WriteLine("ExecuteALongRunningTransientProcess method executed");
+        await Task.Delay(1000);
+        throw new Exception();
+    }
+}
+
+#!markdown
+
+Let's use run this in a `RetriableTaskRunner` and cancel the operation some time later using `ReliableTaskRunner.StopAsync()`.
+
+If we run this method and wrap it in a `RetriableTaskRunner` it will run forever, since the default policy is `AnyExceptionPolicy`, which will retry upon detecting any exception. We can stop it with the `StopAsync()` method.
+
+#!csharp
+
+CancellationTokenSource cancelTokenSource = new CancellationTokenSource();
+CancellationToken token = cancelTokenSource.Token;
+
+ReliableTaskRunner runner =  ReliableTaskRunner.Run(token => ModelALongRunningProcess.ExecuteALongRunningTransientProcess(token));
+Thread.Sleep(5000); // Wait some time before cancelling operation
+Task runnerTask = runner.StopAsync();
+// Check to see if the task returned is faulted
+Console.WriteLine($"Is runner task faulted:\t{runnerTask.IsFaulted}");
+await runnerTask;
+
+#!markdown
+
+We can see that the task returned has not faulted, this is because we interrupted the method before it ever completed. If a method does complete and afterwards we cancel the operation with `StopAsync()`, the `Task` returned will be faulted. This is because `ReliableTaskRunner` is supposed be used for operations that run forever.
+
+#!markdown
+
+Example - cancelling an operation that faults
+
+Similar to he previous example, we have a method (no a member method) that always throws an exception, but this time we're recording the number of times it has been executed and the time since the last execution.
+
+#!csharp
+
+public class ModelALongRunningProcess
+{
+    public Stopwatch stopwatch;
+    public int executionCount { get; private set; }
+
+    public async Task ExecuteALongRunningTransientProcess(CancellationToken cancellationToken)
+    {   
+        Console.WriteLine("ExecuteALongRunningTransientProcess method executed");
+        executionCount++;
+        stopwatch = new Stopwatch();
+        stopwatch.Start();
+        await Task.Delay(2000);
+        throw new Exception();
+    }
+}
+
+#!markdown
+
+Now, let's define a custom retry policy that stops retrying after `ExecuteALongRunningTransientProcess` has been executed 3 times.
+
+#!csharp
+
+public class CustomRetryPolicy : IRetryPolicy
+{
+
+  public ModelALongRunningProcess modelALongRunningProcess;
+  
+  public CustomRetryPolicy(ModelALongRunningProcess modelALongRunningProcess)
+  {
+      this.modelALongRunningProcess = modelALongRunningProcess;
+  }
+
+  private int GetExecutionCount()
+  {
+    int executionCount = modelALongRunningProcess.executionCount;
+    return executionCount;
+  }
+
+  public bool CanRetry(Exception exception)
+  {
+    int executionCount = GetExecutionCount(); 
+    return (exception is Exception && executionCount <= 3);
+  }
+}
+
+#!markdown
+
+Now, let's run the method with `ReliableTaskRunner.Run()`, passing in a `CustomRetryPolicy` for the `policy` parameter.
+
+Then, every 5 seconds, we're going to check if the amount of time since the method was last executed is greater than 6 seconds, and if so, we'll assume that the method has faulted (it will have returned by then) and cancel the operation with `StopAsync()`.
+
+We expect to see `ExecuteALongRunningTransientProcess()` executed four times - the first three are followed by retries, the fourth is not. And the `Task` returned by `StopAsync()` will be faulted.
+
+#!csharp
+
+CancellationTokenSource cancelTokenSource = new CancellationTokenSource();
+CancellationToken token = cancelTokenSource.Token;
+ModelALongRunningProcess modelALongRunningProcess = new();
+ReliableTaskRunner runner =  ReliableTaskRunner.Run(token => modelALongRunningProcess.ExecuteALongRunningTransientProcess(token), new CustomRetryPolicy(modelALongRunningProcess));
+int timeElapsedSinceLastMethodExecution = (int)modelALongRunningProcess.stopwatch.Elapsed.TotalSeconds;
+
+// If time since the method was last executed is greater than 6s then assume the operation has faulted, exit loop anc stop the operation
+bool cannotCancel = true;
+while (cannotCancel)
+{
+    int timeElapsedSinceLastMethodExecution = (int)modelALongRunningProcess.stopwatch.Elapsed.TotalSeconds;
+    if (timeElapsedSinceLastMethodExecution > 6) { cannotCancel = false; }
+    Thread.Sleep(5000); // Wait to see if the method has faulted
+}
+Task runnerTask = runner.StopAsync();
+// Check to see if the resulting task is faulted
+Console.WriteLine($"Is runner task faulted:\t{runnerTask.IsFaulted}");
+await runnerTask;
 
 #!csharp
 
@@ -105,169 +223,3 @@ CancellationToken token = cancelTokenSource.Token;
 ModelALongRunningProcess modelALongRunningProcess = new();
 ReliableTaskRunner runner =  ReliableTaskRunner.Run(token => modelALongRunningProcess.ExecuteALongRunningTransientProcess(token));
 await Task.Delay(15000);
-
-#!markdown
-
-Example - long running operation
-
-Let's wrap a long running operation in a `RetriableTaskRunner` and cancel it using `ReliableTaskRunner.StopAsync()`.
-
-The method, `ExecuteALongRunningTransientProcess()`, will run forever, each time throwing an exception.
-
-#!csharp
-
-class ModelALongRunningProcess
-{
-    public static async Task ExecuteALongRunningTransientProcess(CancellationToken cancellationToken)
-    {   
-        Console.WriteLine("ExecuteALongRunningTransientProcess method executed");
-        await Task.Delay(1000);
-        throw new Exception();
-    }
-}
-
-#!markdown
-
-Let's use run this in a `RetriableTaskRunner` and cancel the operation some time later using `ReliableTaskRunner.StopAsync()`.
-
-#!csharp
-
-CancellationTokenSource cancelTokenSource = new CancellationTokenSource();
-CancellationToken token = cancelTokenSource.Token;
-
-ReliableTaskRunner runner =  ReliableTaskRunner.Run(token => ModelALongRunningProcess.ExecuteALongRunningTransientProcess(token));
-Thread.Sleep(5000); // Wait some time before cancelling operation
-Task runnerTask = runner.StopAsync();
-Console.WriteLine($"Is runner task faulted:\t{runnerTask.IsFaulted}");
-await runnerTask;
-
-#!markdown
-
-Example
-
-A long running process that does nothing (Task.Delay()), and throws an exception the pause. Starts a stopwatch each time the method is executed. Need to record the retry count
-
-An IRetryPolicy that retries for the first three exceptions only, later ones are not retried. Therefore the retry count needs to be passed into this policy
-
-#!csharp
-
-public class ModelALongRunningProcess
-{
-    public Stopwatch stopwatch;
-    public int executionCount { get; private set; }
-
-    public async Task ExecuteALongRunningTransientProcess(CancellationToken cancellationToken)
-    {   
-        Console.WriteLine("ExecuteALongRunningTransientProcess method executed");
-        executionCount++;
-        stopwatch = new Stopwatch();
-        stopwatch.Start();
-        await Task.Delay(2000);
-        throw new Exception();
-    }
-}
-
-#!csharp
-
-public class CustomRetryPolicy : IRetryPolicy
-{
-
-  public ModelALongRunningProcess modelALongRunningProcess;
-  
-  public CustomRetryPolicy(ModelALongRunningProcess modelALongRunningProcess)
-  {
-      this.modelALongRunningProcess = modelALongRunningProcess;
-  }
-
-  private int GetExecutionCount()
-  {
-    int executionCount = modelALongRunningProcess.executionCount;
-    return executionCount;
-  }
-
-  public bool CanRetry(Exception exception)
-  {
-    int executionCount = GetExecutionCount(); 
-    return (exception is Exception && executionCount <= 3);
-  }
-}
-
-#!csharp
-
-CancellationTokenSource cancelTokenSource = new CancellationTokenSource();
-CancellationToken token = cancelTokenSource.Token;
-ModelALongRunningProcess modelALongRunningProcess = new();
-ReliableTaskRunner runner =  ReliableTaskRunner.Run(token => modelALongRunningProcess.ExecuteALongRunningTransientProcess(token), );
-int timeElapsedSinceLastMethodExecution = (int)modelALongRunningProcess.stopwatch.Elapsed.TotalSeconds;
-while (timeElapsedSinceLastMethodExecution < 6)
-{
-    Thread.Sleep(5000); // Wait to see if the method has faulted
-}
-Task runnerTask = runner.StopAsync();
-Console.WriteLine($"Is runner task faulted:\t{runnerTask.IsFaulted}");
-await runnerTask;
-
-#!csharp
-
-class ModelALongRunningProcess
-{
-    public Stopwatch stopWatch;
-    int executionCount;
-
-    public async Task ExecuteALongRunningTransientProcess(CancellationToken cancellationToken)
-    {   
-        Console.WriteLine("ExecuteALongRunningTransientProcess method executed");
-        while(true)
-        {
-            await Task.Delay(100);
-            if (executionCount  == 10){ throw new Exception(); }
-        }
-    }
-}
-
-#!markdown
-
-Example
-
-#!csharp
-
-[Serializable]
-public class MockHttpServiceException: Exception
-{
-
-    override public string Message { get; }
-    public string StatusCode { get; }
-
-    public MockHttpServiceException(string message, string statusCode)
-    {
-        this.Message = message;
-        this.StatusCode = statusCode;
-    }
-}
-
-#!csharp
-
-public class MockHttpClient
-{
-    public void MakeLotsOfRequests()
-    {
-        Console.WriteLine("MakeLotsOfRequests() method called");
-        throw new MockHttpServiceException("429 - Too Many Requests", "429");
-    }
-
-    public void MakeRequestThatWillTimeOut()
-    {
-        Console.WriteLine("MakeRequestThatWillTimeOut() method called");
-        throw new MockHttpServiceException("408 - Request timed out", "408");
-    }
-}
-
-#!csharp
-
-public class MockHttpService
-{
-    public static void SomethingThatTakesALongTime()
-    {
-        
-    }
-}
