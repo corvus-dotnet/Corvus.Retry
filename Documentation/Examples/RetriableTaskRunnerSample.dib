@@ -161,7 +161,7 @@ while (cannotCancel)
 {
     int timeElapsedSinceLastMethodExecution = (int)modelALongRunningProcess.stopwatch.Elapsed.TotalSeconds;
     if (timeElapsedSinceLastMethodExecution > 6) { cannotCancel = false; }
-    Thread.Sleep(5000); // Wait to see if the method has faulted
+    Thread.Sleep(5000); // Wait before checking again
 }
 Task runnerTask = runner.StopAsync();
 // Check to see if the resulting task is faulted
