@@ -130,7 +130,7 @@ PingReply reply = Retriable.Retry(() => pingSender.Send("www.endjin.com"), Cance
 
 #!markdown
 
-**Note**: the argument to the `strategy` parameter in the example above is specifying that the function should be retried a maximum of 10 times. `IRetryStrategy` is covered [later in the notebook](#iretrystrategy).
+**Note**: the argument to the `strategy` parameter in the example above is specifying that the function should be tried a maximum of 10 times (i.e. 9 retries). `IRetryStrategy` is covered [later in the notebook](#iretrystrategy).
 
 #!markdown
 
@@ -237,7 +237,7 @@ public class RetryOnTooManyRequestsPolicy : IRetryPolicy
 
 Now, create an instance of `MockHttpService`, and call its `MakeLotsOfRequests` method - wrapping it with `Retriable.Retry` and passing it our `RetryOnTooManyRequestsPolicy` policy.
 
-For the strategy I'm passing in `new Count(10)`, which means the method will be retried at most 10 times. Therefore we should expect to see "Method called" printed to the console 10 times.
+For the strategy I'm passing in `new Count(10)`, which means the method will be tried a total of ten times maximum. Therefore we should expect to see "Method called" printed to the console 10 times.
 
 #!csharp
 
@@ -279,7 +279,7 @@ var aggregatePolicy =
 
 In this example we create a policy that checks configuration to see if retry is disabled. You could have such configuration to allow you to disable retry whilst the application is running in production.
 
-First create a class encapsulating configuration which says whether retry is disable or not:
+First create a class encapsulating configuration which says whether retry is disabled or not:
 
 #!csharp
 
@@ -425,11 +425,11 @@ There are several strategies provided out-of-the-box: `Count`, `DoNotRetry`, `Li
 
 We've seen this retry strategy in the `IRetryPolicy` examples earlier.
 
-This simply retries a specified number of times, with no delay. `Retriable` operations default to a `new Count(10)` strategy.
+This simply specifies the maximum number of times the method can be tried. `Retriable` operations default to a `new Count(10)` strategy, this means the method can be tried a maximum of ten times: once for the initial execution and nine retries.
 
 ##### Example
 
-Reusing the `MockHttpService` from earlier, if we call the `MakeLotsOfRequests()` method (which always throws a "429 - Too Many Requests" `MockHttpServiceException` exception type) and supply a `RetryWhenTooManyRequestsPolicy` for the policy, and supply `new Count(10)` for the strategy, we should expect to see the method call retried 10 times. 
+Reusing the `MockHttpService` from earlier, if we call the `MakeLotsOfRequests()` method (which always throws a "429 - Too Many Requests" `MockHttpServiceException` exception type) and supply a `RetryWhenTooManyRequestsPolicy` for the policy, and supply `new Count(10)` for the strategy, we should expect to see the method call tried 10 times. 
 
 #!csharp
 
@@ -453,9 +453,9 @@ Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.No
 #!markdown
 
 #### `Linear`
-This retries a specified number of times (specified by `maxTries`), with a constant delay between each retry (specified by `periodicity`).
+This tries a specified number of times (specified by `maxTries`), with a constant delay between each try (specified by `periodicity`).
 
-For example, `new Linear(TimeSpan.FromSeconds(1), 5)` will retry up to 5 times. Each time it will  delay by 1s. So the first retry will be after 1s (wall clock time 1s), the second after another 1s (wall clock time 2s), the third after another 1s (wall clock time 3s).
+For example, `new Linear(TimeSpan.FromSeconds(1), 5)` will try up to 5 times. The initial try will be immediate, each retry will be delayed by 1s. So the first retry will be after 1s (wall clock time 1s), the second after another 1s (wall clock time 2s), the third after another 1s (wall clock time 3s).
 
 #!csharp
 
@@ -527,9 +527,10 @@ Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(clock), CancellationTok
 #!markdown
 
 #### `Incremental`
-This retries a specified number of times, with an arithmetically increasing delay between each retry.
 
-For example, `new(maxTries: 5, intialDelay: TimeSpan.FromSeconds(1), step: TimeSpan.FromSeconds(1))` will retry up to 5 times. The initial delay will be one second. Each time it will increase the delay by 1s. So the first retry will be after 1s (wall clock time 1s), the second after another 2s (wall clock time 3s), the third after another 3s (wall clock time 6s).
+This tries a specified number of times, with an arithmetically increasing delay between each retry.
+
+For example, `new(maxTries: 5, intialDelay: TimeSpan.FromSeconds(1), step: TimeSpan.FromSeconds(1))` will try up to 5 times. The initial try will be immediate, the delay between the initial try and the first retry will be one second. Each time it will increase the delay by 1s. So the first retry will be after 1s (wall clock time 1s), the second after another 2s (wall clock time 3s), the third after another 3s (wall clock time 6s).
 
 This allows a slowly increasing delay.
 
@@ -547,9 +548,10 @@ Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(clock), CancellationTok
 #!markdown
 
 #### `Backoff`
-This retries a specified number of times, with a delay that increases geometrically between each retry.
 
-For example, `new Backoff(maxTries: 5, deltaBackoff: TimeSpan.FromSeconds(1))` will retry up to 5 times. Each time it will increase the delay by a value calculated roughly like this: `2^n * (delta +/- a small random fudge)`, where `n` is the current number of retries.
+This tries a specified number of times, with a delay that increases geometrically between each retry.
+
+For example, `new Backoff(maxTries: 5, deltaBackoff: TimeSpan.FromSeconds(1))` will try up to 5 times. Each time it will increase the delay by a value calculated roughly like this: `2^n * (delta +/- a small random fudge)`, where `n` is the current number of retries.
 
 This allows a rapidly increasing delay, with a bit of random jitter addded to avoid contention.
 
