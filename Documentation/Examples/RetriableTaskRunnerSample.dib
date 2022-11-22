@@ -105,3 +105,169 @@ CancellationToken token = cancelTokenSource.Token;
 ModelALongRunningProcess modelALongRunningProcess = new();
 ReliableTaskRunner runner =  ReliableTaskRunner.Run(token => modelALongRunningProcess.ExecuteALongRunningTransientProcess(token));
 await Task.Delay(15000);
+
+#!markdown
+
+Example - long running operation
+
+Let's wrap a long running operation in a `RetriableTaskRunner` and cancel it using `ReliableTaskRunner.StopAsync()`.
+
+The method, `ExecuteALongRunningTransientProcess()`, will run forever, each time throwing an exception.
+
+#!csharp
+
+class ModelALongRunningProcess
+{
+    public static async Task ExecuteALongRunningTransientProcess(CancellationToken cancellationToken)
+    {   
+        Console.WriteLine("ExecuteALongRunningTransientProcess method executed");
+        await Task.Delay(1000);
+        throw new Exception();
+    }
+}
+
+#!markdown
+
+Let's use run this in a `RetriableTaskRunner` and cancel the operation some time later using `ReliableTaskRunner.StopAsync()`.
+
+#!csharp
+
+CancellationTokenSource cancelTokenSource = new CancellationTokenSource();
+CancellationToken token = cancelTokenSource.Token;
+
+ReliableTaskRunner runner =  ReliableTaskRunner.Run(token => ModelALongRunningProcess.ExecuteALongRunningTransientProcess(token));
+Thread.Sleep(5000); // Wait some time before cancelling operation
+Task runnerTask = runner.StopAsync();
+Console.WriteLine($"Is runner task faulted:\t{runnerTask.IsFaulted}");
+await runnerTask;
+
+#!markdown
+
+Example
+
+A long running process that does nothing (Task.Delay()), and throws an exception the pause. Starts a stopwatch each time the method is executed. Need to record the retry count
+
+An IRetryPolicy that retries for the first three exceptions only, later ones are not retried. Therefore the retry count needs to be passed into this policy
+
+#!csharp
+
+public class ModelALongRunningProcess
+{
+    public Stopwatch stopwatch;
+    public int executionCount { get; private set; }
+
+    public async Task ExecuteALongRunningTransientProcess(CancellationToken cancellationToken)
+    {   
+        Console.WriteLine("ExecuteALongRunningTransientProcess method executed");
+        executionCount++;
+        stopwatch = new Stopwatch();
+        stopwatch.Start();
+        await Task.Delay(2000);
+        throw new Exception();
+    }
+}
+
+#!csharp
+
+public class CustomRetryPolicy : IRetryPolicy
+{
+
+  public ModelALongRunningProcess modelALongRunningProcess;
+  
+  public CustomRetryPolicy(ModelALongRunningProcess modelALongRunningProcess)
+  {
+      this.modelALongRunningProcess = modelALongRunningProcess;
+  }
+
+  private int GetExecutionCount()
+  {
+    int executionCount = modelALongRunningProcess.executionCount;
+    return executionCount;
+  }
+
+  public bool CanRetry(Exception exception)
+  {
+    int executionCount = GetExecutionCount(); 
+    return (exception is Exception && executionCount <= 3);
+  }
+}
+
+#!csharp
+
+CancellationTokenSource cancelTokenSource = new CancellationTokenSource();
+CancellationToken token = cancelTokenSource.Token;
+ModelALongRunningProcess modelALongRunningProcess = new();
+ReliableTaskRunner runner =  ReliableTaskRunner.Run(token => modelALongRunningProcess.ExecuteALongRunningTransientProcess(token), );
+int timeElapsedSinceLastMethodExecution = (int)modelALongRunningProcess.stopwatch.Elapsed.TotalSeconds;
+while (timeElapsedSinceLastMethodExecution < 6)
+{
+    Thread.Sleep(5000); // Wait to see if the method has faulted
+}
+Task runnerTask = runner.StopAsync();
+Console.WriteLine($"Is runner task faulted:\t{runnerTask.IsFaulted}");
+await runnerTask;
+
+#!csharp
+
+class ModelALongRunningProcess
+{
+    public Stopwatch stopWatch;
+    int executionCount;
+
+    public async Task ExecuteALongRunningTransientProcess(CancellationToken cancellationToken)
+    {   
+        Console.WriteLine("ExecuteALongRunningTransientProcess method executed");
+        while(true)
+        {
+            await Task.Delay(100);
+            if (executionCount  == 10){ throw new Exception(); }
+        }
+    }
+}
+
+#!markdown
+
+Example
+
+#!csharp
+
+[Serializable]
+public class MockHttpServiceException: Exception
+{
+
+    override public string Message { get; }
+    public string StatusCode { get; }
+
+    public MockHttpServiceException(string message, string statusCode)
+    {
+        this.Message = message;
+        this.StatusCode = statusCode;
+    }
+}
+
+#!csharp
+
+public class MockHttpClient
+{
+    public void MakeLotsOfRequests()
+    {
+        Console.WriteLine("MakeLotsOfRequests() method called");
+        throw new MockHttpServiceException("429 - Too Many Requests", "429");
+    }
+
+    public void MakeRequestThatWillTimeOut()
+    {
+        Console.WriteLine("MakeRequestThatWillTimeOut() method called");
+        throw new MockHttpServiceException("408 - Request timed out", "408");
+    }
+}
+
+#!csharp
+
+public class MockHttpService
+{
+    public static void SomethingThatTakesALongTime()
+    {
+        
+    }
+}
