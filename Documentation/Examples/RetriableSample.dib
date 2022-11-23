@@ -88,7 +88,7 @@ If we ping a non existing host, the method will be retried multiple times and th
 #!csharp
 
 Ping pingSender = new Ping();
-PingReply pingReply = await Retriable.RetryAsync(() => pingSender.SendPingAsync("this-internet-host-does-not-exist"), cancellationToken);
+PingReply pingReply = await Retriable.RetryAsync(() => pingSender.SendPingAsync("this-internet-host-does-not-exist"));
 
 #!markdown
 
@@ -126,7 +126,7 @@ This will always retry on any exception, and is the default for `Retriable`.
 #!csharp
 
 Ping pingSender = new Ping();
-PingReply reply = Retriable.Retry(() => pingSender.Send("www.endjin.com"), CancellationToken.None, strategy: new Count(10), policy: new AnyExceptionPolicy());
+PingReply reply = await Retriable.RetryAsync(() => pingSender.SendPingAsync("www.endjin.com"), CancellationToken.None, strategy: new Count(10), policy: new AnyExceptionPolicy());
 
 #!markdown
 
@@ -147,7 +147,7 @@ bool isDebuggingOrWhatever = true;
 IRetryPolicy policy = isDebuggingOrWhatever ? new DoNotRetryPolicy() : new AnyExceptionPolicy();
 
 Ping pingSender = new Ping();
-PingReply reply = Retriable.Retry(() => pingSender.Send("www.endjin.com"), CancellationToken.None, strategy: new Count(10), policy: policy);
+PingReply reply = await Retriable.RetryAsync(() => pingSender.SendPingAsync("www.endjin.com"), CancellationToken.None, strategy: new Count(10), policy: policy);
 
 #!markdown
 
@@ -172,7 +172,7 @@ public class RetryOnPingExceptionPolicy : IRetryPolicy
 #!csharp
 
 Ping pingSender = new Ping();
-PingReply reply = Retriable.Retry(() => pingSender.Send("www.endjin.com"), CancellationToken.None, strategy: new Count(10), policy: new RetryOnPingExceptionPolicy());
+PingReply reply = await Retriable.RetryAsync(() => pingSender.SendPingAsync("www.endjin.com"), CancellationToken.None, strategy: new Count(10), policy: new RetryOnPingExceptionPolicy());
 
 #!markdown
 
@@ -204,15 +204,17 @@ public class MockHttpServiceException: Exception
 
 public class MockHttpService
 {
-    public void MakeLotsOfRequests()
+    public async Task MakeLotsOfRequestsAsync()
     {
         Console.WriteLine("MakeLotsOfRequests() method called");
+        await Task.Delay(100);
         throw new MockHttpServiceException("429 - Too Many Requests", "429");
     }
 
-    public void MakeRequestThatWillTimeOut()
+    public async Task MakeRequestThatWillTimeOutAsync()
     {
         Console.WriteLine("MakeRequestThatWillTimeOut() method called");
+        await Task.Delay(100);
         throw new MockHttpServiceException("408 - Request timed out", "408");
     }
 }
@@ -235,23 +237,23 @@ public class RetryOnTooManyRequestsPolicy : IRetryPolicy
 
 #!markdown
 
-Now, create an instance of `MockHttpService`, and call its `MakeLotsOfRequests` method - wrapping it with `Retriable.Retry` and passing it our `RetryOnTooManyRequestsPolicy` policy.
+Now, create an instance of `MockHttpService`, and call its `MakeLotsOfRequestsAsync` method - wrapping it with `Retriable.Retry` and passing it our `RetryOnTooManyRequestsPolicy` policy.
 
 For the strategy I'm passing in `new Count(10)`, which means the method will be tried a total of ten times maximum. Therefore we should expect to see "Method called" printed to the console 10 times.
 
 #!csharp
 
 MockHttpService mockHttpService = new();
-Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.None, strategy: new Count(10), policy: new RetryOnTooManyRequestsPolicy());
+await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(), CancellationToken.None, strategy: new Count(10), policy: new RetryOnTooManyRequestsPolicy());
 
 #!markdown
 
-Now, instead of calling `MakeLotsOfRequests()`, let's call `MakeRequestThatWillTimeOut()`, whilst keeping the policy the same. The condition in `RetryOnTooManyRequestsPolicy` will not pass, and therefore the method will not be retried; we should expect to see `MakeRequestThatWillTimeOut() method called` printed just once to the console for the initial method execution, and the `408 - Request timed out` exception thrown.
+Now, instead of calling `MakeLotsOfRequestsAsync()`, let's call `MakeRequestThatWillTimeOutAsync()`, whilst keeping the policy the same. The condition in `RetryOnTooManyRequestsPolicy` will not pass, and therefore the method will not be retried; we should expect to see `MakeRequestThatWillTimeOut() method called` printed just once to the console for the initial method execution, and the `408 - Request timed out` exception thrown.
 
 #!csharp
 
 MockHttpService mockHttpService = new();
-Retriable.Retry(() => mockHttpService.MakeRequestThatWillTimeOut(), CancellationToken.None, strategy: new Count(10), policy: new RetryOnTooManyRequestsPolicy());
+await Retriable.RetryAsync(() => mockHttpService.MakeRequestThatWillTimeOutAsync(), CancellationToken.None, strategy: new Count(10), policy: new RetryOnTooManyRequestsPolicy());
 
 #!markdown
 
@@ -327,14 +329,14 @@ AggregatePolicy aggregatePolicy = new AggregatePolicy()
 
 #!markdown
 
-Now, try this aggregate policy with the `MockHttpService.MakeLotsOfRequests()` method.
+Now, try this aggregate policy with the `MockHttpService.MakeLotsOfRequestsAsync()` method.
 
 The default value of the `isRetryDisabled` property on `RetryConfiguration` is `false`, therefore the two conditions in `aggregatePolicy` will pass, and the method will be retried every time.
 
 #!csharp
 
 MockHttpService mockHttpService = new();
-Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.None, strategy: new Count(10), policy: aggregatePolicy);
+await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(), CancellationToken.None, strategy: new Count(10), policy: aggregatePolicy);
 
 #!markdown
 
@@ -358,34 +360,27 @@ AggregatePolicy aggregatePolicy = new AggregatePolicy()
 retryConfiguration.isRetryDisabled = true;
 
 MockHttpService mockHttpService = new();
-Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.None, strategy: new Count(10), policy: aggregatePolicy);
+await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(), CancellationToken.None, strategy: new Count(10), policy: aggregatePolicy);
 
 #!markdown
 
 If something similar were running in production, there may be a config change that prevents retries *whilst* a retry run is progress. Let's simulate that by starting a retry run (using the [`Linear`](#linear) strategy such that the delay between each retry is 2 seconds) asynchronously, and change the `isRetryDisabled` config property whilst it's running.
 
-First we should define an asynchronous version of `MakeLotsOfRequests()`.
-
 #!csharp
 
 public class MockHttpService
 {
-    public void MakeLotsOfRequests()
-    {
-        Console.WriteLine("MakeLotsOfRequests() method called");
-        throw new MockHttpServiceException("429 - Too Many Requests", "429");
-    }
-
     public async Task MakeLotsOfRequestsAsync()
     {
         Console.WriteLine("MakeLotsOfRequests() method called");
-        await Task.Delay(100); // Takes some time. To simulate an HTTP transaction.
+        await Task.Delay(100);
         throw new MockHttpServiceException("429 - Too Many Requests", "429");
     }
 
-    public void MakeRequestThatWillTimeOut()
+    public async Task MakeRequestThatWillTimeOutAsync()
     {
         Console.WriteLine("MakeRequestThatWillTimeOut() method called");
+        await Task.Delay(100);
         throw new MockHttpServiceException("408 - Request timed out", "408");
     }
 
@@ -429,12 +424,12 @@ This simply specifies the maximum number of times the method can be tried. `Retr
 
 ##### Example
 
-Reusing the `MockHttpService` from earlier, if we call the `MakeLotsOfRequests()` method (which always throws a "429 - Too Many Requests" `MockHttpServiceException` exception type) and supply a `RetryWhenTooManyRequestsPolicy` for the policy, and supply `new Count(10)` for the strategy, we should expect to see the method call tried 10 times. 
+Reusing the `MockHttpService` from earlier, if we call the `MakeLotsOfRequestsAsync()` method (which always throws a "429 - Too Many Requests" `MockHttpServiceException` exception type) and supply a `RetryWhenTooManyRequestsPolicy` for the policy, and supply `new Count(10)` for the strategy, we should expect to see the method call tried 10 times. 
 
 #!csharp
 
 MockHttpService mockHttpService = new();
-Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.None, strategy: new Count(10), policy: new RetryOnTooManyRequestsPolicy());
+await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(), CancellationToken.None, strategy: new Count(10), policy: new RetryOnTooManyRequestsPolicy());
 
 #!markdown
 
@@ -448,7 +443,7 @@ Using the same example as in the `Count` retry policy above, the method will be 
 #!csharp
 
 MockHttpService mockHttpService = new();
-Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.None, strategy: new DoNotRetry(), policy: new RetryOnTooManyRequestsPolicy());
+await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(), CancellationToken.None, strategy: new DoNotRetry(), policy: new RetryOnTooManyRequestsPolicy());
 
 #!markdown
 
@@ -460,11 +455,11 @@ For example, `new Linear(TimeSpan.FromSeconds(1), 5)` will try up to 5 times. Th
 #!csharp
 
 MockHttpService mockHttpService = new();
-Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.None, strategy: new Linear(periodicity: TimeSpan.FromSeconds(1), maxTries: 5), policy: new RetryOnTooManyRequestsPolicy());
+await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(), CancellationToken.None, strategy: new Linear(periodicity: TimeSpan.FromSeconds(1), maxTries: 5), policy: new RetryOnTooManyRequestsPolicy());
 
 #!markdown
 
-If we introduce a `Clock` object and add an overload for `MockHttpService.MakeLotsOfRequests()` that records the time elapsed for each retry since the initial execution, we can see the how the `Linear` retry policy retries over time.
+If we introduce a `Clock` object and add an overload for `MockHttpService.MakeLotsOfRequestsAsync()` that records the time elapsed for each retry since the initial execution, we can see the how the `Linear` retry policy retries over time.
 
 #!csharp
 
@@ -489,13 +484,14 @@ public class Clock
 
 public class MockHttpService
 {
-    public void MakeLotsOfRequests()
+    public async Task MakeLotsOfRequestsAsync()
     {
         Console.WriteLine("MakeLotsOfRequests() method called");
+        await Task.Delay(100);
         throw new MockHttpServiceException("429 - Too Many Requests", "429");
     }
 
-    public void MakeLotsOfRequests(Clock clock)
+    public async Task MakeLotsOfRequestsAsync(Clock clock)
     {
         Console.WriteLine("MakeLotsOfRequests() method called");
 
@@ -507,13 +503,15 @@ public class MockHttpService
         }
 
         clock.IncrementCounter();
+        await Task.Delay(100);
         clock.stopwatch.Start();
         throw new MockHttpServiceException("429 - Too Many Requests", "429");
     }
 
-    public void MakeRequestThatWillTimeOut()
+    public async Task MakeRequestThatWillTimeOutAsync()
     {
         Console.WriteLine("MakeRequestThatWillTimeOut() method called");
+        await Task.Delay(100);
         throw new MockHttpServiceException("408 - Request timed out", "408");
     }
 }
@@ -522,7 +520,7 @@ public class MockHttpService
 
 MockHttpService mockHttpService = new();
 Clock clock = new();
-Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(clock), CancellationToken.None, strategy: new Linear(periodicity: TimeSpan.FromSeconds(1), maxTries: 5), policy: new RetryOnTooManyRequestsPolicy());
+await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(clock), CancellationToken.None, strategy: new Linear(periodicity: TimeSpan.FromSeconds(1), maxTries: 5), policy: new RetryOnTooManyRequestsPolicy());
 
 #!markdown
 
@@ -543,7 +541,7 @@ Using the same example as with `Linear` above, we can see the how the `Increment
 MockHttpService mockHttpService = new();
 Clock clock = new();
 Incremental incrementalStrategy = new(maxTries: 5, intialDelay: TimeSpan.FromSeconds(1), step: TimeSpan.FromSeconds(1));
-Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(clock), CancellationToken.None, strategy: incrementalStrategy, policy: new RetryOnTooManyRequestsPolicy());
+await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(clock), CancellationToken.None, strategy: incrementalStrategy, policy: new RetryOnTooManyRequestsPolicy());
 
 #!markdown
 
@@ -564,7 +562,7 @@ You can also set a `MinBackoff` and `MaxBackoff` to limit the lower and upper bo
 MockHttpService mockHttpService = new();
 Clock clock = new();
 Backoff backoffStrategy = new(maxTries: 4, deltaBackoff: TimeSpan.FromSeconds(1));
-Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(clock), CancellationToken.None, strategy: backoffStrategy, policy: new RetryOnTooManyRequestsPolicy());
+await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(clock), CancellationToken.None, strategy: backoffStrategy, policy: new RetryOnTooManyRequestsPolicy());
 
 #!markdown
 
@@ -578,7 +576,7 @@ MockHttpService mockHttpService = new();
 Clock clock = new();
 Backoff backoffStrategy = new(maxTries: 5, deltaBackoff: TimeSpan.FromSeconds(1));
 backoffStrategy.MaxBackoff = TimeSpan.FromSeconds(5);
-Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(clock), CancellationToken.None, strategy: backoffStrategy, policy: new RetryOnTooManyRequestsPolicy());
+await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(clock), CancellationToken.None, strategy: backoffStrategy, policy: new RetryOnTooManyRequestsPolicy());
 
 #!markdown
 
@@ -590,7 +588,7 @@ MockHttpService mockHttpService = new();
 Clock clock = new();
 Backoff backoffStrategy = new(maxTries: 4, deltaBackoff: TimeSpan.FromSeconds(1));
 backoffStrategy.MinBackoff = TimeSpan.FromSeconds(2);
-Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(clock), CancellationToken.None, strategy: backoffStrategy, policy: new RetryOnTooManyRequestsPolicy());
+await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(clock), CancellationToken.None, strategy: backoffStrategy, policy: new RetryOnTooManyRequestsPolicy());
 
 #!markdown
 
@@ -695,4 +693,4 @@ Let's try it...
 MockHttpService mockHttpService = new();
 Clock clock = new();
 RandomDelay randomDelayStrategy = new(maxTries: 4, lowerLimit: 1, upperLimit: 5);
-Retriable.Retry(() => mockHttpService.MakeLotsOfRequests(clock), CancellationToken.None, strategy: randomDelayStrategy, policy: new RetryOnTooManyRequestsPolicy());
+await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(clock), CancellationToken.None, strategy: randomDelayStrategy, policy: new RetryOnTooManyRequestsPolicy());
