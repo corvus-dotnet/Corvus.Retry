@@ -594,7 +594,7 @@ await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(clock),
 
 #### Implementing a custom strategy
 
-It is slightly more complex to implement a custom retry strategy than it was to implement a retry policy. Although you can directly implemet the `IRetryStrategy` interface, it is usually simpler to derive from the abstract `RetryStrategy` class.
+It is slightly more complex to implement a custom retry strategy than it was to implement a retry policy. Although you can directly implement the `IRetryStrategy` interface, it is usually simpler to derive from the abstract `RetryStrategy` class.
 
 In that case, you need to override the `TimeSpan PrepareToRetry(Exception lastException)` method. You can examine the exception and use your internal state to determine two things:
 
