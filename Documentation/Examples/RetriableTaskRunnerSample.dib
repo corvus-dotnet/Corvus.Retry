@@ -88,9 +88,9 @@ We can see that the task returned has not faulted, this is because we interrupte
 
 #!markdown
 
-Example - cancelling an operation that faults
+#### Example - cancelling an operation that faults
 
-Similar to he previous example, we have a method (no a member method) that always throws an exception, but this time we're recording the number of times it has been executed and the time since the last execution.
+Similar to he previous example, we have a method (now a member method) that always throws an exception, but this time we're recording the number of times it has been executed and the time since the last execution.
 
 #!csharp
 
@@ -105,8 +105,19 @@ public class ModelALongRunningProcess
         executionCount++;
         stopwatch = new Stopwatch();
         stopwatch.Start();
-        await Task.Delay(2000);
-        throw new Exception();
+        int loopCounter = 0;
+        while (true)
+        {
+            await Task.Delay(200);
+            int quotient = Math.DivRem(loopCounter, 10, out int remainder);
+            // Throw an exception every ten times around the loop
+            if (remainder == 0 && quotient > 0)
+            {
+                Console.WriteLine("About to throw an exception");
+                throw new Exception();
+            }
+            loopCounter++;
+        }
     }
 }
 
@@ -160,13 +171,17 @@ bool cannotCancel = true;
 while (cannotCancel)
 {
     int timeElapsedSinceLastMethodExecution = (int)modelALongRunningProcess.stopwatch.Elapsed.TotalSeconds;
-    if (timeElapsedSinceLastMethodExecution > 6) { cannotCancel = false; }
+    if (timeElapsedSinceLastMethodExecution > 4) { cannotCancel = false; }
     Thread.Sleep(5000); // Wait before checking again
 }
 Task runnerTask = runner.StopAsync();
 // Check to see if the resulting task is faulted
 Console.WriteLine($"Is runner task faulted:\t{runnerTask.IsFaulted}");
 await runnerTask;
+
+#!markdown
+
+You can see from the output that after three retries, the policy stops retrying and the method has exited the while loop, at this point it's doing nothing - it has faulted.
 
 #!markdown
 
