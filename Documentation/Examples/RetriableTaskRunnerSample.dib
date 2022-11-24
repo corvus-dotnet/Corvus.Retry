@@ -46,7 +46,7 @@ As with the other retry methods, there are overloads where you can pass an `IRet
 
 #!markdown
 
-Example - Cancelling a non-ending operation
+#### Example - Cancelling a non-ending operation
 
 Let's model an operation that needs to run forever, until it is explicitly cancelled
 
@@ -165,6 +165,41 @@ while (cannotCancel)
 }
 Task runnerTask = runner.StopAsync();
 // Check to see if the resulting task is faulted
+Console.WriteLine($"Is runner task faulted:\t{runnerTask.IsFaulted}");
+await runnerTask;
+
+#!markdown
+
+#### Example - cancelling a method running an infinite loop
+
+#!csharp
+
+class ModelALongRunningProcess
+{
+    public static async Task ExecuteALongRunningTransientProcess(CancellationToken cancellationToken)
+    {   
+        Console.WriteLine("ExecuteALongRunningTransientProcess method executed");
+        int counter = 0;
+        while (true)
+        {
+            await Task.Delay(100);
+            int quotient = Math.DivRem(counter, 10, out int remainder);
+            // Throw an exception every ten times around the loop
+            if (remainder == 0 && quotient > 0){ throw new Exception(); }
+            counter++;
+        }
+    }
+}
+
+#!csharp
+
+CancellationTokenSource cancelTokenSource = new CancellationTokenSource();
+CancellationToken token = cancelTokenSource.Token;
+
+ReliableTaskRunner runner =  ReliableTaskRunner.Run(token => ModelALongRunningProcess.ExecuteALongRunningTransientProcess(token));
+Thread.Sleep(5000); // Wait some time before cancelling operation
+Task runnerTask = runner.StopAsync();
+// Check to see if the task returned is faulted
 Console.WriteLine($"Is runner task faulted:\t{runnerTask.IsFaulted}");
 await runnerTask;
 
