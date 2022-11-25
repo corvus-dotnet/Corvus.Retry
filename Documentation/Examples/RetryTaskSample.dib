@@ -25,6 +25,7 @@ using System.Net.Http;
 using System.Web;
 using System.Diagnostics;
 using System.Threading;
+using System.Threading.Tasks;
 
 #!markdown
 
@@ -64,7 +65,7 @@ public static class MockClient
 {
     private static Random rand = new Random();
 
-    public static void DoAnOperationWithAPotentialTransientError()
+    public static void DoAnOperationThatFailsTransiently()
     {   
         Console.WriteLine("method DoAnOperationWithAPotentialTransientError() called");
         Thread.Sleep(500);
@@ -90,11 +91,11 @@ Now, let's call `DoAnOperationWithAPotentialTransientError()` three times via `R
 
 #!csharp
 
-Task task1 = RetryTask.Factory.StartNew(() => MockClient.DoAnOperationWithAPotentialTransientError(), new Count(5), new RetryonMockClientExceptionPolicy());
+Task task1 = RetryTask.Factory.StartNew(() => MockClient.DoAnOperationThatFailsTransiently(), new Count(5), new RetryonMockClientExceptionPolicy());
 Thread.Sleep(200);
-Task task2 = RetryTask.Factory.StartNew(() => MockClient.DoAnOperationWithAPotentialTransientError(), new Count(5), new RetryonMockClientExceptionPolicy());
+Task task2 = RetryTask.Factory.StartNew(() => MockClient.DoAnOperationThatFailsTransiently(), new Count(5), new RetryonMockClientExceptionPolicy());
 Thread.Sleep(200);
-Task task3 = RetryTask.Factory.StartNew(() => MockClient.DoAnOperationWithAPotentialTransientError(), new Count(5), new RetryonMockClientExceptionPolicy());
+Task task3 = RetryTask.Factory.StartNew(() => MockClient.DoAnOperationThatFailsTransiently(), new Count(5), new RetryonMockClientExceptionPolicy());
 
 task1.Wait();
 task2.Wait();
@@ -176,3 +177,79 @@ MockHttpService mockHttpService = new();
 Task retryTask = RetryTask.Factory.StartNew(() => mockHttpService.MakeLotsOfRequests(), CancellationToken.None, strategy: new Count(5), policy: new RetryOnTooManyRequestsPolicy());
 DoSomeWork();
 retryTask.Wait();
+
+#!markdown
+
+### Example - Run long running transient operations concurrently with retry behaviour
+
+We have a class `ModelALongRunningProcess` with a method `ExecuteALongRunningTransientProcess()` that models a long running transient operation. The probability of the method throwing an exception starts at 1 and decreases exponentially with the number of method exections.
+
+#!csharp
+
+public class ModelALongRunningProcess
+{
+    private readonly Random rand;
+    private int methodExecutionCount;
+    private int maxLimit = 1000;
+    private int minRunTimeBeforeNotThrowing = 5;
+    private Stopwatch stopWatch;
+    private int maxRunTime = 20;
+    public readonly string name;
+
+    public ModelALongRunningProcess(string name)
+    {
+        this.rand = new Random();
+        this.stopWatch = new Stopwatch();
+        this.name = name;
+    }
+    public int ExecuteALongRunningTransientProcess()
+    {   
+        if(methodExecutionCount == 0) { stopWatch.Start(); }
+        Console.WriteLine($"ExecuteALongRunningTransientProcess{name} method executed\n");
+        methodExecutionCount++;
+        // Wait some time to simulate long process
+        Thread.Sleep(1000);
+        // Decide whether to throw an error
+        bool shouldThrowError = ShouldThrowError();
+        Console.WriteLine($"{name}:\tShould throw error:{shouldThrowError}");
+        if (shouldThrowError == true)
+        {
+            throw new Exception();
+        }
+
+        int timeTakenToSucceed = stopWatch.Elapsed.Seconds;
+        return timeTakenToSucceed;
+        
+    }
+    // Probability of throwing an error decreases from 1 exponentially with number methedExecutionCount
+    private bool ShouldThrowError()
+    {
+        int comparison = (int)((1/Math.Pow(1.1, methodExecutionCount)) * maxLimit);
+        int randomNum = rand.Next(1, maxLimit + 1);
+        if (randomNum <= comparison || stopWatch.Elapsed.Seconds < minRunTimeBeforeNotThrowing)
+        {
+            return true;
+        }
+        
+        return false;
+    }
+}
+
+#!markdown
+
+Let's create three `ModelALongRunningProcess` instances and run the `ExecuteALongRunningTransientProcess()` method on each of them concurrently using `RetryTask.Factory.StartNew()`
+
+#!csharp
+
+ModelALongRunningProcess modelALongRunningProcess1 = new("1");
+ModelALongRunningProcess modelALongRunningProcess2 = new("2");
+ModelALongRunningProcess modelALongRunningProcess3 = new("3");
+
+Task<int> task1 = RetryTask<int>.Factory.StartNew(() => modelALongRunningProcess1.ExecuteALongRunningTransientProcess(), new Count(5), new AnyExceptionPolicy());
+Thread.Sleep(200);
+Task<int> task2 = RetryTask<int>.Factory.StartNew(() => modelALongRunningProcess2.ExecuteALongRunningTransientProcess(), new Count(5), new AnyExceptionPolicy());
+Thread.Sleep(200);
+Task<int> task3 = RetryTask<int>.Factory.StartNew(() => modelALongRunningProcess3.ExecuteALongRunningTransientProcess(), new Count(5), new AnyExceptionPolicy());
+
+Task<int>[] tasks = new Task<int>[] {task1, task2, task3};
+Task.WaitAll(tasks);
