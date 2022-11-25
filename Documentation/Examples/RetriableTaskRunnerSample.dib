@@ -42,15 +42,15 @@ When you want to terminate the task, you call the `StopAsync()` method e.g.
 await runner.StopAsync();
 ```
 
-As with the other retry methods, there are overloads where you can pass an `IRetryPolicy` and an and `IRetryStrategy` to control the restart behaviour.
+As with the other retry methods, there are overloads where you can pass an `IRetryPolicy` to control the restart behaviour.
 
 #!markdown
 
 #### Example - Cancelling a non-ending operation
 
-Let's model an operation that needs to run forever, until it is explicitly cancelled
+Let's model an operation that needs to run forever, until it is explicitly cancelled.
 
-The method, `ExecuteALongRunningTransientProcess()`, simply writes a message to the console, waits some time, then throws an exception.
+The method, `ExecuteALongRunningTransientProcess()`, has a while loop that throws an exception every ten times around.
 
 #!csharp
 
@@ -59,8 +59,15 @@ class ModelALongRunningProcess
     public static async Task ExecuteALongRunningTransientProcess(CancellationToken cancellationToken)
     {   
         Console.WriteLine("ExecuteALongRunningTransientProcess method executed");
-        await Task.Delay(1000);
-        throw new Exception();
+        int counter = 0;
+        while (true)
+        {
+            await Task.Delay(100);
+            int quotient = Math.DivRem(counter, 10, out int remainder);
+            // Throw an exception every ten times around the loop
+            if (remainder == 0 && quotient > 0){ throw new Exception(); }
+            counter++;
+        }
     }
 }
 
@@ -90,7 +97,7 @@ We can see that the task returned has not faulted, this is because we interrupte
 
 #### Example - cancelling an operation that faults
 
-Similar to he previous example, we have a method (now a member method) that always throws an exception, but this time we're recording the number of times it has been executed and the time since the last execution.
+Similar to the previous example, we have a method (now a member method) with a `while (true)` loop that throws an exception every ten times around the loop, but this time we're recording the number of times it has been executed and the time since the last execution.
 
 #!csharp
 
@@ -154,7 +161,7 @@ public class CustomRetryPolicy : IRetryPolicy
 
 Now, let's run the method with `ReliableTaskRunner.Run()`, passing in a `CustomRetryPolicy` for the `policy` parameter.
 
-Then, every 5 seconds, we're going to check if the amount of time since the method was last executed is greater than 6 seconds, and if so, we'll assume that the method has faulted (it will have returned by then) and cancel the operation with `StopAsync()`.
+Then, every 5 seconds, we're going to check if the amount of time since the method was last executed is greater than 4 seconds, and if so, we'll assume that the method has faulted (it will have returned by then) and cancel the operation with `StopAsync()`.
 
 We expect to see `ExecuteALongRunningTransientProcess()` executed four times - the first three are followed by retries, the fourth is not. And the `Task` returned by `StopAsync()` will be faulted.
 
@@ -174,6 +181,7 @@ while (cannotCancel)
     if (timeElapsedSinceLastMethodExecution > 4) { cannotCancel = false; }
     Thread.Sleep(5000); // Wait before checking again
 }
+Console.WriteLine("Cancelling the operation");
 Task runnerTask = runner.StopAsync();
 // Check to see if the resulting task is faulted
 Console.WriteLine($"Is runner task faulted:\t{runnerTask.IsFaulted}");
@@ -182,94 +190,3 @@ await runnerTask;
 #!markdown
 
 You can see from the output that after three retries, the policy stops retrying and the method has exited the while loop, at this point it's doing nothing - it has faulted.
-
-#!markdown
-
-#### Example - cancelling a method running an infinite loop
-
-#!csharp
-
-class ModelALongRunningProcess
-{
-    public static async Task ExecuteALongRunningTransientProcess(CancellationToken cancellationToken)
-    {   
-        Console.WriteLine("ExecuteALongRunningTransientProcess method executed");
-        int counter = 0;
-        while (true)
-        {
-            await Task.Delay(100);
-            int quotient = Math.DivRem(counter, 10, out int remainder);
-            // Throw an exception every ten times around the loop
-            if (remainder == 0 && quotient > 0){ throw new Exception(); }
-            counter++;
-        }
-    }
-}
-
-#!csharp
-
-CancellationTokenSource cancelTokenSource = new CancellationTokenSource();
-CancellationToken token = cancelTokenSource.Token;
-
-ReliableTaskRunner runner =  ReliableTaskRunner.Run(token => ModelALongRunningProcess.ExecuteALongRunningTransientProcess(token));
-Thread.Sleep(5000); // Wait some time before cancelling operation
-Task runnerTask = runner.StopAsync();
-// Check to see if the task returned is faulted
-Console.WriteLine($"Is runner task faulted:\t{runnerTask.IsFaulted}");
-await runnerTask;
-
-#!csharp
-
-public class ModelALongRunningProcess
-{
-    private readonly Random rand;
-    private int methodExecutionCount;
-    private int maxLimit = 1000;
-    private int minRunTimeBeforeNotThrowing = 5;
-    private Stopwatch stopWatch;
-    private int maxRunTime = 20;
-
-    public ModelALongRunningProcess()
-    {
-        this.rand = new Random();
-        this.stopWatch = new Stopwatch();
-    }
-
-    public async Task ExecuteALongRunningTransientProcess(CancellationToken cancellationToken)
-    {   
-        if(methodExecutionCount == 0) { stopWatch.Start(); }
-        Console.WriteLine("ExecuteALongRunningTransientProcess method executed");
-        methodExecutionCount++;
-        // Wait some time to simulate long process
-        await Task.Delay(2000);
-        // Decide whether to throw an error
-        bool shouldThrowError = ShouldThrowError();
-        Console.WriteLine($"Should throw error:{shouldThrowError}");
-        if (shouldThrowError == true)
-        {
-            throw new Exception();
-        }
-    }
-
-    private bool ShouldThrowError()
-    {
-        int comparison = (int)((1/Math.Pow(1.1, methodExecutionCount)) * maxLimit);
-        int randomNum = rand.Next(1, maxLimit + 1);
-
-        if (randomNum <= comparison || stopWatch.Elapsed.Seconds < minRunTimeBeforeNotThrowing)
-        {
-            return true;
-        }
-        
-        return false;
-    }
-}
-
-#!csharp
-
-CancellationTokenSource cancelTokenSource = new CancellationTokenSource();
-CancellationToken token = cancelTokenSource.Token;
-
-ModelALongRunningProcess modelALongRunningProcess = new();
-ReliableTaskRunner runner =  ReliableTaskRunner.Run(token => modelALongRunningProcess.ExecuteALongRunningTransientProcess(token));
-await Task.Delay(15000);
