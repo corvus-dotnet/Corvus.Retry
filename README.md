@@ -202,7 +202,7 @@ When you want to terminate the task, you call the `StopAsync()` method e.g.
 await runner.StopAsync();
 ```
 
-As with the other retry methods, there are overloads where you can pass an `IRetryPolicy` and an and `IRetryStrategy` to control the restart behaviour. 
+As with the other retry methods, there are overloads where you can pass an `IRetryPolicy` control the restart behaviour. 
 
 ## Licenses
 
