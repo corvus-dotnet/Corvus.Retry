@@ -257,7 +257,7 @@ await Retriable.RetryAsync(() => mockHttpService.MakeRequestThatWillTimeOutAsync
 
 #!markdown
 
-#### `AggrregatePolicy`
+#### `AggregatePolicy`
 
 This gives you a means of combining together multiple policies.
 
