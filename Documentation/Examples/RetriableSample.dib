@@ -711,10 +711,13 @@ public class MyWrapperException: Exception
 {
 
     public Exception InnerException { get; }
+    public int TryCount { get; }
 
-    public MyWrapperException(Exception innerException)
+    public MyWrapperException(Exception innerException, int tryCount)
     {
         this.InnerException = innerException;
+        this.TryCount = tryCount;
+
     }
 }
 
@@ -760,7 +763,7 @@ public class RandomDelay : RetryStrategy
                 throw new ArgumentNullException(nameof(lastException));
             }
 
-            this.AddException(new MyWrapperException(lastException));
+            this.AddException(new MyWrapperException(lastException, this.tryCount + 1));
 
             this.tryCount += 1;
 
