@@ -182,7 +182,9 @@ retryTask.Wait();
 
 ### Example - Run long running transient operations concurrently with retry behaviour
 
-We have a class `ModelALongRunningProcess` with a method `ExecuteALongRunningTransientProcess()` that models a long running transient operation. The probability of the method throwing an exception starts at 1 and decreases exponentially with the number of method exections.
+We have a class `ModelALongRunningProcess` with a method `ExecuteALongRunningTransientProcess()` that models a long running transient operation. The probability of the method throwing an exception starts at 1 and decreases exponentially with the number of method executions.
+
+This example is similar to the first in this notebook in that it demonstrates how you can execute operations in parallel with retry behaviour using `RetryTask.Factory.StartNew()`. However in this case we're using the generic version of  `RetryTask.Factory.StartNew()`, since the method returns a value, resulting in a `Task` that eventually returns a value: `Task<T>`.
 
 #!csharp
 
