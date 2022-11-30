@@ -598,7 +598,8 @@ It is slightly more complex to implement a custom retry strategy than it was to 
 
 In that case, you need to override the `TimeSpan PrepareToRetry(Exception lastException)` method. You can examine the exception and use your internal state to determine two things:
 
-1) Should we record this exception, or filter it out? Typically, we will want to record the exception, and, if so, we call `this.AddException(lastException)`.
+1) Should we record this exception, or filter it out? Typically, we will want to record the exception, and, if so, we call `this.AddException(lastException)`. You could also choose to create a new exception (with the original as an inner exception) which decorates it with more information, and record that.
+   
 2) For how long should we delay before retrying? We return a `TimeSpan` from the method to determine this.
 
 So, for example, `Count` implements the method like this:
@@ -687,6 +688,92 @@ public class RandomDelay : RetryStrategy
 #!markdown
 
 Let's try it...
+
+#!csharp
+
+MockHttpService mockHttpService = new();
+Clock clock = new();
+RandomDelay randomDelayStrategy = new(maxTries: 4, lowerLimit: 1, upperLimit: 5);
+await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(clock), CancellationToken.None, strategy: randomDelayStrategy, policy: new RetryOnTooManyRequestsPolicy());
+
+#!markdown
+
+##### Example - wrapping the caught exception in a new exception with additional information
+
+As mentioned, when overriding the `PrepareToRetry()` method, you could choose to wrap the detected exception in a new exception to record additional information.
+
+For example, you could wrap the detected exception in an exception with a property that records the `tryCount` value. I.e. "Which try caused this particular exception to be thrown?". You could do something similar to record how long we've been retrying when the exception was thrown, or anything else you'd like to record.
+
+#!csharp
+
+[Serializable]
+public class MyWrapperException: Exception
+{
+
+    public Exception InnerException { get; }
+
+    public MyWrapperException(Exception innerException)
+    {
+        this.InnerException = innerException;
+    }
+}
+
+#!csharp
+
+public class RandomDelay : RetryStrategy
+    {
+        private readonly int maxTries;
+        private readonly int lowerLimit;
+        private readonly int upperLimit;
+
+        private int tryCount;
+
+        public RandomDelay()
+            : this(maxTries: 5, lowerLimit: 1, upperLimit: 5)
+        {
+        }
+
+        public RandomDelay(int maxTries, int lowerLimit, int upperLimit)
+        {
+            if (maxTries <= 0)
+            {
+                throw new ArgumentException("Max tries must be > 0", nameof(maxTries));
+            }
+
+            this.maxTries = maxTries;
+            this.lowerLimit = lowerLimit;
+            this.upperLimit = upperLimit;
+        }
+
+        public override bool CanRetry
+        {
+            get
+            {
+                return this.tryCount < this.maxTries;
+            }
+        }
+
+        public override TimeSpan PrepareToRetry(Exception lastException)
+        {
+            if (lastException is null)
+            {
+                throw new ArgumentNullException(nameof(lastException));
+            }
+
+            this.AddException(new MyWrapperException(lastException));
+
+            this.tryCount += 1;
+
+            if (this.CanRetry)
+            {
+                var rand = new Random();
+                TimeSpan delay = TimeSpan.FromSeconds(rand.Next(lowerLimit, upperLimit));
+                return delay;
+            }
+
+            return TimeSpan.Zero;
+        }
+    }
 
 #!csharp
 
