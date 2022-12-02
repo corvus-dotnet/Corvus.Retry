@@ -43,7 +43,7 @@ In addition to those usual parameters, you can pass an `IRetryPolicy` and an `IR
 
 This basic example uses `RetryTask.Factory.StartNew()` just like you could use `Task.Factory.StartNew()`: to execute multiple operations concurrently.
 
-We have a `MockClient` class with a single method, `DoAnOperationWithAPotentialTransientError()`, that fails transiently - it throws a `MockClientException` with 80% probability. There's also a `RetryonMockClientExceptionPolicy`, which is a custom implementation of `IRetryPolicy` that will trigger a retry when a `MockClientException` is detected.
+We have a `MockClient` class with a single method, `DoAnOperationWithAPotentialTransientError()`, that fails transiently - it throws a `MockClientException` with 80% probability. There's also a `RetryOnMockClientExceptionPolicy`, which is a custom implementation of `IRetryPolicy` that will trigger a retry when a `MockClientException` is detected.
 
 #!csharp
 
@@ -107,7 +107,7 @@ task3.Wait();
 
 Let's imagine we were consuming an HttpService which occasionally gives us a `429 - Too Many Requests` error in an `HttpServiceException`.
 
-We may want to make requests synchronous client requests asynchronous, so we can do other work whilst they're processing, and have they retry when a `429 - Too Many Requests` exception is detected.
+If a client only offers synchronous APIs we can start a `Task` to make the calls to them asynchronous, so we can do other work whilst they're processing, and have them retry when a `429 - Too Many Requests` exception is detected.
 
 Let's define a `HttpServiceException`, a `MockHttpService`, and a custom retry policy that will trigger a retry when a `429 - Too Many Requests` exception is detected.
 
@@ -168,7 +168,7 @@ public static void DoSomeWork()
 
 #!markdown
 
-Now, let's use `RetryTask.Factory.StartNew()` to call `MakeLotsOfRequests` and have it retry according to `RetryOnTooManyRequestsPolicy`, and do work on another thread whilst that retry proces is happening
+Now, let's use `RetryTask.Factory.StartNew()` to call `MakeLotsOfRequests` and have it retry according to `RetryOnTooManyRequestsPolicy`, and do work on another thread whilst that retry process is happening
 
 #!csharp
 
@@ -184,7 +184,7 @@ retryTask.Wait();
 
 We have a class `ModelALongRunningProcess` with a method `ExecuteALongRunningTransientProcess()` that models a long running transient operation. The probability of the method throwing an exception starts at 1 and decreases exponentially with the number of method executions.
 
-This example is similar to the first in this notebook in that it demonstrates how you can execute operations in parallel with retry behaviour using `RetryTask.Factory.StartNew()`. However in this case we're using the generic version of  `RetryTask.Factory.StartNew()`, since the method returns a value, resulting in a `Task` that eventually returns a value: `Task<T>`.
+This example is similar to the first in this notebook in that it demonstrates how you can execute operations in parallel with retry behaviour using `RetryTask.Factory.StartNew()`. However, in this case we're using the generic version of  `RetryTask.Factory.StartNew()`, since the method returns a value, resulting in a `Task` that eventually returns a value: `Task<T>`.
 
 #!csharp
 
