@@ -61,12 +61,12 @@ This will never retry, regardless of the exception. You use this to disable retr
 Typically, you would do this with some kind of conditional
 
 ```
-IRetryPolicy policy = isDebuggingOrWhatever ? new DoNotRetryPolicy() : new AnyException();
+IRetryPolicy policy = isDebuggingOrWhatever ? new DoNotRetryPolicy() : new AnyExceptionPolicy();
 
 var result = Retriable.Retry(() => DoSomething(), new Count(10), policy);
 ```
 ##### `AggregatePolicy`
-This gives you a means of ANDing together mutiple policies. The `AggregatePolicy` only succeeds if ALL of its children succeed.
+This gives you a means of ANDing together multiple policies. The `AggregatePolicy` only succeeds if ALL of its children succeed.
 
 ```
 var aggregatePolicy =
