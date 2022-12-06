@@ -31,7 +31,7 @@ namespace Corvus.Retry.Strategies
         /// <summary>
         /// Initializes a new instance of the <see cref="Incremental"/> class.
         /// </summary>
-        /// <param name="maxTries">The maximum number of retries.</param>
+        /// <param name="maxTries">The maximum number of times the method will be tried.</param>
         /// <param name="intialDelay">The initial delay.</param>
         /// <param name="step">The increment step per retry.</param>
         public Incremental(int maxTries, TimeSpan intialDelay, TimeSpan step)

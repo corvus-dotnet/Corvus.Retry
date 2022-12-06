@@ -31,8 +31,8 @@ namespace Corvus.Retry.Strategies
         /// <summary>
         /// Initializes a new instance of the <see cref="Backoff"/> class.
         /// </summary>
-        /// <param name="maxTries">The maximum number of retries.</param>
-        /// <param name="deltaBackoff">The increase in the delay with each retry.</param>
+        /// <param name="maxTries">The maximum number of times the method will be tried.</param>
+        /// <param name="deltaBackoff">The increase in the delay with each try.</param>
         /// <remarks>The  minimum backoff is 1 second, and the maximum backoff is 30 seconds.</remarks>
         public Backoff(int maxTries, TimeSpan deltaBackoff)
         {

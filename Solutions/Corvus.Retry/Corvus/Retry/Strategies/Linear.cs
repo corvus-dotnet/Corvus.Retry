@@ -18,8 +18,8 @@ namespace Corvus.Retry.Strategies
         /// <summary>
         /// Initializes a new instance of the <see cref="Linear"/> class.
         /// </summary>
-        /// <param name="periodicity">The delay between retries.</param>
-        /// <param name="maxTries">The maximum number of retries.</param>
+        /// <param name="periodicity">The delay between tries.</param>
+        /// <param name="maxTries">The maximum number of times the method will be tried.</param>
         public Linear(TimeSpan periodicity, int maxTries)
         {
             if (maxTries <= 0)
