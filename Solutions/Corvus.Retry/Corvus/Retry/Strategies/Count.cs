@@ -26,7 +26,7 @@ namespace Corvus.Retry.Strategies
         /// <summary>
         /// Initializes a new instance of the <see cref="Count"/> class.
         /// </summary>
-        /// <param name="maxTries">The maximum number of times it will attempt to retry.</param>
+        /// <param name="maxTries">The maximum number of times the method will be tried.</param>
         public Count(int maxTries)
         {
             if (maxTries <= 0)
