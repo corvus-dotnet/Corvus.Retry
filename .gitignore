@@ -342,3 +342,4 @@ coverage.cobertura.xml
 *.sbom.*
 _codeCoverage/
 _packages/
+.zf/extensions/
