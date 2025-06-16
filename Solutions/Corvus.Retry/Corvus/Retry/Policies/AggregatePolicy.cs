@@ -34,7 +34,7 @@ namespace Corvus.Retry.Policies
                 throw new ArgumentNullException(nameof(exception));
             }
 
-            return this.policies.All(p => p.CanRetry(exception));
+            return this.policies == null ? false : this.policies.All(p => p.CanRetry(exception));
         }
     }
 }

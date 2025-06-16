@@ -92,11 +92,14 @@ namespace Corvus.Retry
             task.ContinueWith(
             t =>
             {
-                t.Exception.Handle(_ => true);
-                if (retryPolicy.CanRetry(t.Exception))
+                if (t.Exception != null)
                 {
-                    // Run again if we were allowed to
-                    this.RunAndAttachFailureContinuation(runFunction, retryPolicy, out this.processingTask);
+                    t.Exception.Handle(_ => true);
+                    if (retryPolicy.CanRetry(t.Exception))
+                    {
+                        // Run again if we were allowed to
+                        this.RunAndAttachFailureContinuation(runFunction, retryPolicy, out this.processingTask);
+                    }
                 }
             },
             this.cancellationTokenSource.Token,
