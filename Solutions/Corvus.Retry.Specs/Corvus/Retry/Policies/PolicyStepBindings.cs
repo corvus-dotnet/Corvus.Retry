@@ -6,7 +6,7 @@ namespace Corvus.Retry.Policies
 {
     using System;
     using NUnit.Framework;
-    using TechTalk.SpecFlow;
+    using Reqnroll;
 
     [Binding]
     public class PolicyStepBindings
