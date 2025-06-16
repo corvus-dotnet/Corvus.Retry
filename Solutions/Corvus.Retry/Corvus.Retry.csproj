@@ -3,7 +3,7 @@
   <Import Project="$(EndjinProjectPropsPath)" Condition="$(EndjinProjectPropsPath) != ''" />
 
   <PropertyGroup>
-    <TargetFramework>net80</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <RootNamespace />
     <Nullable>enable</Nullable>
     <NoWarn>RCS1089</NoWarn>
