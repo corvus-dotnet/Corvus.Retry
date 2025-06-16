@@ -8,8 +8,8 @@ namespace Corvus.Retry.Policies
     using System.Collections.Generic;
     using System.Linq;
 
-    using Moq;
-    using TechTalk.SpecFlow;
+    using NSubstitute;
+    using Reqnroll;
 
     [Binding]
     public class AggregatePolicySteps
@@ -61,9 +61,9 @@ namespace Corvus.Retry.Policies
 
         private static IRetryPolicy MakePolicy(bool result)
         {
-            var m = new Mock<IRetryPolicy>();
-            m.Setup(p => p.CanRetry(It.IsAny<Exception>())).Returns(result);
-            return m.Object;
+            IRetryPolicy m = Substitute.For<IRetryPolicy>();
+            m.CanRetry(Arg.Any<Exception>()).Returns(result);
+            return m;
         }
     }
 }

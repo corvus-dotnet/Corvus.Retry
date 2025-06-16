@@ -7,7 +7,7 @@ namespace Corvus.Retry
     using System;
     using System.Threading.Tasks;
     using NUnit.Framework;
-    using TechTalk.SpecFlow;
+    using Reqnroll;
 
     [Binding]
     public class DefaultRetrySteps
