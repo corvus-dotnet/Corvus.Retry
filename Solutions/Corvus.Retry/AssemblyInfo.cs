@@ -4,4 +4,4 @@
 
 using System.Runtime.CompilerServices;
 
-[assembly:InternalsVisibleTo("Corvus.Retry.Specs")]
+[assembly:InternalsVisibleTo("Corvus.Retry.Tests")]

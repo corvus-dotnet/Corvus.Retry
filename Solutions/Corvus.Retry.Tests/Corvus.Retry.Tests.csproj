@@ -1,0 +1,36 @@
+<Project Sdk="MSTest.Sdk">
+
+  <Import Project="$(EndjinProjectPropsPath)" Condition="$(EndjinProjectPropsPath) != ''" />
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace />
+    <IsPackable>false</IsPackable>
+    <!-- ZeroFailed asks MTP for a TRX report, which needs the TrxReport extension. It collects coverage by wrapping the
+         test run in dotnet-coverage, so the MTP code coverage extension (in the Default profile) is not needed. -->
+    <TestingExtensionsProfile>None</TestingExtensionsProfile>
+    <EnableMicrosoftTestingExtensionsTrxReport>true</EnableMicrosoftTestingExtensionsTrxReport>
+    <!-- SA1204 prioritises static/non-static over public/non-public, which does not suit test fixtures.
+         SA1600/SA1602/CS1591: test types are public for technical reasons and are not public API. -->
+    <NoWarn>$(NoWarn);SA0001;SA1204;SA1600;SA1602;CS1591</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- MSTest.Sdk makes this an Exe (MTP test host). Endjin.RecommendedPractices (Endjin.AutoPackagesLock.targets)
+         requires Exe projects to use a package lock file, locked in CI builds. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(ContinuousIntegrationBuild)' == 'true'">true</RestoreLockedMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Endjin.RecommendedPractices.GitHub">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Corvus.Retry\Corvus.Retry.csproj" />
+  </ItemGroup>
+
+</Project>
