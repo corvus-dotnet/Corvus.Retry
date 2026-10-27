@@ -16,8 +16,8 @@
 - Name: Code Coverage
   Id: 0449cadc-0078-4094-b019-520d75cc6cbb
   Measures:
-  - Score: 1
-    Description: 26-50
+  - Score: 3
+    Description: '>75'
 - Name: Benchmarks
   Id: 64ed80dc-d354-45a9-9a56-c32437306afa
   Measures:
@@ -41,13 +41,13 @@
 - Name: Date of Last IP Review
   Id: da4ed776-0365-4d8a-a297-c4e91a14d646
   Measures:
-  - Date: 2020-02-26
+  - Date: 2026-10-27
     Description: None
-  - 
 - Name: Framework Version
   Id: 6c0402b3-f0e3-4bd7-83fe-04bb6dca7924
   Measures:
-  - Framework: netcoreapp3.1
+  - Score: 3
+    Description: Using the most current LTS version
 - Name: Associated Work Items
   Id: 79b8ff50-7378-4f29-b07c-bcd80746bfd4
   Measures:
