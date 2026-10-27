@@ -1,0 +1,28 @@
+<Project>
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <!-- Endjin.RecommendedPractices only flags CI builds on Azure DevOps (TF_BUILD). Flagging GitHub Actions too gives
+         deterministic builds and switches the test project to RestoreLockedMode (see Corvus.Retry.Tests.csproj). -->
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <!--
+    Endjin.RecommendedPractices injects StyleCop.Analyzers and Roslynator.Analyzers as PackageReferences WITH a Version
+    attribute (Endjin.Common.Net.targets). Under Central Package Management that is restore error NU1008, so we disable
+    the injection and reference the same versions ourselves via Directory.Packages.props. EndjinDisableCodeAnalysis also
+    drops the stylecop.json AdditionalFiles link, so we restore that here too.
+  -->
+  <PropertyGroup>
+    <EndjinDisableCodeAnalysis>true</EndjinDisableCodeAnalysis>
+  </PropertyGroup>
+  <ItemGroup>
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)stylecop.json" Link="stylecop.json" />
+    <PackageReference Include="StyleCop.Analyzers" PrivateAssets="all" />
+    <PackageReference Include="Roslynator.Analyzers" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!--
+    MSTest.Sdk injects the MSTest and Microsoft.Testing.* packages itself. Do NOT add PackageVersion items for them in
+    Directory.Packages.props: the SDK injects its own and a duplicate trips NU1506.
+  -->
+</Project>
