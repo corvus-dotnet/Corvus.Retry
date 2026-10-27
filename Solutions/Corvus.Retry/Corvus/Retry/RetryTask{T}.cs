@@ -24,11 +24,9 @@ namespace Corvus.Retry
     /// </remarks>
     public static class RetryTask<T>
     {
-        private static RetryTaskFactory<T>? factory;
-
         /// <summary>
         /// Gets the Factory used to create retry tasks.
         /// </summary>
-        public static RetryTaskFactory<T> Factory => factory ??= new RetryTaskFactory<T>();
+        public static RetryTaskFactory<T> Factory { get; } = new RetryTaskFactory<T>();
     }
 }

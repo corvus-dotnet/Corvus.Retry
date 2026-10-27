@@ -23,11 +23,9 @@ namespace Corvus.Retry
     /// </remarks>
     public static class RetryTask
     {
-        private static RetryTaskFactory? factory;
-
         /// <summary>
         /// Gets the retriable task factory.
         /// </summary>
-        public static RetryTaskFactory Factory => factory ??= new RetryTaskFactory();
+        public static RetryTaskFactory Factory { get; } = new RetryTaskFactory();
     }
 }
