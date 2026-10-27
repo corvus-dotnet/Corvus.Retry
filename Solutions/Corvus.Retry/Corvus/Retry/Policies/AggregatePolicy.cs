@@ -12,7 +12,8 @@ namespace Corvus.Retry.Policies
     /// A <see cref="IRetryPolicy"/> which combines multiple policies.
     /// </summary>
     /// <remarks>
-    /// This policy can retry if all the aggregated policies can retry.
+    /// This policy can retry if all the aggregated policies can retry. With no policies, nothing objects to a retry,
+    /// so it can retry.
     /// </remarks>
     public class AggregatePolicy : IRetryPolicy
     {
@@ -34,7 +35,7 @@ namespace Corvus.Retry.Policies
                 throw new ArgumentNullException(nameof(exception));
             }
 
-            return this.policies.All(p => p.CanRetry(exception));
+            return this.Policies.All(p => p.CanRetry(exception));
         }
     }
 }
