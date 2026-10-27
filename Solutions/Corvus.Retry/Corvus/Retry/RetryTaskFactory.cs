@@ -1,11 +1,10 @@
-﻿// <copyright file="RetryTaskFactory.cs" company="Endjin Limited">
+// <copyright file="RetryTaskFactory.cs" company="Endjin Limited">
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
 namespace Corvus.Retry
 {
     using System;
-    using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
     using Corvus.Retry.Async;
@@ -28,6 +27,9 @@ namespace Corvus.Retry
     /// </remarks>
     public class RetryTaskFactory
     {
+        // An action has no result, so the task returned for it carries none.
+        private static readonly Func<Task, object?> NoResult = _ => null;
+
         /// <summary>
         /// Start a new retriable task for an action.
         /// </summary>
@@ -81,7 +83,7 @@ namespace Corvus.Retry
         /// <param name="action">The action for which to start a retriable tasks.</param>
         /// <param name="state">The state to pass to the task on creation.</param>
         /// <returns>A task which completes when the action is complete.</returns>
-        public Task StartNew(Action<object> action, object state)
+        public Task StartNew(Action<object?> action, object? state)
         {
             if (action is null)
             {
@@ -98,7 +100,7 @@ namespace Corvus.Retry
         /// <param name="state">The state to pass to the task on creation.</param>
         /// <param name="taskCreationOptions">The task creation option.</param>
         /// <returns>A task which completes when the action is complete.</returns>
-        public Task StartNew(Action<object> action, object state, TaskCreationOptions taskCreationOptions)
+        public Task StartNew(Action<object?> action, object? state, TaskCreationOptions taskCreationOptions)
         {
             if (action is null)
             {
@@ -117,7 +119,7 @@ namespace Corvus.Retry
         /// <param name="taskCreationOptions">The task creation options.</param>
         /// <param name="scheduler">The task scheduler.</param>
         /// <returns>A task which completes when the action is complete.</returns>
-        public Task StartNew(Action<object> action, object state, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler)
+        public Task StartNew(Action<object?> action, object? state, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler)
         {
             if (action is null)
             {
@@ -217,7 +219,7 @@ namespace Corvus.Retry
         /// <param name="state">The state to pass to the task on creation.</param>
         /// <param name="policy">The retry policy.</param>
         /// <returns>A task which completes when the action is complete.</returns>
-        public Task StartNew(Action<object> action, object state, IRetryPolicy policy)
+        public Task StartNew(Action<object?> action, object? state, IRetryPolicy policy)
         {
             if (action is null)
             {
@@ -240,7 +242,7 @@ namespace Corvus.Retry
         /// <param name="taskCreationOptions">The task creation options.</param>
         /// <param name="policy">The retry policy.</param>
         /// <returns>A task which completes when the action is complete.</returns>
-        public Task StartNew(Action<object> action, object state, TaskCreationOptions taskCreationOptions, IRetryPolicy policy)
+        public Task StartNew(Action<object?> action, object? state, TaskCreationOptions taskCreationOptions, IRetryPolicy policy)
         {
             if (action is null)
             {
@@ -265,7 +267,7 @@ namespace Corvus.Retry
         /// <param name="scheduler">The task scheduler.</param>
         /// <param name="policy">The retry policy.</param>
         /// <returns>A task which completes when the action is complete.</returns>
-        public Task StartNew(Action<object> action, object state, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryPolicy policy)
+        public Task StartNew(Action<object?> action, object? state, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryPolicy policy)
         {
             if (action is null)
             {
@@ -376,7 +378,7 @@ namespace Corvus.Retry
         /// <param name="state">The state to pass to the task on creation.</param>
         /// <param name="strategy">The retry strategy.</param>
         /// <returns>A task which completes when the action is complete.</returns>
-        public Task StartNew(Action<object> action, object state, IRetryStrategy strategy)
+        public Task StartNew(Action<object?> action, object? state, IRetryStrategy strategy)
         {
             if (action is null)
             {
@@ -399,7 +401,7 @@ namespace Corvus.Retry
         /// <param name="taskCreationOptions">The task creation options.</param>
         /// <param name="strategy">The retry strategy.</param>
         /// <returns>A task which completes when the action is complete.</returns>
-        public Task StartNew(Action<object> action, object state, TaskCreationOptions taskCreationOptions, IRetryStrategy strategy)
+        public Task StartNew(Action<object?> action, object? state, TaskCreationOptions taskCreationOptions, IRetryStrategy strategy)
         {
             if (action is null)
             {
@@ -424,7 +426,7 @@ namespace Corvus.Retry
         /// <param name="scheduler">The task scheduler.</param>
         /// <param name="strategy">The retry strategy.</param>
         /// <returns>A task which completes when the action is complete.</returns>
-        public Task StartNew(Action<object> action, object state, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy)
+        public Task StartNew(Action<object?> action, object? state, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy)
         {
             if (action is null)
             {
@@ -482,7 +484,12 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(strategy));
             }
 
-            return Task.Factory.StartNew(action).ContinueWith(t => HandleTask(t, () => new Task(action), strategy, policy));
+            if (policy is null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
+            return Start(Task.Factory.StartNew(action), () => new Task(action), NoResult, CancellationToken.None, TaskCreationOptions.None, TaskScheduler.Current, strategy, policy);
         }
 
         /// <summary>
@@ -510,7 +517,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(policy));
             }
 
-            return Task.Factory.StartNew(action, cancellationToken).ContinueWith(t => HandleTask(t, () => new Task(action, cancellationToken), strategy, policy));
+            return Start(Task.Factory.StartNew(action, cancellationToken), () => new Task(action, cancellationToken), NoResult, cancellationToken, TaskCreationOptions.None, TaskScheduler.Current, strategy, policy);
         }
 
         /// <summary>
@@ -538,7 +545,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(policy));
             }
 
-            return Task.Factory.StartNew(action, taskCreationOptions).ContinueWith(t => HandleTask(t, () => new Task(action, taskCreationOptions), strategy, policy));
+            return Start(Task.Factory.StartNew(action, Detached(taskCreationOptions)), () => new Task(action, Detached(taskCreationOptions)), NoResult, CancellationToken.None, taskCreationOptions, TaskScheduler.Current, strategy, policy);
         }
 
         /// <summary>
@@ -549,7 +556,7 @@ namespace Corvus.Retry
         /// <param name="strategy">The retry strategy.</param>
         /// <param name="policy">The retry policy.</param>
         /// <returns>A task which completes when the action is complete.</returns>
-        public Task StartNew(Action<object> action, object state, IRetryStrategy strategy, IRetryPolicy policy)
+        public Task StartNew(Action<object?> action, object? state, IRetryStrategy strategy, IRetryPolicy policy)
         {
             if (action is null)
             {
@@ -566,7 +573,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(policy));
             }
 
-            return Task.Factory.StartNew(action, state).ContinueWith(t => HandleTask(t, () => new Task(action, state), strategy, policy));
+            return Start(Task.Factory.StartNew(action, state), () => new Task(action, state), NoResult, CancellationToken.None, TaskCreationOptions.None, TaskScheduler.Current, strategy, policy);
         }
 
         /// <summary>
@@ -578,7 +585,7 @@ namespace Corvus.Retry
         /// <param name="strategy">The retry strategy.</param>
         /// <param name="policy">The retry policy.</param>
         /// <returns>A task which completes when the action is complete.</returns>
-        public Task StartNew(Action<object> action, object state, TaskCreationOptions taskCreationOptions, IRetryStrategy strategy, IRetryPolicy policy)
+        public Task StartNew(Action<object?> action, object? state, TaskCreationOptions taskCreationOptions, IRetryStrategy strategy, IRetryPolicy policy)
         {
             if (action is null)
             {
@@ -595,7 +602,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(policy));
             }
 
-            return Task.Factory.StartNew(action, state, taskCreationOptions).ContinueWith(t => HandleTask(t, () => new Task(action, state, taskCreationOptions), strategy, policy));
+            return Start(Task.Factory.StartNew(action, state, Detached(taskCreationOptions)), () => new Task(action, state, Detached(taskCreationOptions)), NoResult, CancellationToken.None, taskCreationOptions, TaskScheduler.Current, strategy, policy);
         }
 
         /// <summary>
@@ -607,7 +614,7 @@ namespace Corvus.Retry
         /// <param name="strategy">The retry strategy.</param>
         /// <param name="policy">The retry policy.</param>
         /// <returns>A task which completes when the action is complete.</returns>
-        public Task StartNew(Action<object> action, object state, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy)
+        public Task StartNew(Action<object?> action, object? state, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy)
         {
             if (action is null)
             {
@@ -624,7 +631,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(policy));
             }
 
-            return Task.Factory.StartNew(action, state, cancellationToken).ContinueWith(t => HandleTask(t, () => new Task(action, state, cancellationToken), strategy, policy));
+            return Start(Task.Factory.StartNew(action, state, cancellationToken), () => new Task(action, state, cancellationToken), NoResult, cancellationToken, TaskCreationOptions.None, TaskScheduler.Current, strategy, policy);
         }
 
         /// <summary>
@@ -638,7 +645,7 @@ namespace Corvus.Retry
         /// <param name="strategy">The retry strategy.</param>
         /// <param name="policy">The retry policy.</param>
         /// <returns>A task which completes when the action is complete.</returns>
-        public Task StartNew(Action<object> action, object state, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy, IRetryPolicy policy)
+        public Task StartNew(Action<object?> action, object? state, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy, IRetryPolicy policy)
         {
             if (action is null)
             {
@@ -655,7 +662,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(policy));
             }
 
-            return Task.Factory.StartNew(action, state, cancellationToken, taskCreationOptions, scheduler).ContinueWith(t => HandleTask(t, () => new Task(action, state, cancellationToken, taskCreationOptions), strategy, policy));
+            return Start(Task.Factory.StartNew(action, state, cancellationToken, Detached(taskCreationOptions), scheduler), () => new Task(action, state, cancellationToken, Detached(taskCreationOptions)), NoResult, cancellationToken, taskCreationOptions, scheduler, strategy, policy);
         }
 
         /// <summary>
@@ -685,114 +692,146 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(policy));
             }
 
-            return Task.Factory.StartNew(action, cancellationToken, taskCreationOptions, scheduler).ContinueWith(t => HandleTask(t, () => new Task(action, cancellationToken, taskCreationOptions), strategy, policy));
+            return Start(Task.Factory.StartNew(action, cancellationToken, Detached(taskCreationOptions), scheduler), () => new Task(action, cancellationToken, Detached(taskCreationOptions)), NoResult, cancellationToken, taskCreationOptions, scheduler, strategy, policy);
         }
 
         /// <summary>
-        /// Handles an exception in a retriable task.
+        /// Returns a task that completes when the first try, and any retries, of an operation have finished.
         /// </summary>
-        /// <param name="task">The task in which the exception has occurred.</param>
-        /// <param name="strategy">The retry strategy.</param>
-        /// <remarks>
-        /// <para>
-        /// It throws the exception currently provided by the strategy if there is both an exception on the current task, and on the strategy.
-        /// </para>
-        /// <para>
-        /// This is used internally by both the <see cref="RetryTaskFactory"/> and the <see cref="RetryTaskFactory{T}"/> for task exception handling.
-        /// </para>
-        /// </remarks>
-        internal static void HandleException(Task task, IRetryStrategy strategy)
-        {
-            if (task is null)
-            {
-                throw new ArgumentNullException(nameof(task));
-            }
-
-            if (strategy is null)
-            {
-                throw new ArgumentNullException(nameof(strategy));
-            }
-
-            AggregateException exception = strategy.Exception;
-            if (exception != null && task.Exception != null)
-            {
-                throw exception;
-            }
-        }
-
-        /// <summary>
-        /// Handles retrying a given task.
-        /// </summary>
-        /// <param name="task">The task that is currently executing.</param>
-        /// <param name="createTask">A function that can create a new task to retry the operation.</param>
+        /// <typeparam name="TResult">The type of the result of the returned task.</typeparam>
+        /// <param name="firstTry">The task running the first try of the operation.</param>
+        /// <param name="createTask">A function that creates an unstarted task for each retry of the operation.</param>
+        /// <param name="getResult">A function that gets the result from the task of a successful try.</param>
+        /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
+        /// <param name="taskCreationOptions">The caller's task creation options.</param>
+        /// <param name="scheduler">The scheduler on which every try runs.</param>
         /// <param name="strategy">The retry strategy.</param>
         /// <param name="policy">The retry policy.</param>
-        /// <returns>A new task which is retrying the existing task, or the original task if retry is not required.</returns>
+        /// <returns>
+        /// A task that completes with the result of the first successful try; faults with the exceptions recorded by the
+        /// strategy (or, if it recorded none, the last try's exception) when the operation will not be retried; or is
+        /// cancelled, with <paramref name="cancellationToken"/>, when cancellation stops the operation.
+        /// </returns>
         /// <remarks>
         /// <para>
-        /// If the task completed successfully, then retry is not required and the original task is returned.
+        /// The tries must be created with <see cref="Detached(TaskCreationOptions)"/> options. If the caller asked for
+        /// <see cref="TaskCreationOptions.AttachedToParent"/>, it is the returned task that attaches to the parent, so
+        /// that the parent sees the outcome of the operation rather than the failures of tries that were retried.
         /// </para>
         /// <para>
-        /// It the task failed, then this method uses the strategy to determine whether it will retry based on the exception on the original task.
-        /// If it will retry, it raises the <see cref="IRetryStrategy.Retrying"/> event, then delays for the calculated time using the Sleep service.
-        /// It then creates a new task using the <c>createTask</c> function provided, and runs the task synchronously.
+        /// This is used by both the <see cref="RetryTaskFactory"/> and the <see cref="RetryTaskFactory{T}"/>.
         /// </para>
         /// </remarks>
-        internal static Task HandleRetry(Task task, Func<Task> createTask, IRetryStrategy strategy, IRetryPolicy policy)
+        internal static Task<TResult> Start<TResult>(Task firstTry, Func<Task> createTask, Func<Task, TResult> getResult, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy, IRetryPolicy policy)
         {
-            if (task is null)
+            var completion = new TaskCompletionSource<TResult>(taskCreationOptions & TaskCreationOptions.AttachedToParent);
+
+            // Retry decisions and delays run on the thread pool, not the caller's scheduler, so that waiting for a
+            // delay does not block (for example) a UI thread. Each retry itself runs on the caller's scheduler.
+            firstTry.ContinueWith(
+                t => Complete(completion, t, createTask, getResult, cancellationToken, scheduler, strategy, policy),
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+
+            return completion.Task;
+        }
+
+        /// <summary>
+        /// Gets the options with which to create each try of an operation.
+        /// </summary>
+        /// <param name="taskCreationOptions">The caller's task creation options.</param>
+        /// <returns>The caller's options, without <see cref="TaskCreationOptions.AttachedToParent"/>.</returns>
+        internal static TaskCreationOptions Detached(TaskCreationOptions taskCreationOptions)
+        {
+            return taskCreationOptions & ~TaskCreationOptions.AttachedToParent;
+        }
+
+        private static void Complete<TResult>(TaskCompletionSource<TResult> completion, Task task, Func<Task> createTask, Func<Task, TResult> getResult, CancellationToken cancellationToken, TaskScheduler scheduler, IRetryStrategy strategy, IRetryPolicy policy)
+        {
+            try
             {
-                throw new ArgumentNullException(nameof(task));
+                task = Retry(task, createTask, cancellationToken, scheduler, strategy, policy);
+
+                if (task.IsCanceled)
+                {
+                    // A try acknowledged cancellation, or the token was cancelled before it could start.
+                    completion.TrySetCanceled(cancellationToken);
+                }
+                else if (task.Exception is AggregateException exception)
+                {
+                    // Report every failure the strategy recorded. If it recorded none (for example DoNotRetry), report
+                    // the task's own exception, so that the failure is not lost.
+                    AggregateException recorded = strategy.Exception;
+                    completion.TrySetException(recorded != null && recorded.InnerExceptions.Count > 0 ? recorded : exception);
+                }
+                else
+                {
+                    completion.TrySetResult(getResult(task));
+                }
             }
-
-            if (createTask is null)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                throw new ArgumentNullException(nameof(createTask));
+                completion.TrySetCanceled(cancellationToken);
             }
-
-            if (strategy is null)
+            catch (Exception ex)
             {
-                throw new ArgumentNullException(nameof(strategy));
+                // The strategy or policy failed.
+                completion.TrySetException(ex);
             }
+        }
 
-            if (policy is null)
+        /// <summary>
+        /// Retries a failed task for as long as the strategy and policy allow, and returns the last task run.
+        /// </summary>
+        /// <exception cref="OperationCanceledException">
+        /// The operation would have been retried, but cancellation was requested.
+        /// </exception>
+        private static Task Retry(Task task, Func<Task> createTask, CancellationToken cancellationToken, TaskScheduler scheduler, IRetryStrategy strategy, IRetryPolicy policy)
+        {
+            while (task.Exception is AggregateException exception)
             {
-                throw new ArgumentNullException(nameof(policy));
-            }
+                TimeSpan delay = strategy.PrepareToRetry(exception);
 
-            while (task.Exception != null)
-            {
-                TimeSpan delay = strategy.PrepareToRetry(task.Exception);
-
-                if (!WillRetry(task, strategy, policy))
+                if (!(strategy.CanRetry && policy.CanRetryAll(exception)))
                 {
                     break;
                 }
 
-                strategy.OnRetrying(new RetryEventArgs(task.Exception, delay));
+                // Check before raising Retrying for a retry that will not run, and stop waiting as soon as cancellation
+                // is requested rather than at the end of the delay.
+                cancellationToken.ThrowIfCancellationRequested();
+
+                strategy.OnRetrying(new RetryEventArgs(exception, delay));
 
                 if (delay != TimeSpan.Zero)
                 {
-                    SleepService.Instance.Sleep(delay);
+                    SleepService.Instance.SleepAsync(delay).Wait(cancellationToken);
                 }
 
                 task = createTask();
-                task.RunSynchronously();
+                try
+                {
+                    task.Start(scheduler);
+                }
+                catch (InvalidOperationException) when (task.IsCanceled)
+                {
+                    // The cancellation token was signalled before the retry could start, so the task is already
+                    // cancelled and cannot run.
+                }
+
+                try
+                {
+                    // Wait for the retry to finish (running it inline, if the scheduler allows). Its outcome is examined
+                    // at the top of the loop.
+                    task.Wait();
+                }
+                catch (AggregateException)
+                {
+                }
             }
 
             return task;
-        }
-
-        private static bool WillRetry(Task task, IRetryStrategy strategy, IRetryPolicy policy)
-        {
-            return strategy.CanRetry && !task.IsCanceled && task.Exception.Flatten().InnerExceptions.All(policy.CanRetry);
-        }
-
-        private static void HandleTask(Task task, Func<Task> createTask, IRetryStrategy strategy, IRetryPolicy policy)
-        {
-            task = HandleRetry(task, createTask, strategy, policy);
-
-            HandleException(task, strategy);
         }
     }
 }
