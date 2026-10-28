@@ -258,7 +258,7 @@ The build compiles the benchmarks but does not run them.
 
 ## Building
 
-The build uses [ZeroFailed](https://github.com/zerofailed/ZeroFailed) and requires PowerShell 7 and the .NET 10 SDK.
+The build uses [ZeroFailed](https://github.com/zerofailed/ZeroFailed) and requires PowerShell 7.4 or later and the .NET 10 SDK.
 From the repo root, run:
 
     ./build.ps1
