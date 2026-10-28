@@ -6,7 +6,6 @@ namespace Corvus.Retry.Policies
 {
     using System;
     using System.Collections.Generic;
-    using System.Linq;
 
     /// <summary>
     /// A <see cref="IRetryPolicy"/> which combines multiple policies.
@@ -35,7 +34,17 @@ namespace Corvus.Retry.Policies
                 throw new ArgumentNullException(nameof(exception));
             }
 
-            return this.Policies.All(p => p.CanRetry(exception));
+            // A plain loop rather than LINQ, so that deciding allocates nothing.
+            List<IRetryPolicy> policies = this.Policies;
+            for (int i = 0; i < policies.Count; i++)
+            {
+                if (!policies[i].CanRetry(exception))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
     }
 }
