@@ -224,6 +224,38 @@ library source via `#:project`, so they always run against the code in this repo
 The .NET 10 SDK is required. `RetriableSample` pings `endjin.com`, so it needs network access. The samples
 deliberately wait between retries: `RetriableSample` takes about 2 minutes, the others about 20 seconds each.
 
+## Benchmarks
+
+`Solutions/Corvus.Retry.Benchmarks` uses [BenchmarkDotNet](https://benchmarkdotnet.org/) to measure the overhead the
+library adds. Every public type and member is benchmarked:
+
+| Class | Public API it covers | Baseline |
+|-------|----------------------|----------|
+| `RetriableOverloadBenchmarks` | Every `Retriable.Retry` and `RetryAsync` overload, when the first try succeeds | `Retry(func)` and `RetryAsync(func)` |
+| `RetriableBenchmarks` | `Retry` and `RetryAsync` with 0 and 2 failures before success | A hand-written retry loop |
+| `RetryTaskFactoryOverloadBenchmarks` | Every `StartNew` overload of `RetryTask.Factory` and `RetryTask<T>.Factory` (29 each), when the first try succeeds | |
+| `RetryTaskBenchmarks` | `RetryTask<T>.Factory.StartNew` with 0 and 2 failures | `Task<T>.Factory.StartNew` running a hand-written loop |
+| `ReliableTaskRunnerBenchmarks` | `ReliableTaskRunner.Run` (both overloads) and `StopAsync`, including restarts after 1 and 4 failures | `Run` then `StopAsync` |
+| `StrategyBenchmarks` | `PrepareToRetry` and `CanRetry` of `Count`, `DoNotRetry`, `Linear`, `Incremental` and `Backoff` (including its `MinBackoff`, `MaxBackoff`, `DeltaBackoff` and default bounds) for 1 and 9 failures | `Count` |
+| `RetryStrategyBenchmarks` | `RetryStrategy.CanRetry`, `Exception`, `OnRetrying` and the `Retrying` event, which reads `RetryEventArgs` | `CanRetry` |
+| `PolicyBenchmarks` | `AnyExceptionPolicy` and `DoNotRetryPolicy` `CanRetry` | `AnyExceptionPolicy` |
+| `AggregatePolicyBenchmarks` | `AggregatePolicy.CanRetry` with 1, 4 and 16 child policies | A single policy |
+| `SleepBenchmarks` | The default `ISleepService` (`Sleep` and `SleepAsync`), through a retry with a delay | The same retry with no delay |
+| `ConstructionBenchmarks` | Every public constructor: strategies, policies, `RetryEventArgs` and both factories | `new Count()`, `new AnyExceptionPolicy()`, `new RetryEventArgs(...)` |
+
+No benchmark waits for time to pass. Strategies calculate delays that are never waited for, and `SleepBenchmarks` asks
+for a delay of one tick, which the sleep service rounds down to no wait. The `StartNew` overloads are called through
+the test suite's `RetryTaskFactoryDriver`, so a test fails if an overload is added that the benchmarks would miss.
+
+Run them in Release from the repo root:
+
+    dotnet run -c Release --project Solutions/Corvus.Retry.Benchmarks -- --filter "*"
+
+A full run has about 140 cases and takes the best part of an hour. Use `--filter` to pick benchmarks (for example
+`"*Retriable*"`), and `--job short` for a quick exploratory run. Results are written to `BenchmarkDotNet.Artifacts`.
+Timings vary between sessions, so compare ratios from the same run rather than absolute times from different runs.
+The build compiles the benchmarks but does not run them.
+
 ## Building
 
 The build uses [ZeroFailed](https://github.com/zerofailed/ZeroFailed) and requires PowerShell 7 and the .NET 10 SDK.
