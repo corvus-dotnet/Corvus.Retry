@@ -42,7 +42,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(action));
             }
 
-            return this.StartNew(action, new Count(), new AnyExceptionPolicy());
+            return this.StartNew(action, new Count(), AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -58,7 +58,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(action));
             }
 
-            return this.StartNew(action, cancellationToken, new Count(), new AnyExceptionPolicy());
+            return this.StartNew(action, cancellationToken, new Count(), AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -74,7 +74,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(action));
             }
 
-            return this.StartNew(action, taskCreationOptions, new Count(), new AnyExceptionPolicy());
+            return this.StartNew(action, taskCreationOptions, new Count(), AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -90,7 +90,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(action));
             }
 
-            return this.StartNew(action, state, new Count(), new AnyExceptionPolicy());
+            return this.StartNew(action, state, new Count(), AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -107,7 +107,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(action));
             }
 
-            return this.StartNew(action, state, taskCreationOptions, new Count(), new AnyExceptionPolicy());
+            return this.StartNew(action, state, taskCreationOptions, new Count(), AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -126,7 +126,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(action));
             }
 
-            return this.StartNew(action, state, cancellationToken, taskCreationOptions, scheduler, new Count(), new AnyExceptionPolicy());
+            return this.StartNew(action, state, cancellationToken, taskCreationOptions, scheduler, new Count(), AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -144,7 +144,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(action));
             }
 
-            return this.StartNew(action, cancellationToken, taskCreationOptions, scheduler, new Count(), new AnyExceptionPolicy());
+            return this.StartNew(action, cancellationToken, taskCreationOptions, scheduler, new Count(), AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -324,7 +324,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(strategy));
             }
 
-            return this.StartNew(action, strategy, new AnyExceptionPolicy());
+            return this.StartNew(action, strategy, AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -346,7 +346,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(strategy));
             }
 
-            return this.StartNew(action, cancellationToken, strategy, new AnyExceptionPolicy());
+            return this.StartNew(action, cancellationToken, strategy, AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -368,7 +368,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(strategy));
             }
 
-            return this.StartNew(action, taskCreationOptions, strategy, new AnyExceptionPolicy());
+            return this.StartNew(action, taskCreationOptions, strategy, AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -390,7 +390,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(strategy));
             }
 
-            return this.StartNew(action, state, strategy, new AnyExceptionPolicy());
+            return this.StartNew(action, state, strategy, AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -413,7 +413,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(strategy));
             }
 
-            return this.StartNew(action, state, taskCreationOptions, strategy, new AnyExceptionPolicy());
+            return this.StartNew(action, state, taskCreationOptions, strategy, AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -438,7 +438,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(strategy));
             }
 
-            return this.StartNew(action, state, cancellationToken, taskCreationOptions, scheduler, strategy, new AnyExceptionPolicy());
+            return this.StartNew(action, state, cancellationToken, taskCreationOptions, scheduler, strategy, AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -462,7 +462,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(strategy));
             }
 
-            return this.StartNew(action, cancellationToken, taskCreationOptions, scheduler, strategy, new AnyExceptionPolicy());
+            return this.StartNew(action, cancellationToken, taskCreationOptions, scheduler, strategy, AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -724,17 +724,19 @@ namespace Corvus.Retry
         /// </remarks>
         internal static Task<TResult> Start<TResult>(Task firstTry, Func<Task> createTask, Func<Task, TResult> getResult, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy, IRetryPolicy policy)
         {
-            var completion = new TaskCompletionSource<TResult>(taskCreationOptions & TaskCreationOptions.AttachedToParent);
+            var operation = new RetryOperation<TResult>(createTask, getResult, cancellationToken, taskCreationOptions, scheduler, strategy, policy);
 
             // Retry decisions and delays run on the thread pool, not the caller's scheduler, so that waiting for a
             // delay does not block (for example) a UI thread. Each retry itself runs on the caller's scheduler.
+            // The operation is passed as the continuation's state, so the continuation needs no closure.
             firstTry.ContinueWith(
-                t => Complete(completion, t, createTask, getResult, cancellationToken, scheduler, strategy, policy),
+                static (t, state) => ((RetryOperation<TResult>)state!).Complete(t),
+                operation,
                 CancellationToken.None,
                 TaskContinuationOptions.None,
                 TaskScheduler.Default);
 
-            return completion.Task;
+            return operation.Task;
         }
 
         /// <summary>
@@ -745,40 +747,6 @@ namespace Corvus.Retry
         internal static TaskCreationOptions Detached(TaskCreationOptions taskCreationOptions)
         {
             return taskCreationOptions & ~TaskCreationOptions.AttachedToParent;
-        }
-
-        private static void Complete<TResult>(TaskCompletionSource<TResult> completion, Task task, Func<Task> createTask, Func<Task, TResult> getResult, CancellationToken cancellationToken, TaskScheduler scheduler, IRetryStrategy strategy, IRetryPolicy policy)
-        {
-            try
-            {
-                task = Retry(task, createTask, cancellationToken, scheduler, strategy, policy);
-
-                if (task.IsCanceled)
-                {
-                    // A try acknowledged cancellation, or the token was cancelled before it could start.
-                    completion.TrySetCanceled(cancellationToken);
-                }
-                else if (task.Exception is AggregateException exception)
-                {
-                    // Report every failure the strategy recorded. If it recorded none (for example DoNotRetry), report
-                    // the task's own exception, so that the failure is not lost.
-                    AggregateException recorded = strategy.Exception;
-                    completion.TrySetException(recorded != null && recorded.InnerExceptions.Count > 0 ? recorded : exception);
-                }
-                else
-                {
-                    completion.TrySetResult(getResult(task));
-                }
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                completion.TrySetCanceled(cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                // The strategy or policy failed.
-                completion.TrySetException(ex);
-            }
         }
 
         /// <summary>
@@ -812,26 +780,81 @@ namespace Corvus.Retry
                 task = createTask();
                 try
                 {
-                    task.Start(scheduler);
+                    // Run the retry inline if the scheduler allows it, otherwise queue it to the scheduler and wait.
+                    // Unlike Wait(), this does not throw when the retry fails; its outcome is examined at the top of the
+                    // loop.
+                    task.RunSynchronously(scheduler);
                 }
                 catch (InvalidOperationException) when (task.IsCanceled)
                 {
                     // The cancellation token was signalled before the retry could start, so the task is already
                     // cancelled and cannot run.
                 }
-
-                try
-                {
-                    // Wait for the retry to finish (running it inline, if the scheduler allows). Its outcome is examined
-                    // at the top of the loop.
-                    task.Wait();
-                }
-                catch (AggregateException)
-                {
-                }
             }
 
             return task;
+        }
+
+        /// <summary>
+        /// An operation being retried by <see cref="Start{TResult}"/>, and the task that reports its outcome.
+        /// </summary>
+        /// <typeparam name="TResult">The type of the result of the operation.</typeparam>
+        /// <remarks>
+        /// This holds everything the retry continuation needs, so that the continuation can be a static delegate.
+        /// </remarks>
+        private sealed class RetryOperation<TResult> : TaskCompletionSource<TResult>
+        {
+            private readonly Func<Task> createTask;
+            private readonly Func<Task, TResult> getResult;
+            private readonly CancellationToken cancellationToken;
+            private readonly TaskScheduler scheduler;
+            private readonly IRetryStrategy strategy;
+            private readonly IRetryPolicy policy;
+
+            public RetryOperation(Func<Task> createTask, Func<Task, TResult> getResult, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy, IRetryPolicy policy)
+                : base(taskCreationOptions & TaskCreationOptions.AttachedToParent)
+            {
+                this.createTask = createTask;
+                this.getResult = getResult;
+                this.cancellationToken = cancellationToken;
+                this.scheduler = scheduler;
+                this.strategy = strategy;
+                this.policy = policy;
+            }
+
+            public void Complete(Task task)
+            {
+                try
+                {
+                    task = Retry(task, this.createTask, this.cancellationToken, this.scheduler, this.strategy, this.policy);
+
+                    if (task.IsCanceled)
+                    {
+                        // A try acknowledged cancellation, or the token was cancelled before it could start.
+                        this.TrySetCanceled(this.cancellationToken);
+                    }
+                    else if (task.Exception is AggregateException exception)
+                    {
+                        // Report every failure the strategy recorded. If it recorded none (for example DoNotRetry),
+                        // report the task's own exception, so that the failure is not lost.
+                        AggregateException recorded = this.strategy.Exception;
+                        this.TrySetException(recorded != null && recorded.InnerExceptions.Count > 0 ? recorded : exception);
+                    }
+                    else
+                    {
+                        this.TrySetResult(this.getResult(task));
+                    }
+                }
+                catch (OperationCanceledException) when (this.cancellationToken.IsCancellationRequested)
+                {
+                    this.TrySetCanceled(this.cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    // The strategy or policy failed.
+                    this.TrySetException(ex);
+                }
+            }
         }
     }
 }

@@ -56,7 +56,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(runFunction));
             }
 
-            return Run(runFunction, new AnyExceptionPolicy());
+            return Run(runFunction, AnyExceptionPolicy.Default);
         }
 
         /// <summary>
