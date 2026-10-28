@@ -12,7 +12,7 @@
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageDescription>Retry support for synchronous and asynchronous operations (Retriable, RetryTask) and a self-restarting host for long-running tasks (ReliableTaskRunner), with pluggable retry policies and strategies.</PackageDescription>
     <PackageTags>retry;resilience;transient-fault-handling;corvus;endjin</PackageTags>
-    <PackageReleaseNotes></PackageReleaseNotes>
+    <PackageReleaseNotes>See https://github.com/corvus-dotnet/Corvus.Retry/blob/main/CHANGELOG.md for the changes in each release, including the behaviour changes in 2.0.</PackageReleaseNotes>
   </PropertyGroup>
 
   <ItemGroup>

@@ -210,7 +210,9 @@ When you want to terminate the task, you call the `StopAsync()` method e.g.
 await runner.StopAsync();
 ```
 
-As with the other retry methods, there are overloads where you can pass an `IRetryPolicy` control the restart behaviour. 
+As with the other retry methods, there are overloads where you can pass an `IRetryPolicy` to control the restart behaviour.
+
+When a run fails, the runner asks the policy about each exception it threw (not the `AggregateException` around them), and restarts the operation only if the policy accepts every one. A run that cancels itself, for example because of an `HttpClient` timeout, counts as a failure: the policy is asked about the `OperationCanceledException`. A run that completes successfully, or that ends because you called `StopAsync()`, is not restarted. `StopAsync()` returns the task for the current run, so awaiting it shows how the last run ended.
 
 ## Samples
 
@@ -266,6 +268,10 @@ From the repo root, run:
 This restores, builds, tests (on Microsoft.Testing.Platform, with code coverage) and packages the solution
 `Solutions/Corvus.Retry.slnx`. The build configuration lives in `.zf/config.ps1`. CI runs the same build in
 GitHub Actions (`.github/workflows/build.yml`).
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the changes in each release, including the behaviour changes in 2.0.
 
 ## Licenses
 
