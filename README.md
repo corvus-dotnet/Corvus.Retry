@@ -87,7 +87,7 @@ It is very simple to create your own custom policy, and you will frequently do s
 
 For example, let's imagine we were consuming an HttpService which occasionally gives us a `429 - Too Many Requests` error in an `HttpServiceException`.
 
-We can implement a policy which will only retry if we recieve this exception.
+We can implement a policy which will only retry if we receive this exception.
 
 ```
 public class RetryOnTooManyRequestsPolicy : IRetryPolicy
@@ -127,12 +127,12 @@ This tries the operation up to a specified number of times in total, with a dela
 
 For example, `new Backoff(10, TimeSpan.FromSeconds(1))` will try up to 10 times: the first try and up to 9 retries. Each time it will increase the delay by a value calculated roughly like this: `2^n * (delta +/- a small random fudge)`.
 
-This allows a rapidly increasing delay, with a bit of random jitter addded to avoid contention.
+This allows a rapidly increasing delay, with a bit of random jitter added to avoid contention.
 
 You can also set a `MinBackoff` and `MaxBackoff` to limit the lower and upper bounds of the delay.
 
 ##### Implementing a custom strategy
-It is slightly more complex to implement a custom retry strategy than it was to implement a retry policy. Although you can directly implemet the `IRetryStrategy` interface, it is usually simpler to derive from the abstract `RetryStrategy` class.
+It is slightly more complex to implement a custom retry strategy than it was to implement a retry policy. Although you can directly implement the `IRetryStrategy` interface, it is usually simpler to derive from the abstract `RetryStrategy` class.
 
 In that case, you need to override the `TimeSpan PrepareToRetry(Exception lastException)` method. You can examine the exception and use your internal state to determine two things:
 
@@ -157,7 +157,7 @@ public override TimeSpan PrepareToRetry(Exception lastException)
 
 It updates its internal state to keep a count of the number of retries, adds the exception to the list of exceptions we have seen, and tells the strategy not to delay before retrying.
 
-We also override the `bool CanRetry { get; }` property to determine wether this strategy still allows us to retry.
+We also override the `bool CanRetry { get; }` property to determine whether this strategy still allows us to retry.
 
 The `Count` strategy, for example, simply uses its internal state to determine whether to continue.
 
