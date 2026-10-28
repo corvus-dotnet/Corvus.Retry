@@ -10,6 +10,12 @@ $zerofailedExtensions = @(
         GitRepository = "https://github.com/zerofailed/ZeroFailed.Build.DotNet"
         GitRef = "main"
     }
+    @{
+        # Creates the GitHub Release for a tagged version and attaches the packages and SBOM to it.
+        Name = "ZeroFailed.Build.GitHub"
+        GitRepository = "https://github.com/zerofailed/ZeroFailed.Build.GitHub"
+        GitRef = "main"
+    }
 )
 
 # Load the tasks and process
@@ -41,6 +47,22 @@ $NugetPublishSource = property ZF_NUGET_PUBLISH_SOURCE "$here/_local-nuget-feed"
 $IncludeAssembliesInCodeCoverage = @("Corvus.Retry*")
 $ExcludeAssembliesInCodeCoverage = @("Corvus.Retry.Tests*")
 
+# SBOM: Covenant always writes Corvus.Retry.sbom.json and .html to the repository root; also produce the
+# standard SPDX and CycloneDX formats so they can be attached to the GitHub Release.
+$CovenantIncludeSpdxReport = $true
+$CovenantIncludeCycloneDxReport = $true
+
+# GitHub Release. The Publish stage runs for tags (and for manually forced publishes). Only create a release
+# for a tag: 'gh release create' for any other version would create a new tag at the head of the default branch.
+$CreateGitHubRelease = $env:GITHUB_REF_TYPE -eq "tag"
+$PublishNuGetPackagesAsGitHubReleaseArtefacts = $true
+$GitHubReleaseArtefacts = @(
+    "$here/Corvus.Retry.sbom.json"
+    "$here/Corvus.Retry.sbom.spdx.json"
+    "$here/Corvus.Retry.sbom.cyclonedx.xml"
+    "$here/Corvus.Retry.sbom.html"
+)
+
 # Tests run on Microsoft.Testing.Platform (enabled by the "test.runner" setting in global.json).
 # ZeroFailed.Build.DotNet detects this automatically and switches to the MTP 'dotnet test' arguments
 # ('--solution', '--report-trx', '--diagnostic'), while still collecting coverage via 'dotnet-coverage collect'.
@@ -70,6 +92,9 @@ task . FullBuild
 # task PostAnalysis {}
 # task PrePackage {}
 # task PostPackage {}
-# task PrePublish {}
+# The GitHub extension attaches only the .nupkg files; earlier releases also carried the symbol packages.
+task PrePublish -If { $CreateGitHubRelease } Version,{
+    $script:GitHubReleaseArtefacts += (Get-ChildItem -Path $PackagesDir -Filter "*.$($GitVersion.SemVer).snupkg").FullName
+}
 # task PostPublish {}
 # task RunLast {}
