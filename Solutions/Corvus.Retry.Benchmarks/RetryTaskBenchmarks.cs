@@ -15,8 +15,16 @@ namespace Corvus.Retry.Benchmarks
     /// retry loop with <see cref="Task.Factory"/>.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Both run on the thread pool, so the comparison includes the extra continuation and completion source that
     /// <see cref="RetryTask{T}"/> uses to report the outcome of the operation as a whole.
+    /// </para>
+    /// <para>
+    /// Most of the gap on the failure path is the runtime's, not the library's. Each try runs as its own task, and
+    /// when an execution context flows, the runtime catches a failed try's exception, captures it and throws it again,
+    /// so every failure costs two throws rather than the loop's one. The thread pool hops also make these timings
+    /// bimodal (they depend on whether a worker thread must be woken), so compare medians and expect a wide spread.
+    /// </para>
     /// </remarks>
     [MemoryDiagnoser]
     public class RetryTaskBenchmarks
