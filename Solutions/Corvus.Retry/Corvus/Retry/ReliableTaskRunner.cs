@@ -119,6 +119,7 @@ namespace Corvus.Retry
             // Publish a stand-in for the new run before starting it, so that a StopAsync call made while runFunction
             // is still executing gets a task that represents the new run rather than the faulted one it replaces.
             var nextRun = new TaskCompletionSource<Task>();
+            Task published;
             lock (this.sync)
             {
                 if (this.stopping)
@@ -126,7 +127,8 @@ namespace Corvus.Retry
                     return;
                 }
 
-                this.processingTask = nextRun.Task.Unwrap();
+                published = nextRun.Task.Unwrap();
+                this.processingTask = published;
             }
 
             Task task;
@@ -141,7 +143,11 @@ namespace Corvus.Retry
             }
 
             nextRun.SetResult(task);
-            this.AttachFailureContinuation(task, runFunction, retryPolicy);
+
+            // Watch the published stand-in rather than the run's own task. Unwrap observes the run's failure, and
+            // the continuation observes the stand-in's, so a run that is replaced by a further restart does not
+            // report its failure as unobserved.
+            this.AttachFailureContinuation(published, runFunction, retryPolicy);
         }
 
         private void AttachFailureContinuation(Task task, Func<CancellationToken, Task> runFunction, IRetryPolicy retryPolicy)

@@ -6,6 +6,7 @@ namespace Corvus.Retry
 {
     using System;
     using System.Collections.Generic;
+    using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
     using Corvus.Retry.Policies;
@@ -169,6 +170,61 @@ namespace Corvus.Retry
             await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
             InvalidOperationException actual = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => stopTask).ConfigureAwait(false);
             Assert.AreSame(thrown[RunsAllowed - 1], actual);
+        }
+
+        [TestMethod]
+        public async Task WhenARestartedRunFailsAndIsRestartedAgain_ItsFailureIsNotReportedAsUnobserved()
+        {
+            var failures = new[] { new InvalidOperationException("Run 1 failed"), new InvalidOperationException("Run 2 failed") };
+            TaskCompletionSource thirdRunStarted = NewSignal();
+            int invocations = 0;
+            var unobserved = new List<Exception>();
+
+            void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs e)
+            {
+                lock (unobserved)
+                {
+                    // Tests run in parallel, so only count the failures this test caused.
+                    unobserved.AddRange(e.Exception.InnerExceptions.Where(ex => Array.IndexOf(failures, ex) >= 0));
+                }
+            }
+
+            TaskScheduler.UnobservedTaskException += OnUnobserved;
+            try
+            {
+                ReliableTaskRunner runner = ReliableTaskRunner.Run(ct =>
+                {
+                    int run = Interlocked.Increment(ref invocations);
+                    if (run <= failures.Length)
+                    {
+                        return FailAsynchronously(failures[run - 1]);
+                    }
+
+                    thirdRunStarted.TrySetResult();
+                    return WaitForCancellationAsync(ct);
+                });
+
+                await WaitAsync(thirdRunStarted.Task, "the third run to start").ConfigureAwait(false);
+
+                // The second run's task is no longer the runner's, so a fault nobody observed is reported when it
+                // is finalized.
+                for (int i = 0; i < 3; i++)
+                {
+                    GC.Collect();
+                    GC.WaitForPendingFinalizers();
+                }
+
+                await WaitAsync(runner.StopAsync(), "the runner to stop").ConfigureAwait(false);
+            }
+            finally
+            {
+                TaskScheduler.UnobservedTaskException -= OnUnobserved;
+            }
+
+            lock (unobserved)
+            {
+                Assert.IsEmpty(unobserved);
+            }
         }
 
         [TestMethod]
