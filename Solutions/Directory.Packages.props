@@ -9,7 +9,7 @@
 
   <ItemGroup Label="Analyzers (same versions Endjin.RecommendedPractices 2.1.18 would inject)">
     <PackageVersion Include="StyleCop.Analyzers" Version="1.2.0-beta.556" />
-    <PackageVersion Include="Roslynator.Analyzers" Version="4.13.1" />
+    <PackageVersion Include="Roslynator.Analyzers" Version="5.0.1" />
   </ItemGroup>
 
   <ItemGroup Label="Benchmarks">
