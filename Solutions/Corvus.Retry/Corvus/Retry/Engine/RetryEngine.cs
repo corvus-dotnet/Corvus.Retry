@@ -189,6 +189,14 @@ internal static class RetryEngine
                                         circuitBreaker!.Abandon(probe);
                                     }
 
+                                    // Under a timeout, the operation's exception carries the token of the attempt, which
+                                    // the caller's token cancelled. The caller then sees its own token, as for a
+                                    // cancelled delay. Otherwise the operation's exception propagates unchanged.
+                                    if (cancellation.CancellationToken != caller)
+                                    {
+                                        caller.ThrowIfCancellationRequested();
+                                    }
+
                                     throw;
 
                                 case CancellationCause.TotalTimeout:

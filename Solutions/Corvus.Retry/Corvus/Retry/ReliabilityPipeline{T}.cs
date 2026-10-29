@@ -242,9 +242,25 @@ public sealed class ReliabilityPipeline<T>
             return result;
         }
 
+        // OnFallback sees the rejected result before the pipeline releases it, as OnRetry sees a rejected result before a
+        // retry. The action runs after the release, so the caller never gets a result that is still open.
+        FallbackArgs<T> args = new(null, result, cancellationToken);
+        if (fallback.OnFallback is { } onFallback)
+        {
+            try
+            {
+                await onFallback(args).ConfigureAwait(this.continueOnCapturedContext);
+            }
+            catch
+            {
+                DisposeQuietly(result);
+                throw;
+            }
+        }
+
         // The caller does not get the result, so release it. An exception from the disposal stops the call.
         (result as IDisposable)?.Dispose();
-        return await this.FallBackAsync(fallback, new FallbackArgs<T>(null, result, cancellationToken)).ConfigureAwait(this.continueOnCapturedContext);
+        return await fallback.Action(args).ConfigureAwait(this.continueOnCapturedContext);
     }
 
     private async ValueTask<T> FallBackAsync(FallbackOptions<T> fallback, FallbackArgs<T> args)

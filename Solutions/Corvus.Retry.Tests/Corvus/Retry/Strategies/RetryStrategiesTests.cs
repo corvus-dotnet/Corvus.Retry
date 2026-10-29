@@ -170,7 +170,7 @@ public class RetryStrategiesTests
 
         List<TimeSpan> delays = JitterSamples.Take(strategy, new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero));
 
-        JitterSamples.AssertLimitedByTheMaximum(delays, TimeSpan.FromMilliseconds(750), maxDelay);
+        JitterSamples.AssertLimitedByTheMaximum(delays, TimeSpan.FromMilliseconds(750), TimeSpan.FromMilliseconds(1250), maxDelay);
     }
 
     [TestMethod]
@@ -183,6 +183,7 @@ public class RetryStrategiesTests
         JitterSamples.AssertLimitedByTheMaximum(
             JitterSamples.Take(strategy, new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero)),
             TimeSpan.FromMilliseconds(750),
+            TimeSpan.FromMilliseconds(1250),
             maxDelay);
 
         // Retries 2 to 5: the whole band lies above the maximum.

@@ -932,7 +932,10 @@ internal static class HedgingEngine
         {
             CancellationCause cause = RetryEngine.Classify(this.call.Caller, this.call.TotalCts, this.cts);
 
-            // The source of the attempt is cancelled by the attempt timeout, or by the engine when the attempt lost.
+            // The source of the attempt is cancelled by the attempt timeout, or by the engine when the attempt lost. An
+            // abandoned attempt is not a call: Abandon() released its permit before it cancelled the source, so the
+            // breaker never hears from it. This clause only labels the outcome of the attempt, which the engine does
+            // not read once it has abandoned the attempt.
             if (cause == CancellationCause.AttemptTimeout
                 && (this.call.AttemptTimeout is null || Volatile.Read(ref this.state) == Abandoned))
             {

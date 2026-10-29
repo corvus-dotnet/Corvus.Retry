@@ -62,14 +62,13 @@ public class ReliabilityPipelineTests
         Assert.IsFalse(call.IsCompleted);
         await cts.CancelAsync().ConfigureAwait(false);
 
-        // The cancellation of the operation propagates unchanged, so it carries the token that the operation received.
+        // The caller always sees an exception that carries its own token. Without timeouts the operation receives the
+        // caller's token, and its own cancellation propagates unchanged. With timeouts it receives a token that the
+        // caller's token cancels, and the caller sees its own token rather than the token of the attempt.
         OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
         CancellationToken token = Assert.ContainsSingle(tokens);
         Assert.IsTrue(token.IsCancellationRequested);
-        Assert.AreEqual(token, thrown.CancellationToken);
-
-        // Without timeouts the operation receives the caller's token. With timeouts it receives a token that the
-        // caller's token cancels.
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
         Assert.AreEqual(!withTimeouts, token == cts.Token);
     }
 
@@ -216,11 +215,11 @@ public class ReliabilityPipelineTests
         Assert.IsFalse(call.IsCompleted);
         await cts.CancelAsync().ConfigureAwait(false);
 
-        // The operation's cancellation propagates unchanged. With timeouts, it carries the token of the attempt, which
-        // the caller's token cancelled.
-        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
-        Assert.IsNotInstanceOfType<TimeoutException>(thrown);
-        Assert.AreEqual(Assert.ContainsSingle(tokens), thrown.CancellationToken);
+        // With timeouts, the operation's own cancellation carries the token of the attempt, which the caller's token
+        // cancelled. The caller sees an exception that carries its own token.
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
+        Assert.AreNotEqual(Assert.ContainsSingle(tokens), thrown.CancellationToken);
     }
 
     // REQ-04
@@ -636,10 +635,10 @@ public class ReliabilityPipelineTests
         await cts.CancelAsync().ConfigureAwait(false);
         fake.Advance(attemptTimeout);
 
-        // The operation's cancellation propagates unchanged, with the token of the attempt.
-        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
-        Assert.IsNotInstanceOfType<TimeoutException>(thrown);
-        Assert.AreEqual(Assert.ContainsSingle(tokens), thrown.CancellationToken);
+        // The caller wins over the attempt timeout, and sees an exception that carries its own token.
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
+        Assert.AreNotEqual(Assert.ContainsSingle(tokens), thrown.CancellationToken);
         Assert.IsEmpty(policy.Consulted);
     }
 

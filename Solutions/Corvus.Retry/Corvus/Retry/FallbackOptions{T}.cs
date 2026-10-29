@@ -65,10 +65,13 @@ public sealed record FallbackOptions<T>
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The predicate receives the result that the other parts of the pipeline return. Before the pipeline calls
-    /// <see cref="OnFallback"/> and <see cref="Action"/>, it disposes a rejected result that implements
-    /// <see cref="IDisposable"/>. An exception from that disposal stops the call: the caller gets that exception, and
-    /// the pipeline does not call <see cref="OnFallback"/> or <see cref="Action"/>.
+    /// The predicate receives the result that the other parts of the pipeline return. For a rejected result, the
+    /// pipeline calls <see cref="OnFallback"/> with the result, then disposes the result if it implements
+    /// <see cref="IDisposable"/>, and then calls <see cref="Action"/>. Thus <see cref="OnFallback"/> can examine the
+    /// result, for example to log the body of a response, and <see cref="Action"/> receives a result that is already
+    /// disposed. This is the order of the retry part, which disposes a rejected result after
+    /// <see cref="ReliabilityPipelineOptions.OnRetry"/>. An exception from the disposal stops the call: the caller
+    /// gets that exception, and the pipeline does not call <see cref="Action"/>.
     /// </para>
     /// <para>
     /// An exception from the predicate stops the call: the caller gets that exception. The pipeline disposes the result
@@ -81,8 +84,9 @@ public sealed record FallbackOptions<T>
     /// Gets a callback that the pipeline awaits before it calls <see cref="Action"/>, or <see langword="null"/>.
     /// </summary>
     /// <remarks>
-    /// The callback receives the exception or the result that caused the fallback. An exception from the callback
-    /// stops the call, and the pipeline does not call <see cref="Action"/>.
+    /// The callback receives the exception or the result that caused the fallback. A rejected result is not yet
+    /// disposed when the callback runs. An exception from the callback stops the call, and the pipeline does not call
+    /// <see cref="Action"/>; the pipeline disposes a rejected result, and ignores an exception from that disposal.
     /// </remarks>
     public Func<FallbackArgs<T>, ValueTask>? OnFallback { get; init; }
 }

@@ -106,7 +106,7 @@ public class LinearTests
 
         List<TimeSpan> delays = JitterSamples.Take(strategy, new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero));
 
-        JitterSamples.AssertLimitedByTheMaximum(delays, TimeSpan.FromMilliseconds(750), maxDelay);
+        JitterSamples.AssertLimitedByTheMaximum(delays, TimeSpan.FromMilliseconds(750), TimeSpan.FromMilliseconds(1250), maxDelay);
     }
 
     [TestMethod]

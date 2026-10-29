@@ -67,7 +67,7 @@ public class FallbackTests
     }
 
     [TestMethod]
-    public async Task ARejectedResult_GivesTheFallbackValueAndIsDisposedBeforeOnFallbackAndAction()
+    public async Task ARejectedResult_GivesTheFallbackValueAndIsDisposedAfterOnFallbackAndBeforeAction()
     {
         var log = new List<string>();
         var rejected = new Response(503, log);
@@ -84,9 +84,9 @@ public class FallbackTests
                     log.Add($"on fallback, disposed: {args.Result!.Disposed}");
                     return ValueTask.CompletedTask;
                 },
-                Action = _ =>
+                Action = args =>
                 {
-                    log.Add("action");
+                    log.Add($"action, disposed: {args.Result!.Disposed}");
                     return new ValueTask<Response>(new Response(200, log));
                 },
             },
@@ -94,9 +94,10 @@ public class FallbackTests
 
         Response result = await pipeline.ExecuteAsync(_ => new ValueTask<Response>(rejected)).ConfigureAwait(false);
 
+        // OnFallback can examine the rejected result, as OnRetry can. The action gets a result that is already disposed.
         Assert.AreEqual(200, result.StatusCode);
         Assert.IsFalse(result.Disposed);
-        Assert.AreSequenceEqual(new[] { "dispose 503", "on fallback, disposed: True", "action" }, log);
+        Assert.AreSequenceEqual(new[] { "on fallback, disposed: False", "dispose 503", "action, disposed: True" }, log);
         Assert.IsNotNull(received);
         Assert.AreSame(rejected, received.Value.Result);
         Assert.IsNull(received.Value.Exception);
@@ -236,7 +237,7 @@ public class FallbackTests
     }
 
     [TestMethod]
-    public async Task WhenTheDisposalOfARejectedResultThrows_TheCallerGetsThatExceptionAndTheFallbackDoesNotRun()
+    public async Task WhenTheDisposalOfARejectedResultThrows_TheCallerGetsThatExceptionAfterOnFallbackAndTheActionDoesNotRun()
     {
         var log = new List<string>();
         var disposeFailure = new InvalidOperationException("Dispose failed.");
@@ -257,13 +258,49 @@ public class FallbackTests
             },
         });
 
-        // The pipeline disposes the rejected result before the fallback. An exception from the disposal stops the call.
+        // The pipeline disposes the rejected result after OnFallback and before the action. An exception from the
+        // disposal stops the call.
         InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
             () => pipeline.ExecuteAsync(_ => new ValueTask<Response>(result)).AsTask()).ConfigureAwait(false);
 
         Assert.AreSame(disposeFailure, thrown);
         Assert.AreSequenceEqual(new[] { "dispose 503" }, log);
-        Assert.IsEmpty(calls);
+        Assert.AreSame(result, Assert.ContainsSingle(calls).Result);
+        Assert.AreEqual(0, actions);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task WhenOnFallbackThrowsForARejectedResult_TheResultIsDisposedAndTheCallerGetsTheCallbacksException(bool disposalThrows)
+    {
+        var log = new List<string>();
+        var callbackFailure = new FormatException("OnFallback failed.");
+        var rejected = new Response(503, log) { DisposeFailure = disposalThrows ? new InvalidOperationException("Dispose failed.") : null };
+        int actions = 0;
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        {
+            Strategy = new DoNotRetry(),
+            Fallback = new FallbackOptions<Response>
+            {
+                ShouldFallbackResult = r => r.StatusCode >= 500,
+                OnFallback = _ => throw callbackFailure,
+                Action = _ =>
+                {
+                    Interlocked.Increment(ref actions);
+                    return new ValueTask<Response>(new Response(200, log));
+                },
+            },
+        });
+
+        // The callback's exception stops the call. The caller does not get the result, so the pipeline disposes it, and
+        // an exception from that disposal does not hide the callback's exception.
+        FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
+            () => pipeline.ExecuteAsync(_ => new ValueTask<Response>(rejected)).AsTask()).ConfigureAwait(false);
+
+        Assert.AreSame(callbackFailure, thrown);
+        Assert.IsTrue(rejected.Disposed);
+        Assert.AreSequenceEqual(new[] { "dispose 503" }, log);
         Assert.AreEqual(0, actions);
     }
 
@@ -467,11 +504,11 @@ public class FallbackTests
         await cts.CancelAsync().ConfigureAwait(false);
         fake.Advance(TimeSpan.FromMilliseconds(100));
 
-        // With a total timeout, the operation receives a token that the caller's token cancels. The operation's
-        // cancellation propagates unchanged, so it carries that token, not the caller's.
-        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
-        Assert.AreEqual(Assert.ContainsSingle(tokens), thrown.CancellationToken);
-        Assert.AreNotEqual(cts.Token, thrown.CancellationToken);
+        // With a total timeout, the operation receives a token that the caller's token cancels. The caller sees an
+        // exception that carries its own token, and the fallback does not apply.
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
+        Assert.AreNotEqual(Assert.ContainsSingle(tokens), thrown.CancellationToken);
         Assert.IsEmpty(calls);
     }
 

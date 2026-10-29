@@ -392,7 +392,7 @@ public class RetryEngineTests
     }
 
     [TestMethod]
-    public async Task WhenTheCallerCancelsAtTheInstantTheAttemptTimesOut_TheCallIsCancelledRatherThanTimedOut()
+    public async Task WhenTheCallerCancelsAtTheInstantTheAttemptTimesOut_TheCallIsCancelledWithTheCallersTokenRatherThanTimedOut()
     {
         RecordingFakeTimeProvider fake = new();
         using var cts = new CancellationTokenSource();
@@ -405,10 +405,10 @@ public class RetryEngineTests
         await cts.CancelAsync().ConfigureAwait(false);
         fake.Advance(attemptTimeout);
 
-        // The operation throws the cancellation of its own token, which the attempt timeout links to the caller's token, and
-        // the engine rethrows it as it is.
-        TaskCanceledException thrown = await Assert.ThrowsExactlyAsync<TaskCanceledException>(() => WhenCompleteAsync(call)).ConfigureAwait(false);
-        Assert.IsTrue(thrown.CancellationToken.IsCancellationRequested);
+        // The operation throws the cancellation of its own token, which the attempt timeout links to the caller's token.
+        // The caller sees its own token, as for a cancelled delay, so a filter on the caller's token matches.
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => WhenCompleteAsync(call)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
         Assert.IsEmpty(policy.Consulted);
     }
 

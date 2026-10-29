@@ -34,7 +34,10 @@ not do the steps in the guide, your project can fail to compile, or your retries
 - `ReliabilityPipelineOptions<T>.Fallback` gives a value when the pipeline fails. `FallbackOptions<T>` and
   `FallbackArgs<T>` hold its settings and its data. The fallback applies only to the outcome of the attempts. An exception from
   `ShouldRetryResult`, `OnRetry`, the strategy, a policy, `OnStateChanged`, `OnHedging` or `HedgingActionGenerator`
-  stops the call. The fallback does not give a value for it.
+  stops the call. The fallback does not give a value for it. For a result that `ShouldFallbackResult` rejects, the
+  pipeline calls `OnFallback` with the result, then disposes the result if it implements `IDisposable`, and then calls
+  `Action`, as the retry part disposes a rejected result after `OnRetry`. If `OnFallback` or `ShouldFallbackResult`
+  throws, the pipeline disposes the result and the caller gets that exception.
 - `CircuitBreaker` stops calls to a service that fails frequently. Many pipelines can share one breaker.
   `CircuitBreakerOptions`, `CircuitState`, `CircuitStateChange`, `BrokenCircuitException` and
   `IsolatedCircuitException` are new. `Isolate()` and `Close()` control the circuit manually.
@@ -113,7 +116,8 @@ not do the steps in the guide, your project can fail to compile, or your retries
 - A cancellation token stops a `Retriable` delay immediately. Before, the delay continued until its end.
 - `Retriable` and the pipelines do not give an `OperationCanceledException` that the token of the caller caused to
   the strategy or the policy. The exception that the caller sees carries the caller's token, also when the token stops
-  a delay of a pipeline that has a `TotalTimeout`.
+  a delay or an attempt of a pipeline that has an `AttemptTimeout` or a `TotalTimeout`, where the operation's own
+  exception carries the token of the attempt.
 - `Retriable`, the pipelines, hedging, the circuit breaker and the fallback ask the policy about the exceptions inside
   an `AggregateException`, depth first, as `RetryTask` and `ReliableTaskRunner` do. The policy must accept all of them.
   An `AggregateException` with no inner exceptions is passed to the policy itself. The strategy, `OnRetry`,

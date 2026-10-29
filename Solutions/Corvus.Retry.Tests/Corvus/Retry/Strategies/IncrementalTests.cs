@@ -133,6 +133,7 @@ public class IncrementalTests
         JitterSamples.AssertLimitedByTheMaximum(
             JitterSamples.Take(strategy, new RetryAttempt(2, new InvalidOperationException(), null, TimeSpan.FromSeconds(1))),
             TimeSpan.FromMilliseconds(1500),
+            TimeSpan.FromMilliseconds(2500),
             maxDelay);
 
         // Attempts 3 to 5: the whole band lies above the maximum.

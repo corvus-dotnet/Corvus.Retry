@@ -72,24 +72,37 @@ internal static class JitterSamples
 
     /// <summary>
     /// Asserts that every sample lies from <paramref name="lower"/> to <paramref name="maximum"/>, that some samples
-    /// equal the maximum, and that the samples below the maximum are spread (at least
-    /// <see cref="MinimumDistinctValues"/> distinct values).
+    /// equal the maximum, and that the samples below the maximum are spread.
     /// </summary>
     /// <param name="samples">The samples, for a band that the maximum cuts.</param>
     /// <param name="lower">The lower bound of the band, inclusive.</param>
-    /// <param name="maximum">The maximum delay.</param>
+    /// <param name="upper">The upper bound of the band before the maximum cuts it, inclusive.</param>
+    /// <param name="maximum">The maximum delay, between <paramref name="lower"/> and <paramref name="upper"/>.</param>
     /// <remarks>
+    /// <para>
     /// A strategy that returned <see cref="TimeSpan.Zero"/>, or always the maximum, would pass a check of
     /// <c>d &lt;= maximum</c> alone.
+    /// </para>
+    /// <para>
+    /// Only the part of the band below the maximum can show dispersion, so the number of distinct values that the
+    /// check requires is half of the number of samples that a uniform jitter puts there. For a band that the maximum
+    /// cuts at 30%, 200 samples put about 60 below the maximum, with a standard deviation of about 6.5, so a
+    /// requirement of 30 is more than four standard deviations away and does not fail by chance.
+    /// </para>
     /// </remarks>
-    public static void AssertLimitedByTheMaximum(IReadOnlyList<TimeSpan> samples, TimeSpan lower, TimeSpan maximum)
+    public static void AssertLimitedByTheMaximum(IReadOnlyList<TimeSpan> samples, TimeSpan lower, TimeSpan upper, TimeSpan maximum)
     {
+        Assert.IsInRange(lower, upper, maximum);
+
         foreach (TimeSpan sample in samples)
         {
             Assert.IsInRange(lower, maximum, sample);
         }
 
         Assert.Contains(d => d == maximum, samples, $"No sample was limited to the maximum, {maximum}.");
-        Assert.IsGreaterThanOrEqualTo(MinimumDistinctValues, samples.Where(d => d < maximum).Distinct().Count());
+
+        double fractionBelowTheMaximum = (maximum - lower) / (upper - lower);
+        int requiredDistinctValues = Math.Max(2, (int)(samples.Count * fractionBelowTheMaximum / 2));
+        Assert.IsGreaterThanOrEqualTo(requiredDistinctValues, samples.Where(d => d < maximum).Distinct().Count());
     }
 }

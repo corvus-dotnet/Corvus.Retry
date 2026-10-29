@@ -231,10 +231,10 @@ ReliabilityPipeline<string> pipeline = new(new ReliabilityPipelineOptions<string
 ```
 
 - If the pipeline throws an exception that `Policy` accepts, the pipeline calls `OnFallback` and then `Action`. It returns the value of `Action`.
-- If `ShouldFallbackResult` returns `true` for a result, the pipeline disposes that result if it implements `IDisposable`. Then it calls `OnFallback` and `Action`.
+- If `ShouldFallbackResult` returns `true` for a result, the pipeline calls `OnFallback` with that result, then disposes the result if it implements `IDisposable`, and then calls `Action`. Thus `OnFallback` can examine the result, for example to log the body of a response, and `Action` receives a result that is already disposed. This is the same order as the retry part, which disposes a rejected result after `OnRetry`.
 - The fallback does not apply when the caller cancels the token.
 - `FallbackArgs<T>` gives the `Exception` or the `Result`, and the `CancellationToken` of the caller. The total timeout does not apply to the fallback.
-- An exception from `OnFallback` or from `Action` stops the call. The pipeline does not catch it.
+- An exception from `OnFallback` or from `Action` stops the call. The pipeline does not catch it. If `OnFallback` throws for a rejected result, the pipeline disposes the result.
 - The fallback applies only to the outcome of the attempts: the exception or the result of the last attempt, a `RetryTimeoutException`, or a rejection by the circuit breaker. An exception from `ShouldRetryResult`, `OnRetry`, the strategy, a policy, `OnStateChanged`, `OnHedging` or `HedgingActionGenerator` stops the call. The fallback does not give a value for it.
 
 #### Circuit breaker
