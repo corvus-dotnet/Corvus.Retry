@@ -16,8 +16,10 @@ using System.Threading;
 /// The exception that caused the fallback, or <see langword="null"/> if a result caused it.
 /// </param>
 /// <param name="Result">
-/// The result that caused the fallback, or the default value if an exception caused it. The pipeline has already
-/// disposed a result that implements <see cref="IDisposable"/>.
+/// The result that caused the fallback, or the default value if an exception caused it. When
+/// <see cref="FallbackOptions{T}.OnFallback"/> receives it, the pipeline has not yet disposed it, so the callback can
+/// examine it. The pipeline then disposes a result that implements <see cref="IDisposable"/>, so
+/// <see cref="FallbackOptions{T}.Action"/> receives a result that is already disposed.
 /// </param>
 /// <param name="CancellationToken">
 /// The caller's token. The total timeout of the pipeline does not apply to the fallback.
