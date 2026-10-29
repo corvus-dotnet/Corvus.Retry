@@ -7,6 +7,7 @@ namespace Corvus.Retry;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -121,6 +122,74 @@ public class RetriableTests
         Assert.HasCount(2, policy.Consulted);
         Assert.AreSame(op.Thrown[0], policy.Consulted[0]);
         Assert.AreSame(op.Thrown[1], policy.Consulted[1]);
+    }
+
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    [DataRow(RetryShape.AsyncAction)]
+    [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
+    public async Task WhenTheOperationThrowsAnAggregateException_ThePolicyIsAskedAboutTheExceptionInsideIt(RetryShape shape)
+    {
+        var aggregate = new AggregateException(new HttpRequestException("The request failed"));
+        var op = new FlakyOperation(1, _ => aggregate);
+        var strategy = new RecordingStrategy(TimeSpan.Zero, TimeSpan.Zero);
+
+        string? result = await RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, strategy, RetryPolicies.Handle<HttpRequestException>()).ConfigureAwait(false);
+
+        Assert.AreEqual(2, op.Invocations);
+        if (shape is RetryShape.Function or RetryShape.AsyncFunction or RetryShape.AsyncFunctionWithToken)
+        {
+            Assert.AreEqual("attempt-2", result);
+        }
+
+        // The strategy gets the exception as the operation threw it.
+        Assert.AreSame(aggregate, Assert.ContainsSingle(strategy.Attempts).Exception);
+    }
+
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    [DataRow(RetryShape.AsyncAction)]
+    [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
+    public async Task WhenTheOperationThrowsANestedAggregateException_ThePolicyIsAskedDepthFirstAndTheFirstRefusalStopsTheRetry(RetryShape shape)
+    {
+        var first = new HttpRequestException("first");
+        var second = new TimeoutException("second");
+        var third = new InvalidOperationException("third");
+        var aggregate = new AggregateException(new AggregateException(first, second), third);
+        var op = new FlakyOperation(FlakyOperation.AlwaysFails, _ => aggregate);
+        var policy = new RecordingRetryPolicy(e => e is not TimeoutException);
+
+        AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(
+            () => RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, new Count(5), policy)).ConfigureAwait(false);
+
+        Assert.AreSame(aggregate, thrown);
+        Assert.AreEqual(1, op.Invocations);
+        Assert.AreSequenceEqual(new Exception[] { first, second }, policy.Consulted);
+    }
+
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    [DataRow(RetryShape.AsyncAction)]
+    [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
+    public async Task WhenTheOperationThrowsAnAggregateExceptionWithNoInnerExceptions_ThePolicyIsAskedAboutTheAggregateException(RetryShape shape)
+    {
+        var aggregate = new AggregateException();
+        var op = new FlakyOperation(1, _ => aggregate);
+        var policy = new RecordingRetryPolicy(true);
+
+        await RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, new Count(5), policy).ConfigureAwait(false);
+
+        Assert.AreEqual(2, op.Invocations);
+        Assert.AreSame(aggregate, Assert.ContainsSingle(policy.Consulted));
     }
 
     [TestMethod]

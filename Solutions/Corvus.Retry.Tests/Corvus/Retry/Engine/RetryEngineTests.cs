@@ -7,6 +7,7 @@ namespace Corvus.Retry;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Corvus.Retry.Policies;
@@ -490,6 +491,38 @@ public class RetryEngineTests
     }
 
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task WhenTheOperationOfAPipelineThrowsAnAggregateException_ThePolicyIsAskedAboutTheExceptionsInsideItDepthFirst(bool withTimeouts)
+    {
+        var first = new HttpRequestException("first");
+        var second = new HttpRequestException("second");
+        var aggregate = new AggregateException(new AggregateException(first), second);
+        var op = new FlakyOperation(1, _ => aggregate);
+        var consulted = new List<Exception>();
+        var strategy = new RecordingStrategy(TimeSpan.Zero, TimeSpan.Zero);
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+        {
+            Strategy = strategy,
+            Policy = RetryPolicies.FromPredicate(
+                e =>
+                {
+                    consulted.Add(e);
+                    return e is HttpRequestException;
+                }),
+            AttemptTimeout = withTimeouts ? OneHour : null,
+            TotalTimeout = withTimeouts ? OneHour : null,
+            TimeProvider = new RecordingFakeTimeProvider(),
+        });
+
+        string result = await pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual("attempt-2", result);
+        Assert.AreSequenceEqual(new Exception[] { first, second }, consulted);
+        Assert.AreSame(aggregate, Assert.ContainsSingle(strategy.Attempts).Exception);
+    }
+
+    [TestMethod]
     public async Task WhenTheStrategyRefuses_ThePolicyIsNotConsulted()
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
@@ -734,18 +767,6 @@ public class RetryEngineTests
         public ValueTask<T> InvokeAsync(CancellationToken cancellationToken) => this.operation(cancellationToken);
 
         public bool IsFailure(T result) => this.isFailure?.Invoke(result) ?? false;
-    }
-
-    // Returns the given delays in order, then null, and records every attempt it is asked about.
-    private sealed class RecordingStrategy(params TimeSpan[] delays) : IRetryStrategy
-    {
-        public List<RetryAttempt> Attempts { get; } = [];
-
-        public TimeSpan? GetRetryDelay(in RetryAttempt attempt)
-        {
-            this.Attempts.Add(attempt);
-            return attempt.AttemptNumber <= delays.Length ? delays[attempt.AttemptNumber - 1] : null;
-        }
     }
 
     private sealed class DisposableResult : IDisposable

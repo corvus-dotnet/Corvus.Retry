@@ -36,7 +36,11 @@ internal static class RetryEngine
     /// <param name="operation">The operation.</param>
     /// <param name="caller">The caller's token. Its cancellation stops the call with an <see cref="OperationCanceledException"/>.</param>
     /// <param name="strategy">The strategy that decides whether to retry, and the delay before the retry.</param>
-    /// <param name="policy">The policy that decides whether an exception can be retried.</param>
+    /// <param name="policy">
+    /// The policy that decides whether an exception can be retried. For an <see cref="AggregateException"/>, it is asked
+    /// about each exception inside it, depth first, and an empty <see cref="AggregateException"/> is passed itself. The
+    /// strategy gets the exception as the operation threw it.
+    /// </param>
     /// <param name="timeProvider">The time provider for the delays and the timeouts.</param>
     /// <param name="attemptTimeout">
     /// The time limit for each attempt, or <see langword="null"/> for no limit. It must be greater than zero and not
@@ -147,7 +151,7 @@ internal static class RetryEngine
                 {
                     // A rejected attempt is a failure for the strategy and the policy, but it is not a call for the breaker.
                     if (strategy.GetRetryDelay(new RetryAttempt(attempt, failure, null, previousDelay)) is not TimeSpan rejectedDelay
-                        || !policy.CanRetry(failure))
+                        || !CanRetry(policy, failure))
                     {
                         throw SetOutcome(outcome, failure);
                     }
@@ -213,7 +217,7 @@ internal static class RetryEngine
 
                         // The policy is not consulted when the strategy has no retries left.
                         if (strategy.GetRetryDelay(new RetryAttempt(attempt, failure, null, previousDelay)) is not TimeSpan retryDelay
-                            || !policy.CanRetry(failure))
+                            || !CanRetry(policy, failure))
                         {
                             SetOutcome(outcome, failure);
                             if (ReferenceEquals(failure, exception))
@@ -336,7 +340,11 @@ internal static class RetryEngine
     /// <param name="operation">The operation.</param>
     /// <param name="caller">The caller's token. Its cancellation stops the call with an <see cref="OperationCanceledException"/>.</param>
     /// <param name="strategy">The strategy that decides whether to retry, and the delay before the retry.</param>
-    /// <param name="policy">The policy that decides whether an exception can be retried.</param>
+    /// <param name="policy">
+    /// The policy that decides whether an exception can be retried. For an <see cref="AggregateException"/>, it is asked
+    /// about each exception inside it, depth first, and an empty <see cref="AggregateException"/> is passed itself. The
+    /// strategy gets the exception as the operation threw it.
+    /// </param>
     /// <param name="timeProvider">The time provider for the delays.</param>
     /// <param name="onRetry">
     /// A callback that the engine calls before each delay, or <see langword="null"/>. If the callback returns a task
@@ -373,7 +381,7 @@ internal static class RetryEngine
                 // strategy has no retries left.
                 if ((exception is OperationCanceledException && caller.IsCancellationRequested)
                     || strategy.GetRetryDelay(new RetryAttempt(attempt, exception, null, previousDelay)) is not TimeSpan retryDelay
-                    || !policy.CanRetry(exception))
+                    || !CanRetry(policy, exception))
                 {
                     // Rethrow from inside the catch block so that the exception keeps its original stack trace.
                     throw;
@@ -424,6 +432,13 @@ internal static class RetryEngine
         }
 
         return CancellationCause.None;
+    }
+
+    // Asks the policy about the exceptions that the operation actually threw, as RetryTask and ReliableTaskRunner do:
+    // the exceptions inside an AggregateException, depth first, or the AggregateException itself if it is empty.
+    private static bool CanRetry(IRetryPolicy policy, Exception exception)
+    {
+        return exception is AggregateException aggregate ? policy.CanRetryAll(aggregate) : policy.CanRetry(exception);
     }
 
     // Reports a failed attempt to the breaker. The policy of the breaker is the caller's code. If it throws, the attempt
