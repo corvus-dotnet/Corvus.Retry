@@ -105,7 +105,9 @@ public class MyCount : IRetryStrategy
 These changes also apply to the built-in strategies:
 
 - **One instance for many calls.** In version 2.x, a strategy kept its count between calls. Thus, a second call with the same instance could get fewer tries. In version 3.0, each call gets all its tries.
-- **`Backoff` bounds.** `MinBackoff` and `MaxBackoff` have `init` accessors. Set them with an object initialiser: `new Backoff(5, TimeSpan.FromSeconds(1)) { MaxBackoff = TimeSpan.FromSeconds(10) }`. You cannot change them after you make the strategy.
+- **`Backoff` bounds.** `MinBackoff` and `MaxBackoff` have `init` accessors. Set them with an object initialiser: `new Backoff(5, TimeSpan.FromSeconds(1)) { MaxBackoff = TimeSpan.FromSeconds(10) }`. You cannot change them after you make the strategy. A negative value gives an `ArgumentOutOfRangeException`. If `MinBackoff` is greater than `MaxBackoff`, `GetRetryDelay` throws an `ArgumentException`. In version 2.x, the minimum was ignored.
+- **`Backoff` jitter.** The random part of the delay is no longer rounded down to whole milliseconds, and stays within ±20 % of `deltaBackoff` for every delta. In version 2.x, a delta of a few milliseconds gave a constant value.
+- **`RetryAttempt.AttemptNumber`.** An attempt number less than 1 gives an `ArgumentOutOfRangeException`. A custom engine must number attempts from 1.
 - **`Incremental` parameter name.** The constructor parameter `intialDelay` is now `initialDelay`. If you use the named argument `intialDelay:`, change it to `initialDelay:`.
 - **Exceptions for incorrect arguments.** A `maxTries` value of zero or less now gives an `ArgumentOutOfRangeException`, not an `ArgumentException`. A negative delay (`periodicity`, `initialDelay`, `step` or `deltaBackoff`) also gives an `ArgumentOutOfRangeException`. `ArgumentOutOfRangeException` derives from `ArgumentException`, thus a `catch (ArgumentException)` block continues to operate.
 - **Maximum delay.** Each strategy limits its delays to 0xFFFFFFFE ms (approximately 49.7 days). `Backoff` and `Incremental` do not overflow with a large number of tries.
@@ -147,6 +149,18 @@ If your code catches the exception of the operation after a cancellation, change
 
 The overloads without a cancellation token use `CancellationToken.None`. Thus, these rules have no effect on them.
 
+## Policies and AggregateException
+
+In version 3.0, every entry point asks the policy about the exceptions that the operation actually threw. If the operation throws an `AggregateException`, the policy is asked about each inner exception, depth first, and the exception is retried only if the policy accepts all of them. An `AggregateException` with no inner exceptions goes to the policy itself. In version 2.x, only `RetryTask` and `ReliableTaskRunner` did this; `Retriable` gave the `AggregateException` itself to the policy, thus `RetryPolicies.Handle<HttpRequestException>()` refused an `AggregateException` that contained an `HttpRequestException`.
+
+| Entry point | 2.x | 3.0 |
+|-------------|-----|-----|
+| `Retriable`, `ReliabilityPipeline` | The policy got the `AggregateException`. | The policy is asked about each inner exception. |
+| The hedging policy, the circuit breaker policy, the fallback policy | Not in 2.x. | The policy is asked about each inner exception. |
+| `RetryTask`, `ReliableTaskRunner` | The policy was asked about each inner exception. | No change. |
+
+The strategy, the `onRetry` callback, `OnHedging`, `CircuitStateChange.LastException` and `FallbackArgs<T>.Exception` receive the `AggregateException` as thrown. A custom policy that examines `AggregateException` itself must now examine its inner exceptions instead.
+
 ## Asynchronous operations with Retry and StartNew
 
 In version 3.0, the compiler gives the error CS0619 when you give an asynchronous operation to `Retriable.Retry` or to `RetryTask.Factory.StartNew`. In version 2.x, these calls compiled, but the retries did not operate:
@@ -160,6 +174,7 @@ In version 3.0, the compiler gives the error CS0619 when you give an asynchronou
 | `RetryTask.Factory.StartNew(() => DoAsync())`, where `DoAsync` returns a `ValueTask` or a `ValueTask<TResult>` | The task completed when `DoAsync` returned its `ValueTask`. A failure of the `ValueTask` was not retried. | Compile error CS0619. |
 | `Retriable.RetryAsync(async () => client.SendAsync(request))`, with no `await` in the lambda | The call bound to `RetryAsync<Task<HttpResponseMessage>>`. It completed when the lambda returned the inner task, and did not retry a failure of that task. | Compile error CS0619. |
 | `RetryTask<Task>.Factory.StartNew(...)`, or a different task type for `T` | The task completed when the function returned its task. A failure of that task was not retried. | `StartNew` throws a `NotSupportedException`, before it calls the function. The compiler cannot find this error. |
+| `RetryTask<object>.Factory.StartNew(() => DoAsync())`, or an interface type for `T` | The task completed when the function returned its task. A failure of that task was not retried. | The task faults with a `NotSupportedException` when a try returns a `Task` or a `ValueTask`. The function is not retried. |
 
 To correct the error, do these steps:
 
@@ -181,7 +196,8 @@ If an operation gives a `null` task to `Retriable.RetryAsync`, the attempt fails
 
 - A retry does not block a thread. In version 2.x, the delay blocked a thread, and each retry ran synchronously on that thread. In version 3.0, a delay task and continuations start each retry on the scheduler of the caller.
 - `RetryTask` has no retry callback, because the `Retrying` event is removed.
-- If the scheduler refuses to queue a retry, the refusal is a failure of that try. The strategy and the policy decide if `RetryTask` retries it. In version 2.0, the task faulted immediately.
+- If the scheduler refuses to queue a retry, the refusal is a failure of that try. The strategy and the policy decide if `RetryTask` retries it. In version 2.0, the task faulted immediately. If the scheduler refuses the first try, `StartNew` throws the `TaskSchedulerException`, as `Task.Factory.StartNew` does.
+- The strategy receives a `RetryAttempt` with the attempt number, the previous delay, and the `AggregateException` of the try. The policy is asked about each exception that the try actually threw.
 - If the operation stops, the task faults with the failures that the operation recorded. `RetryTask` keeps a maximum of 100 failures: the first 99 failures and the last failure. In version 2.x, it kept all the failures.
 - The task that `RetryTask` returns obeys `TaskCreationOptions.RunContinuationsAsynchronously`. In version 2.x, a continuation of the task could run synchronously in the retry code.
 - `RetryTask<T>.Factory.StartNew` throws a `NotSupportedException` when `T` is a task type. See [Asynchronous operations with Retry and StartNew](#asynchronous-operations-with-retry-and-startnew).
@@ -191,7 +207,7 @@ If an operation gives a `null` task to `Retriable.RetryAsync`, the attempt fails
 `ReliableTaskRunner` now implements `IAsyncDisposable`.
 
 - Use `await using` to stop the runner at the end of a scope. `DisposeAsync` stops the operation, waits until the run ends, and releases the `CancellationTokenSource`. It does not throw the exception of the run. A second call has no effect.
-- `StopAsync` cancels the token with `CancelAsync`. Thus, the callbacks of the token run on a thread-pool thread, not on the thread that calls `StopAsync`. In version 2.x, an exception from a callback came from `StopAsync` immediately. In version 3.0, the task from `StopAsync` faults with that exception.
+- `StopAsync` cancels the token with `CancelAsync`. Thus, the callbacks of the token run on a thread-pool thread, not on the thread that calls `StopAsync`. In version 2.x, an exception from a callback came from `StopAsync` immediately. In version 3.0, `StopAsync` still waits until the run ends, and its task then faults with the exceptions of the callbacks, followed by the exceptions of the run if the run failed. `DisposeAsync` completes successfully.
 - `StopAsync` returns a new task, not the task of the run. The task ends as the last run ended. If the run faulted with many exceptions, the task faults with all of them.
 - After `DisposeAsync`, `StopAsync` does not cancel the token. Its task ends as the last run ended.
 - If the policy throws an exception, the runner stops, and the task from `StopAsync` faults with that exception. In version 2.x, the runner stopped, and the exception was lost.
