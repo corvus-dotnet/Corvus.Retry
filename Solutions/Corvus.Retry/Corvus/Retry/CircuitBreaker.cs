@@ -299,7 +299,9 @@ public sealed class CircuitBreaker
     /// <para>
     /// A <see cref="RetryTimeoutException"/> is always a failure, and the breaker does not ask
     /// <see cref="CircuitBreakerOptions.Policy"/> about it. Another exception that the policy refuses is not a failure, so
-    /// the call counts as a success.
+    /// the call counts as a success. For an <see cref="AggregateException"/>, the breaker asks the policy about each
+    /// exception inside it, and the call is a failure only if the policy accepts all of them. The
+    /// <see cref="CircuitStateChange.LastException"/> of a change is the exception as the call threw it.
     /// </para>
     /// <para>
     /// If the policy throws, this method throws that exception, and does not count the call. The caller must then call
@@ -310,8 +312,9 @@ public sealed class CircuitBreaker
     internal CircuitStateChange? OnFailure(Exception? exception, int probe)
     {
         // The policy is the caller's code, so do not run it under the lock. The engine raises a RetryTimeoutException
-        // when an attempt times out, which is always a failure.
-        if (exception is not null && exception is not RetryTimeoutException && !this.policy.CanRetry(exception))
+        // when an attempt times out, which is always a failure. The policy is asked about the exceptions inside an
+        // AggregateException, not about the wrapper.
+        if (exception is not null && exception is not RetryTimeoutException && !this.IsFailure(exception))
         {
             return this.OnSuccess(probe);
         }
@@ -402,6 +405,13 @@ public sealed class CircuitBreaker
                 value,
                 $"The time must be at least {MinimumDuration} and not greater than {RetryDelay.MaxSupported}.");
         }
+    }
+
+    private bool IsFailure(Exception exception)
+    {
+        return exception is AggregateException aggregate
+            ? this.policy.CanRetryAll(aggregate)
+            : this.policy.CanRetry(exception);
     }
 
     private void Notify(CircuitStateChange? change)

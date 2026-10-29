@@ -477,6 +477,47 @@ public class CircuitBreakerTests
     }
 
     [TestMethod]
+    public async Task AnAggregateException_IsAFailureWhenThePolicyAcceptsTheExceptionsInsideIt()
+    {
+        CircuitBreaker breaker = this.NewBreaker(o => o with { Policy = RetryPolicies.Handle<HttpRequestException>() });
+        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        AggregateException failure = new(new HttpRequestException("Failure"));
+
+        AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(
+            () => pipeline.ExecuteAsync<string>(_ => throw failure).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        Assert.AreSame(failure, thrown);
+        Assert.AreEqual((1, 1), breaker.GetCounts());
+    }
+
+    [TestMethod]
+    public async Task AnAggregateExceptionWithNoInnerExceptions_IsPassedToThePolicyItself()
+    {
+        List<Exception> consulted = [];
+        CircuitBreaker breaker = this.NewBreaker(o => o with
+        {
+            Policy = RetryPolicies.FromPredicate(ex =>
+            {
+                lock (consulted)
+                {
+                    consulted.Add(ex);
+                }
+
+                return ex is AggregateException;
+            }),
+        });
+        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        AggregateException failure = new();
+
+        AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(
+            () => pipeline.ExecuteAsync<string>(_ => throw failure).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        Assert.AreSame(failure, thrown);
+        Assert.AreSame(failure, Assert.ContainsSingle(consulted));
+        Assert.AreEqual((1, 1), breaker.GetCounts());
+    }
+
+    [TestMethod]
     public async Task AResultThatIsAFailure_CountsAsAFailure()
     {
         CircuitBreaker breaker = this.NewBreaker();
