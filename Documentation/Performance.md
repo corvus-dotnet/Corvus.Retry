@@ -13,7 +13,8 @@ them.
   first attempt, the library allocates no memory for `Retry`. For `RetryAsync`, the only allocation is the returned
   `Task<T>`, which a hand-written `async` retry loop also allocates.
 - An asynchronous `Retriable` call that completes immediately takes 3 ns to 22 ns more than in 2.0.
-- `RetryTask` and `ReliableTaskRunner.StopAsync` are slower than in 2.0, because of changes to their behaviour.
+- `RetryTask` with failures allocates approximately 900 B more than in 2.0, and `ReliableTaskRunner.StopAsync` is
+  slower, because of changes to their behaviour.
 - A `ReliabilityPipeline` with no options adds approximately 26 ns to a call, and allocates no memory.
 - A hedged attempt after the first attempt starts on the thread pool. In the benchmark, this adds approximately 620 B
   and 2.4 µs to a hedged call.
@@ -120,9 +121,15 @@ We accept these results. Each one is the result of a change to the behaviour of 
   memory or 40 B less. In 3.0, one retry loop does all the asynchronous calls. This loop also examines the token, the
   timeouts and the callbacks, thus its state machine is larger. If the operation completes asynchronously, this
   difference is not important: the `DelayBenchmarks` asynchronous cases are 40% faster in 3.0.
-- **R2: `RetryTask` with failures takes 26% more time and allocates 233 B more.** Each `StartNew` overload allocates
-  16 B or 32 B more. In 3.0, a retry does not block a thread. The scheduler runs each retry as a continuation. The state
-  for each call is in the factory, not in the strategy.
+- **R2: `RetryTask` with failures allocates approximately 900 B more. The time is in the range of the noise.** In 3.0,
+  a retry does not block a thread. The scheduler runs each retry as a continuation, and a delay is a task with a
+  continuation. The state for each call is in the factory, not in the strategy. With the current benchmark code and
+  the short job, one run after the other, 2.0 gave 24.0 µs and 2,989 B, and 3.0 gave 23.9 µs and 3,882 B. In the same
+  runs, the time of the hand-written loop changed by a factor of 2, thus the two times are the same within the noise.
+  The 3,212 B in the table came from the old benchmark code, as for the `RetriableBenchmarks` results. The
+  `Exceptions` column shows 2 exceptions for each failure of `RetryTask`, and 1 for the hand-written loop. The runtime
+  raises a second first-chance exception inside `Task.ExecuteWithThreadLocal` for each task whose delegate throws. The
+  hand-written loop catches the exception inside its delegate, thus the runtime does not see it. 2.0 is the same.
 - **R3: `ReliableTaskRunner.StopAsync` takes approximately 1.9 µs, and allocates approximately 500 B more.**
   `StopAsync` uses `CancellationTokenSource.CancelAsync`, which continues on a different thread. It also keeps all
   the exceptions of the operation. The runner also keeps a task for the restart decision. `StopAsync` and
