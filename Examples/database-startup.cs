@@ -94,7 +94,7 @@ catch (InvalidOperationException ex)
 }
 
 AnsiConsole.WriteLine();
-AnsiConsole.MarkupLine("[grey]  Jitter makes each wait random: 100 ms to 3 times the last wait, at most 800 ms.[/]");
+AnsiConsole.MarkupLine("[grey]  Each wait is random: 100 ms to three times the last wait, capped at 800 ms.[/]");
 AnsiConsole.MarkupLine("[grey]  AnyExceptionPolicy would retry the wrong password 8 times before it gave up.[/]");
 
 static string Verdict(bool canRetry) => canRetry ? "[green]true[/]" : "[red]false[/]";

@@ -147,8 +147,9 @@ foreach (var behaviour in new[] { "fast", "slow", "fails" })
 }
 
 AnsiConsole.Write(regionTable);
-AnsiConsole.MarkupLine("[grey]  A failure starts the hedge at once; a slow answer starts it after the 200 ms delay.[/]");
-AnsiConsole.MarkupLine($"[grey]  Hedging trades extra calls ({hedgedService.Invocations} instead of {plainService.Invocations}) for a short tail. The operation must be idempotent. Whole demo: {total.Elapsed.TotalSeconds:F1} s.[/]");
+AnsiConsole.MarkupLine("[grey]  A failure starts the hedge at once; a slow answer, after the 200 ms delay.[/]");
+AnsiConsole.MarkupLine($"[grey]  Hedging trades extra calls ({hedgedService.Invocations} instead of {plainService.Invocations}) for a short tail.[/]");
+AnsiConsole.MarkupLine($"[grey]  The operation must be idempotent. Whole demo: {total.Elapsed.TotalSeconds:F1} s.[/]");
 
 static async Task RunAsync(int calls, ProgressTask bar, List<double> times, Func<Task> call)
 {

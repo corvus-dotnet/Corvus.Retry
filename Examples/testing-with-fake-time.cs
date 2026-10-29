@@ -124,7 +124,8 @@ catch (RetryTimeoutException ex)
 }
 
 AnsiConsole.Write(timeout);
-AnsiConsole.MarkupLine($"[grey]  {time.Elapsed + TimeSpan.FromSeconds(30):m\\:ss} of fake time passed in [white]{wallClock.ElapsedMilliseconds} ms[/] of real time. Backoff is randomised, so the delays differ from run to run.[/]");
+AnsiConsole.MarkupLine($"[grey]  {time.Elapsed + TimeSpan.FromSeconds(30):m\\:ss} of fake time passed in [white]{wallClock.ElapsedMilliseconds} ms[/] of real time.[/]");
+AnsiConsole.MarkupLine("[grey]  Backoff is randomised, so the delays differ from run to run.[/]");
 
 // A service that fails a set number of times, then succeeds. It answers at once: the only waiting is the pipeline's.
 public sealed class FlakyService(int failures)

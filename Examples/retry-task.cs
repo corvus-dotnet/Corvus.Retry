@@ -112,7 +112,8 @@ foreach (var (name, task, client) in new[] { ("report 9 (6 tries)", doomed, brok
 }
 
 AnsiConsole.Write(faults);
-AnsiConsole.MarkupLine("[grey]  The cap keeps a long retry from holding thousands of exceptions; the last failure is always kept.[/]");
+AnsiConsole.MarkupLine("[grey]  The cap keeps a long retry from holding thousands of exceptions.[/]");
+AnsiConsole.MarkupLine("[grey]  The last failure is always kept.[/]");
 
 // A report client with a synchronous API. It throws TransientException a set number of times, then succeeds.
 public sealed class FlakyClient(string name, int failures, int workMs = 120)

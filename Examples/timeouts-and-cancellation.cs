@@ -113,7 +113,7 @@ AnsiConsole.WriteLine();
 }
 
 AnsiConsole.MarkupLine("[grey]  Each 'token cancelled' row is the service seeing its token cancelled.[/]");
-AnsiConsole.MarkupLine("[grey]  The timeouts are cooperative: they work only if the operation passes the token on.[/]");
+AnsiConsole.MarkupLine("[grey]  Timeouts are cooperative: the operation must honour the token it receives.[/]");
 
 // Runs one call behind a spinner, so the waits are visible rather than dead time.
 static Task<string> RunAsync(string label, Func<Task<string>> call) =>

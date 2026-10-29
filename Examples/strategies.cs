@@ -39,7 +39,7 @@ StrategyRow[] rows =
     new("new Linear(500ms, 4)", new Linear(ms(500), maxTries: 4)),
     new("new Incremental(5, 1s, 2s)", new Incremental(5, s(1), s(2))),
     new("new Backoff(5, 1s)", new Backoff(5, s(1)), Random: true),
-    new("  { MaxBackoff = 10s }", new Backoff(6, s(1)) { MaxBackoff = s(10) }, Random: true),
+    new("  { MaxBackoff = 10s }", new Backoff(5, s(1)) { MaxBackoff = s(10) }, Random: true),
     new("new Exponential(6, 1s)", new Exponential(6, s(1))),
 
     // maxDelay caps the exponential growth, so the fifth retry waits 5 s rather than 16 s.

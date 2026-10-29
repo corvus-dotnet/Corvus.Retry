@@ -145,7 +145,8 @@ layers.AddRow("inner", "Hedging: 150 ms, 1 extra attempt", $"started {trace.Hedg
 layers.AddRow("inner", "CircuitBreaker", $"saw {service.Requests} requests, opened {trace.BreakerOpened} time, then rejected without a request");
 layers.AddRow("inner", "AttemptTimeout 1 s", "bounded each hedged attempt (never needed here)");
 AnsiConsole.Write(layers);
-AnsiConsole.MarkupLine("[grey]  Read the tree from the outside in: outer attempts contain hedged attempts; the breaker and the fallback end the story.[/]");
+AnsiConsole.MarkupLine("[grey]  Read the tree from the outside in: outer attempts contain hedged attempts;[/]");
+AnsiConsole.MarkupLine("[grey]  the breaker and the fallback end the story.[/]");
 
 public enum ServiceMode
 {
