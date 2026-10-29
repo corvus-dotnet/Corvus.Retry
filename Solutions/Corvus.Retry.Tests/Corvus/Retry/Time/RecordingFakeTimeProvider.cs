@@ -57,6 +57,11 @@ internal sealed class RecordingFakeTimeProvider : FakeTimeProvider
         }
     }
 
+    /// <summary>
+    /// Gets or sets an optional hook that the code that creates a timer calls, on its own thread, with the due time.
+    /// </summary>
+    public Action<TimeSpan>? OnTimerCreated { get; set; }
+
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
         ITimer timer = base.CreateTimer(callback, state, dueTime, period);
@@ -67,6 +72,7 @@ internal sealed class RecordingFakeTimeProvider : FakeTimeProvider
             this.delays.Add(dueTime);
         }
 
+        this.OnTimerCreated?.Invoke(dueTime);
         return timer;
     }
 

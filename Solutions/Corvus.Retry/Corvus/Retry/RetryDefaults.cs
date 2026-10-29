@@ -18,7 +18,8 @@ internal static class RetryDefaults
     /// </summary>
     /// <remarks>
     /// This is read on every call. Only tests replace it; a test that does must not run in parallel with other tests,
-    /// and must restore <see cref="TimeProvider.System"/> when it ends.
+    /// and must restore the provider that it replaced when it ends. The test assembly replaces the default with a
+    /// provider that fails any timer that would wait for real time.
     /// </remarks>
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 }
