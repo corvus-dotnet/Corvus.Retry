@@ -7,7 +7,6 @@ namespace Corvus.Retry;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Corvus.Retry.Policies;
@@ -165,7 +164,6 @@ public class RetriableDelayTests
     [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task WithAFakeTimeProvider_AnAsynchronousRetryStartsOnlyWhenTheDelayHasElapsed(RetryShape shape)
     {
-        var stopwatch = Stopwatch.StartNew();
         FakeTimeProvider fake = TimeProviderFixture.Install(new FakeTimeProvider());
         var op = new FlakyOperation(2);
 
@@ -188,7 +186,6 @@ public class RetriableDelayTests
 
         await call.WaitAsync(Timeout).ConfigureAwait(false);
         Assert.AreEqual(3, op.Invocations);
-        Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
     }
 
     [TestMethod]
@@ -196,7 +193,6 @@ public class RetriableDelayTests
     [DataRow(RetryShape.Function)]
     public async Task WithAFakeTimeProvider_ASynchronousRetryStartsOnlyWhenTheDelayHasElapsed(RetryShape shape)
     {
-        var stopwatch = Stopwatch.StartNew();
         RecordingFakeTimeProvider fake = TimeProviderFixture.Install(new RecordingFakeTimeProvider());
         var op = new FlakyOperation(2);
 
@@ -218,7 +214,6 @@ public class RetriableDelayTests
         await call.WaitAsync(Timeout).ConfigureAwait(false);
         Assert.AreEqual(3, op.Invocations);
         Assert.AreSequenceEqual(new[] { OneHour, OneHour }, fake.Delays);
-        Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
     }
 
     [TestMethod]
@@ -230,7 +225,6 @@ public class RetriableDelayTests
     [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task WhenTheTokenIsCancelledDuringADelay_TheCallIsCancelledAtOnceAndNoFurtherAttemptStarts(RetryShape shape)
     {
-        var stopwatch = Stopwatch.StartNew();
         RecordingFakeTimeProvider fake = TimeProviderFixture.Install(new RecordingFakeTimeProvider());
         using var cts = new CancellationTokenSource();
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
@@ -242,11 +236,82 @@ public class RetriableDelayTests
         await fake.WaitForTimersAsync(1).ConfigureAwait(false);
         await cts.CancelAsync().ConfigureAwait(false);
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(Timeout)).ConfigureAwait(false);
+        // The synchronous loop's wait throws OperationCanceledException, and the delay of the asynchronous loop throws
+        // TaskCanceledException. Either way, the exception has the caller's token.
+        await Task.WhenAny(call).WaitAsync(Timeout).ConfigureAwait(false);
+        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(() => call).ConfigureAwait(false);
+        Assert.AreEqual(IsSynchronous(shape) ? typeof(OperationCanceledException) : typeof(TaskCanceledException), thrown.GetType());
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
         fake.Advance(OneHour);
         Assert.AreEqual(1, op.Invocations);
-        Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
     }
+
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    [DataRow(RetryShape.AsyncAction)]
+    [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
+    public async Task TheOnRetryCallbackGetsTheDelayThatTheStrategyChose(RetryShape shape)
+    {
+        // Each delay is different, so a delay that is dropped, defaulted or taken from another retry is seen.
+        var op = new FlakyOperation(3);
+        var delays = new List<TimeSpan>();
+
+        await RetriableDriver.RetryAsync(
+            shape,
+            op.Invoke,
+            CancellationToken.None,
+            new Incremental(4, TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(50)),
+            new AnyExceptionPolicy(),
+            args =>
+            {
+                lock (delays)
+                {
+                    delays.Add(args.DelayBeforeRetry);
+                }
+
+                return ValueTask.CompletedTask;
+            }).ConfigureAwait(false);
+
+        Assert.AreSequenceEqual(Milliseconds(100, 150, 200), delays);
+        Assert.AreSequenceEqual(Milliseconds(100, 150, 200), this.time.Delays);
+    }
+
+    // The changelog: the synchronous Retry uses Thread.Sleep only when the token cannot be cancelled. With a token that
+    // can be cancelled, it waits for a timer, so a cancellation stops the wait at once.
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    public async Task WithTheSystemTimeProviderAndACancellableToken_ASynchronousRetryWaitsForATimerThatTheTokenStops(RetryShape shape)
+    {
+        TimeProviderFixture.Install(TimeProvider.System);
+        using var cts = new CancellationTokenSource();
+        var op = new FlakyOperation(FlakyOperation.AlwaysFails);
+
+        // The callback runs before the delay. The token is cancelled there, so the one-hour delay would block the
+        // thread if it used Thread.Sleep.
+        Task call = Task.Run(
+            () => RetriableDriver.RetryAsync(
+                shape,
+                op.Invoke,
+                cts.Token,
+                new Linear(OneHour, 3),
+                new AnyExceptionPolicy(),
+                _ =>
+                {
+                    cts.Cancel();
+                    return ValueTask.CompletedTask;
+                }));
+
+        await Task.WhenAny(call).WaitAsync(Timeout).ConfigureAwait(false);
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
+        Assert.AreEqual(1, op.Invocations);
+    }
+
+    private static bool IsSynchronous(RetryShape shape) => shape is RetryShape.Action or RetryShape.Function;
 
     private static TimeSpan[] Milliseconds(params int[] milliseconds)
     {

@@ -5,9 +5,15 @@
 namespace Corvus.Retry;
 
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
+using Corvus.Retry.Policies;
+using Corvus.Retry.Strategies;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -33,7 +39,86 @@ public class AsyncLambdaBindingTests
 {
     private const string ObsoleteAsError = "CS0619";
 
+    private const string AsyncRetryMessage = "Use RetryAsync";
+    private const string NestedTaskMessage = "Await the task in the operation.";
+
     private static readonly Lazy<ImmutableArray<MetadataReference>> References = new(LoadReferences);
+
+    /// <summary>
+    /// Gets a call to each public <c>Retry</c> and <c>RetryAsync</c> overload, with the arguments that the overload
+    /// takes, and an operation of each asynchronous return type that the overload must not accept.
+    /// </summary>
+    public static IEnumerable<object[]> GeneratedAsynchronousCalls
+    {
+        get
+        {
+            var calls = new HashSet<string>(StringComparer.Ordinal);
+            foreach (MethodInfo method in RetriableOverloads.All)
+            {
+                bool isRetry = RetriableOverloads.IsSynchronous(method);
+                string parameter = RetriableOverloads.OperationTakesToken(method) ? "ct" : "()";
+                string[] operations = isRetry
+                    ?
+                    [
+                        $"{parameter} => Task.CompletedTask",
+                        $"{parameter} => Task.FromResult(1)",
+                        $"{parameter} => default(ValueTask)",
+                        $"{parameter} => new ValueTask<int>(1)",
+                        $"async {parameter} => await Task.Yield()",
+                        $"async {parameter} => {{ await Task.Yield(); return 1; }}",
+                        $"async ValueTask {parameter} => await Task.Yield()",
+                        $"async ValueTask<int> {parameter} => {{ await Task.Yield(); return 1; }}",
+                    ]
+                    :
+                    [
+                        $"{parameter} => Task.FromResult(Task.CompletedTask)",
+                        $"{parameter} => Task.FromResult(Task.FromResult(1))",
+                        $"async {parameter} => Task.CompletedTask",
+                        $"async {parameter} => Task.FromResult(1)",
+                    ];
+
+                foreach (string arguments in OtherArguments(method))
+                {
+                    foreach (string operation in operations)
+                    {
+                        string call = $"Retriable.{method.Name}({operation}{arguments});";
+                        if (calls.Add(call))
+                        {
+                            yield return [call, isRetry ? AsyncRetryMessage : NestedTaskMessage];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets a call to each public <c>Retry</c> and <c>RetryAsync</c> overload with an operation that it accepts, and a
+    /// description of that overload.
+    /// </summary>
+    public static IEnumerable<object[]> GeneratedValidCalls
+    {
+        get
+        {
+            foreach (MethodInfo method in RetriableOverloads.All)
+            {
+                string operation = method.GetParameters()[0].ParameterType switch
+                {
+                    Type t when t == typeof(Action) => "() => { }",
+                    Type t when t == typeof(Func<string>) => "() => \"x\"",
+                    Type t when t == typeof(Func<Task>) => "async () => await Task.Yield()",
+                    Type t when t == typeof(Func<Task<string>>) => "async () => { await Task.Yield(); return \"x\"; }",
+                    Type t when t == typeof(Func<CancellationToken, Task>) => "async ct => await Task.Yield()",
+                    Type t when t == typeof(Func<CancellationToken, Task<string>>) => "async ct => { await Task.Yield(); return \"x\"; }",
+                    Type t => throw new NotSupportedException($"No operation is defined for {t}."),
+                };
+
+                // The last form has every argument, so that the call binds to this overload rather than a shorter one.
+                string arguments = OtherArguments(method).Last();
+                yield return [$"Retriable.{method.Name}({operation}{arguments});", RetriableOverloads.Describe(method)];
+            }
+        }
+    }
 
     [TestMethod]
     [DataRow("Retriable.Retry(async () => await Task.Yield());")]
@@ -50,6 +135,8 @@ public class AsyncLambdaBindingTests
     [DataRow("Retriable.Retry(() => default(ValueTask), CancellationToken.None, new Count(3), AnyExceptionPolicy.Default);")]
     [DataRow("Retriable.Retry(() => default(ValueTask), CancellationToken.None, new Count(3), AnyExceptionPolicy.Default, _ => ValueTask.CompletedTask);")]
     [DataRow("Retriable.Retry(() => new ValueTask<int>(1), CancellationToken.None, new Count(3), AnyExceptionPolicy.Default, _ => ValueTask.CompletedTask);")]
+    [DataRow("Retriable.Retry(() => new ValueTask<int>(1), CancellationToken.None, new Count(3), AnyExceptionPolicy.Default);")]
+    [DataRow("Retriable.Retry(() => default(ValueTask), CancellationToken.None);")]
     public void AnAsynchronousOperationPassedToRetryIsACompileError(string call)
     {
         ImmutableArray<Diagnostic> errors = Compile(call, out _);
@@ -95,6 +182,8 @@ public class AsyncLambdaBindingTests
     [DataRow("Retriable.RetryAsync(async ct => Task.CompletedTask, CancellationToken.None);", "RetryAsync received an operation that returns a task inside its task.")]
     [DataRow("Retriable.RetryAsync(async ct => Task.CompletedTask, CancellationToken.None, new Count(3), AnyExceptionPolicy.Default);", "RetryAsync received an operation that returns a task inside its task.")]
     [DataRow("Retriable.RetryAsync(async ct => Task.CompletedTask, CancellationToken.None, new Count(3), AnyExceptionPolicy.Default, false, _ => ValueTask.CompletedTask);", "RetryAsync received an operation that returns a task inside its task.")]
+    [DataRow("Retriable.RetryAsync(() => Task.FromResult(Task.CompletedTask));", "RetryAsync received an operation that returns a task inside its task.")]
+    [DataRow("Retriable.RetryAsync(async () => Task.CompletedTask, CancellationToken.None);", "RetryAsync received an operation that returns a task inside its task.")]
     public void AnOperationThatReturnsATaskInsideItsTaskIsACompileError(string call, string expectedMessage)
     {
         ImmutableArray<Diagnostic> errors = Compile(call, out _);
@@ -117,6 +206,12 @@ public class AsyncLambdaBindingTests
     [DataRow("Retriable.RetryAsync(async () => { await Task.Yield(); return \"x\"; });", "System.Func<System.Threading.Tasks.Task<T>>")]
     [DataRow("Retriable.RetryAsync(async ct => { await Task.Yield(); return 1; }, CancellationToken.None);", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>>")]
     [DataRow("Retriable.RetryAsync(() => { throw new InvalidOperationException(); });", "System.Func<System.Threading.Tasks.Task>")]
+    [DataRow("Retriable.Retry(() => 1, CancellationToken.None, new Count(3), AnyExceptionPolicy.Default, _ => ValueTask.CompletedTask);", "System.Func<T>")]
+    [DataRow("Retriable.RetryAsync(async () => { await Task.Yield(); return 1; }, CancellationToken.None, new Count(3), AnyExceptionPolicy.Default, false, _ => ValueTask.CompletedTask);", "System.Func<System.Threading.Tasks.Task<T>>")]
+    [DataRow("Retriable.RetryAsync(async () => await Task.Yield(), true);", "System.Func<System.Threading.Tasks.Task>")]
+    [DataRow("Retriable.RetryAsync(async ct => await Task.Yield(), CancellationToken.None);", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task>")]
+    [DataRow("Retriable.RetryAsync(async ct => await Task.Yield(), CancellationToken.None, new Count(3), AnyExceptionPolicy.Default);", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task>")]
+    [DataRow("Retriable.RetryAsync(async ct => await Task.Yield(), CancellationToken.None, new Count(3), AnyExceptionPolicy.Default, false, _ => ValueTask.CompletedTask);", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task>")]
     [DataRow("pipeline.ExecuteAsync(ct => new ValueTask<int>(1));", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<T>>")]
     [DataRow("pipeline.ExecuteAsync(async ct => { await Task.Yield(); return 1; });", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<T>>")]
     [DataRow("pipeline.ExecuteAsync(ct => ValueTask.CompletedTask);", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>")]
@@ -133,6 +228,72 @@ public class AsyncLambdaBindingTests
         Assert.IsNotNull(method);
         Assert.IsEmpty(method.OriginalDefinition.GetAttributes().Where(a => a.AttributeClass?.Name == nameof(ObsoleteAttribute)));
         Assert.AreEqual(expectedFirstParameterType, method.OriginalDefinition.Parameters[0].Type.ToDisplayString());
+    }
+
+    [TestMethod]
+    [DynamicData(nameof(GeneratedAsynchronousCalls))]
+    public void EveryNonObsoleteRetryOverloadThatTakesAnOperationHasATrapForEachAsyncReturnType(string call, string expectedMessage)
+    {
+        ImmutableArray<Diagnostic> errors = Compile(call, out IMethodSymbol? method);
+
+        Diagnostic error = Assert.ContainsSingle(errors);
+        Assert.AreEqual(ObsoleteAsError, error.Id);
+        Assert.Contains(expectedMessage, error.GetMessage());
+        Assert.IsNotNull(method);
+        Assert.IsNotEmpty(method.OriginalDefinition.GetAttributes().Where(a => a.AttributeClass?.Name == nameof(ObsoleteAttribute)));
+    }
+
+    [TestMethod]
+    [DynamicData(nameof(GeneratedValidCalls))]
+    public void EveryNonObsoleteRetryOverloadIsReachedByAnOperationThatItAccepts(string call, string overload)
+    {
+        MethodInfo expected = RetriableOverloads.Find(overload);
+
+        ImmutableArray<Diagnostic> errors = Compile(call, out IMethodSymbol? method);
+
+        Assert.IsEmpty(errors);
+        Assert.IsNotNull(method);
+        Assert.AreEqual(expected.Name, method.Name);
+        Assert.AreSequenceEqual(expected.GetParameters().Select(p => p.Name).ToArray(), method.OriginalDefinition.Parameters.Select(p => p.Name).ToArray());
+        Assert.AreEqual(expected.GetParameters()[0].ParameterType.Name, method.OriginalDefinition.Parameters[0].Type.MetadataName);
+
+        // Func<Task> and Func<Task<T>> have the same parameter names; only the generic overload has a type parameter.
+        Assert.AreEqual(expected.IsGenericMethod, method.OriginalDefinition.IsGenericMethod);
+    }
+
+    // The arguments after the operation, with a leading comma: once without an optional onRetry, and once with it.
+    private static IEnumerable<string> OtherArguments(MethodInfo method)
+    {
+        var required = new List<string>();
+        string? optional = null;
+        foreach (ParameterInfo parameter in method.GetParameters().Skip(1))
+        {
+            string argument = parameter.ParameterType switch
+            {
+                Type t when t == typeof(CancellationToken) => "CancellationToken.None",
+                Type t when t == typeof(IRetryStrategy) => "new Count(3)",
+                Type t when t == typeof(IRetryPolicy) => "AnyExceptionPolicy.Default",
+                Type t when t == typeof(bool) => "true",
+                Type t when t == typeof(Func<RetryEventArgs, ValueTask>) => "_ => ValueTask.CompletedTask",
+                Type t => throw new NotSupportedException($"No argument is defined for {t}."),
+            };
+
+            if (parameter.HasDefaultValue)
+            {
+                optional = argument;
+            }
+            else
+            {
+                required.Add(argument);
+            }
+        }
+
+        string prefix = string.Concat(required.Select(a => $", {a}"));
+        yield return prefix;
+        if (optional is not null)
+        {
+            yield return $"{prefix}, {optional}";
+        }
     }
 
     private static ImmutableArray<Diagnostic> Compile(string call, out IMethodSymbol? method)

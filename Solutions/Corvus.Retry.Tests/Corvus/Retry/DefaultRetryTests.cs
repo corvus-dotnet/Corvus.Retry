@@ -33,6 +33,11 @@ public class DefaultRetryTests
         await this.InvokeAsync(actionType, this.MakeOperation(0)).ConfigureAwait(false);
 
         Assert.AreEqual(1, this.callCount);
+        if (actionType is RetryActionType.Function or RetryActionType.AsyncFunction or RetryActionType.AsyncFunctionSpecifyingContinueContext or RetryActionType.AsyncFunctionWithToken)
+        {
+            Assert.IsNotNull(this.lastObjectReturnedByFunction);
+            Assert.AreSame(this.lastObjectReturnedByFunction, this.retryResult);
+        }
     }
 
     [TestMethod]
@@ -74,7 +79,9 @@ public class DefaultRetryTests
     [DataRow(RetryActionType.AsyncFunctionWithToken)]
     public async Task ValidateOperationArgument(RetryActionType actionType)
     {
-        await Assert.ThrowsExactlyAsync<ArgumentNullException>(() => this.InvokeAsync(actionType, null)).ConfigureAwait(false);
+        ArgumentNullException thrown = await Assert.ThrowsExactlyAsync<ArgumentNullException>(() => this.InvokeAsync(actionType, null)).ConfigureAwait(false);
+
+        Assert.AreEqual(actionType is RetryActionType.Action or RetryActionType.Function ? "func" : "asyncFunc", thrown.ParamName);
     }
 
     private Func<object> MakeOperation(int timesToThrow)
