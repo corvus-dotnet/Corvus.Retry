@@ -10,9 +10,10 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
 /// The extension members <c>Or</c>, <c>And</c> and <c>Not</c> give the logical result for each combination, and return
-/// a new policy without a change to the original. <see cref="RetryPolicyExtensions.CanRetryAll"/> is the rule
-/// <see cref="RetryTask"/> and <see cref="ReliableTaskRunner"/> use to ask a policy about a faulted task: every
-/// individual failure must be acceptable.
+/// a new policy without a change to the original. <see cref="RetryPolicyExtensions.CanRetryAll"/> is the rule that every
+/// engine (<see cref="Retriable"/>, the pipelines, hedging, the breaker, the fallback, <see cref="RetryTask"/> and
+/// <see cref="ReliableTaskRunner"/>) uses to ask a policy about an <see cref="AggregateException"/>: every individual
+/// failure must be acceptable.
 /// </summary>
 [TestClass]
 public class RetryPolicyExtensionsTests
@@ -132,5 +133,80 @@ public class RetryPolicyExtensionsTests
 
         Assert.IsFalse(policy.CanRetryAll(new AggregateException(rejected, neverAsked)));
         Assert.AreSame(rejected, Assert.ContainsSingle(policy.Consulted));
+    }
+
+    [TestMethod]
+    public void AFailureRefusedInsideANestedAggregate_StopsTheOuterSearch()
+    {
+        TimeoutException first = new();
+        InvalidOperationException rejected = new();
+        TimeoutException nestedNeverAsked = new();
+        TimeoutException outerNeverAsked = new();
+        RecordingRetryPolicy policy = new(ex => ex is not InvalidOperationException);
+
+        Assert.IsFalse(policy.CanRetryAll(new AggregateException(first, new AggregateException(rejected, nestedNeverAsked), outerNeverAsked)));
+
+        IReadOnlyList<Exception> consulted = policy.Consulted;
+        Assert.HasCount(2, consulted);
+        Assert.AreSame(first, consulted[0]);
+        Assert.AreSame(rejected, consulted[1]);
+    }
+
+    [TestMethod]
+    public void DeeplyNestedAggregatesAreSearchedDepthFirstInOrder()
+    {
+        Exception a = new TimeoutException("a");
+        Exception b = new TimeoutException("b");
+        Exception c = new TimeoutException("c");
+        Exception d = new TimeoutException("d");
+        RecordingRetryPolicy policy = new(true);
+
+        Assert.IsTrue(policy.CanRetryAll(new AggregateException(a, new AggregateException(new AggregateException(b), c), d)));
+
+        IReadOnlyList<Exception> consulted = policy.Consulted;
+        Assert.HasCount(4, consulted);
+        Assert.AreSame(a, consulted[0]);
+        Assert.AreSame(b, consulted[1]);
+        Assert.AreSame(c, consulted[2]);
+        Assert.AreSame(d, consulted[3]);
+    }
+
+    [TestMethod]
+    public void AnAggregateInsideTheInnerExceptionChainOfAFailureIsNotUnwrapped()
+    {
+        // Only AggregateException.InnerExceptions are unwrapped. Another exception is passed as thrown, with its
+        // InnerException chain; HandleInner is the policy that searches that chain.
+        InvalidOperationException failure = new("outer", new AggregateException(new TimeoutException()));
+        RecordingRetryPolicy policy = new(true);
+
+        Assert.IsTrue(policy.CanRetryAll(new AggregateException(failure)));
+        Assert.AreSame(failure, Assert.ContainsSingle(policy.Consulted));
+    }
+
+    [TestMethod]
+    public void WhenThePolicyThrows_TheExceptionPropagatesUnchangedAndNoLaterFailureIsAsked()
+    {
+        FormatException policyFailure = new("The policy failed.");
+        TimeoutException first = new();
+        TimeoutException neverAsked = new();
+        RecordingRetryPolicy policy = new(_ => throw policyFailure);
+
+        FormatException thrown = Assert.ThrowsExactly<FormatException>(() => policy.CanRetryAll(new AggregateException(first, neverAsked)));
+
+        Assert.AreSame(policyFailure, thrown);
+        Assert.AreSame(first, Assert.ContainsSingle(policy.Consulted));
+    }
+
+    [TestMethod]
+    public void WhenThePolicyThrowsForANestedFailure_TheExceptionPropagatesUnchanged()
+    {
+        FormatException policyFailure = new("The policy failed.");
+        TimeoutException nested = new();
+        RecordingRetryPolicy policy = new(ex => ex == nested ? throw policyFailure : true);
+
+        FormatException thrown = Assert.ThrowsExactly<FormatException>(
+            () => policy.CanRetryAll(new AggregateException(new TimeoutException(), new AggregateException(nested))));
+
+        Assert.AreSame(policyFailure, thrown);
     }
 }

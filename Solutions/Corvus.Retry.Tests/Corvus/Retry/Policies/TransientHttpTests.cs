@@ -7,6 +7,7 @@ namespace Corvus.Retry.Policies;
 using System;
 using System.Net;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -15,6 +16,16 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 /// or 500 and more, and a <see cref="RetryTimeoutException"/>. <see cref="RetryPolicies.IsTransientHttpResponse"/>
 /// gives the same results for responses.
 /// </summary>
+/// <remarks>
+/// <para>
+/// "500 or more" has no upper limit: a non-standard status of 600 or more is transient too.
+/// </para>
+/// <para>
+/// 501 (Not Implemented) and 505 (HTTP Version Not Supported) are transient, because they are 500 or more. This is
+/// a deliberate choice that the rows record. Many libraries treat them as permanent; a change to that would be a
+/// breaking change, and these rows must change with it.
+/// </para>
+/// </remarks>
 [TestClass]
 public class TransientHttpTests
 {
@@ -26,6 +37,10 @@ public class TransientHttpTests
     [DataRow(HttpStatusCode.ServiceUnavailable, true)]
     [DataRow(HttpStatusCode.GatewayTimeout, true)]
     [DataRow((HttpStatusCode)599, true)]
+    [DataRow((HttpStatusCode)600, true)] // "500 or more" has no upper limit (see the class remarks).
+    [DataRow((HttpStatusCode)999, true)]
+    [DataRow(HttpStatusCode.NotImplemented, true)] // 501 and 505 are transient by choice (see the class remarks).
+    [DataRow(HttpStatusCode.HttpVersionNotSupported, true)]
     [DataRow(HttpStatusCode.OK, false)]
     [DataRow(HttpStatusCode.BadRequest, false)]
     [DataRow(HttpStatusCode.Unauthorized, false)]
@@ -45,6 +60,10 @@ public class TransientHttpTests
     [DataRow(HttpStatusCode.ServiceUnavailable, true)]
     [DataRow(HttpStatusCode.GatewayTimeout, true)]
     [DataRow((HttpStatusCode)599, true)]
+    [DataRow((HttpStatusCode)600, true)] // "500 or more" has no upper limit (see the class remarks).
+    [DataRow((HttpStatusCode)999, true)]
+    [DataRow(HttpStatusCode.NotImplemented, true)] // 501 and 505 are transient by choice (see the class remarks).
+    [DataRow(HttpStatusCode.HttpVersionNotSupported, true)]
     [DataRow(HttpStatusCode.OK, false)]
     [DataRow(HttpStatusCode.BadRequest, false)]
     [DataRow(HttpStatusCode.Unauthorized, false)]
@@ -76,6 +95,15 @@ public class TransientHttpTests
         Assert.IsFalse(RetryPolicies.TransientHttp.CanRetry(new InvalidOperationException()));
         Assert.IsFalse(RetryPolicies.TransientHttp.CanRetry(new TimeoutException()));
         Assert.IsFalse(RetryPolicies.TransientHttp.CanRetry(new TaskCanceledException()));
+    }
+
+    [TestMethod]
+    public void AnOperationCanceledExceptionFromTheCallerIsRefused()
+    {
+        // HttpClient reports its own timeout as a TaskCanceledException (refused above); a bare
+        // OperationCanceledException, as a caller's token gives, is refused as well.
+        Assert.IsFalse(RetryPolicies.TransientHttp.CanRetry(new OperationCanceledException()));
+        Assert.IsFalse(RetryPolicies.TransientHttp.CanRetry(new OperationCanceledException(new CancellationToken(true))));
     }
 
     [TestMethod]

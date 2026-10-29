@@ -73,10 +73,21 @@ public static class RetryPolicyExtensions
     /// <returns>True if the policy accepts every individual failure, otherwise false.</returns>
     /// <remarks>
     /// <para>
+    /// This is the entry point through which every engine asks a policy about an <see cref="AggregateException"/>:
+    /// <see cref="Retriable"/>, the <see cref="ReliabilityPipeline"/> and <see cref="ReliabilityPipeline{T}"/> retry
+    /// loops, hedging, the circuit breaker, the fallback, <see cref="RetryTask"/> and <see cref="ReliableTaskRunner"/>.
+    /// An engine calls it for an <see cref="AggregateException"/>, and calls <see cref="IRetryPolicy.CanRetry"/>
+    /// directly for any other exception. The strategy's <see cref="Strategies.RetryAttempt.Exception"/> still
+    /// receives the exception as thrown.
+    /// </para>
+    /// <para>
     /// The policy is asked about the exceptions the operation actually threw, not the <see cref="AggregateException"/>
     /// wrappers around them, in depth-first order, stopping at the first it rejects. An
     /// <see cref="AggregateException"/> with no inner exceptions is itself the failure, so the policy is always
     /// consulted at least once.
+    /// </para>
+    /// <para>
+    /// An exception that the policy throws is not caught: it propagates unchanged to the engine.
     /// </para>
     /// <para>
     /// This uses plain loops and recursion rather than iterators or LINQ, so that it allocates nothing.
