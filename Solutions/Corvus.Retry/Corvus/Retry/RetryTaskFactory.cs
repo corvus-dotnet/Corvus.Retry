@@ -27,8 +27,34 @@ using Corvus.Retry.Strategies;
 /// </list>
 /// </para>
 /// <para>
-/// When the operation is not retried, the task faults with an <see cref="AggregateException"/> of the failures. It
-/// keeps at most 100 failures: the first 99 and the last.
+/// After a try fails, the factory first gives the strategy a <see cref="RetryAttempt"/>. Its
+/// <see cref="RetryAttempt.AttemptNumber"/> is the number of tries that have failed, starting at 1. Its
+/// <see cref="RetryAttempt.PreviousDelay"/> is the delay before the try that failed, or <see cref="TimeSpan.Zero"/>
+/// for the first try. Its <see cref="RetryAttempt.Exception"/> is the <see cref="AggregateException"/> of the task of
+/// the failed try. If the strategy returns <see langword="null"/>, the operation is not retried. Otherwise the policy
+/// is asked about the exceptions that the try actually threw: the exceptions in that <see cref="AggregateException"/>,
+/// and in any <see cref="AggregateException"/> that the operation threw. The operation is retried only if the policy
+/// accepts all of them.
+/// </para>
+/// <para>
+/// A try that cancels itself with an <see cref="OperationCanceledException"/> for a token other than the caller's has
+/// failed: the strategy is given the <see cref="AggregateException"/> that contains it, and the policy is asked about
+/// it. A try that acknowledges cancellation of the caller's token cancels the returned task, and the strategy and the
+/// policy are not asked. If the strategy or the policy throws, the returned task faults with that exception, or is
+/// cancelled if it is an <see cref="OperationCanceledException"/> and cancellation of the caller's token was requested.
+/// The operation is not retried.
+/// </para>
+/// <para>
+/// When the operation is not retried, the task faults with an <see cref="AggregateException"/> of the failures. Each
+/// failure is the exception that a try threw. An <see cref="AggregateException"/> that the operation threw is one
+/// failure: it is not flattened. The task keeps at most 100 failures: the first 99 and the last.
+/// </para>
+/// <para>
+/// Every try is queued to the same scheduler: the <c>scheduler</c> argument, or the <see cref="TaskScheduler.Current"/>
+/// of the caller of <c>StartNew</c>. If the scheduler refuses to queue the first try, <c>StartNew</c> throws the
+/// <see cref="TaskSchedulerException"/>, and the action does not run. If it refuses a retry, that try fails with the
+/// <see cref="TaskSchedulerException"/>, and the strategy and the policy decide whether to retry, as for any other
+/// failure. The strategy and the policy run on the thread pool, not on that scheduler.
 /// </para>
 /// </remarks>
 public sealed class RetryTaskFactory
@@ -50,6 +76,9 @@ public sealed class RetryTaskFactory
     /// </summary>
     /// <param name="action">The action for which to start a retriable tasks.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action action)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -63,6 +92,9 @@ public sealed class RetryTaskFactory
     /// <param name="action">The action for which to start a retriable tasks.</param>
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action action, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -76,6 +108,9 @@ public sealed class RetryTaskFactory
     /// <param name="action">The action for which to start a retriable tasks.</param>
     /// <param name="taskCreationOptions">The task creation options.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action action, TaskCreationOptions taskCreationOptions)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -89,6 +124,9 @@ public sealed class RetryTaskFactory
     /// <param name="action">The action for which to start a retriable tasks.</param>
     /// <param name="state">The state to pass to the task on creation.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action<object?> action, object? state)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -103,6 +141,9 @@ public sealed class RetryTaskFactory
     /// <param name="state">The state to pass to the task on creation.</param>
     /// <param name="taskCreationOptions">The task creation option.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action<object?> action, object? state, TaskCreationOptions taskCreationOptions)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -119,6 +160,9 @@ public sealed class RetryTaskFactory
     /// <param name="taskCreationOptions">The task creation options.</param>
     /// <param name="scheduler">The task scheduler.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action<object?> action, object? state, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -134,6 +178,9 @@ public sealed class RetryTaskFactory
     /// <param name="taskCreationOptions">The task creation options.</param>
     /// <param name="scheduler">The task scheduler.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action action, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -147,6 +194,9 @@ public sealed class RetryTaskFactory
     /// <param name="action">The action for which to start a retriable tasks.</param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action action, IRetryPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -162,6 +212,9 @@ public sealed class RetryTaskFactory
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action action, CancellationToken cancellationToken, IRetryPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -177,6 +230,9 @@ public sealed class RetryTaskFactory
     /// <param name="taskCreationOptions">The task creation options.</param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action action, TaskCreationOptions taskCreationOptions, IRetryPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -192,6 +248,9 @@ public sealed class RetryTaskFactory
     /// <param name="state">The state to pass to the task on creation.</param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action<object?> action, object? state, IRetryPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -208,6 +267,9 @@ public sealed class RetryTaskFactory
     /// <param name="taskCreationOptions">The task creation options.</param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action<object?> action, object? state, TaskCreationOptions taskCreationOptions, IRetryPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -226,6 +288,9 @@ public sealed class RetryTaskFactory
     /// <param name="scheduler">The task scheduler.</param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action<object?> action, object? state, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -243,6 +308,9 @@ public sealed class RetryTaskFactory
     /// <param name="scheduler">The task scheduler.</param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action action, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -255,8 +323,13 @@ public sealed class RetryTaskFactory
     /// Start a new retriable task for an action.
     /// </summary>
     /// <param name="action">The action for which to start a retriable tasks.</param>
-    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="strategy">
+    /// The retry strategy. The remarks on <see cref="RetryTaskFactory"/> describe the <see cref="RetryAttempt"/> it is given.
+    /// </param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action action, IRetryStrategy strategy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -270,8 +343,13 @@ public sealed class RetryTaskFactory
     /// </summary>
     /// <param name="action">The action for which to start a retriable tasks.</param>
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
-    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="strategy">
+    /// The retry strategy. The remarks on <see cref="RetryTaskFactory"/> describe the <see cref="RetryAttempt"/> it is given.
+    /// </param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action action, CancellationToken cancellationToken, IRetryStrategy strategy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -285,8 +363,13 @@ public sealed class RetryTaskFactory
     /// </summary>
     /// <param name="action">The action for which to start a retriable tasks.</param>
     /// <param name="taskCreationOptions">The task creation options.</param>
-    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="strategy">
+    /// The retry strategy. The remarks on <see cref="RetryTaskFactory"/> describe the <see cref="RetryAttempt"/> it is given.
+    /// </param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action action, TaskCreationOptions taskCreationOptions, IRetryStrategy strategy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -300,8 +383,13 @@ public sealed class RetryTaskFactory
     /// </summary>
     /// <param name="action">The action for which to start a retriable tasks.</param>
     /// <param name="state">The state to pass to the task on creation.</param>
-    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="strategy">
+    /// The retry strategy. The remarks on <see cref="RetryTaskFactory"/> describe the <see cref="RetryAttempt"/> it is given.
+    /// </param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action<object?> action, object? state, IRetryStrategy strategy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -316,8 +404,13 @@ public sealed class RetryTaskFactory
     /// <param name="action">The action for which to start a retriable tasks.</param>
     /// <param name="state">The state to pass to the task on creation.</param>
     /// <param name="taskCreationOptions">The task creation options.</param>
-    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="strategy">
+    /// The retry strategy. The remarks on <see cref="RetryTaskFactory"/> describe the <see cref="RetryAttempt"/> it is given.
+    /// </param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action<object?> action, object? state, TaskCreationOptions taskCreationOptions, IRetryStrategy strategy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -334,8 +427,13 @@ public sealed class RetryTaskFactory
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
     /// <param name="taskCreationOptions">The task creation options.</param>
     /// <param name="scheduler">The task scheduler.</param>
-    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="strategy">
+    /// The retry strategy. The remarks on <see cref="RetryTaskFactory"/> describe the <see cref="RetryAttempt"/> it is given.
+    /// </param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action<object?> action, object? state, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -351,8 +449,13 @@ public sealed class RetryTaskFactory
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
     /// <param name="taskCreationOptions">The task creation options.</param>
     /// <param name="scheduler">The task scheduler.</param>
-    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="strategy">
+    /// The retry strategy. The remarks on <see cref="RetryTaskFactory"/> describe the <see cref="RetryAttempt"/> it is given.
+    /// </param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action action, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -365,9 +468,14 @@ public sealed class RetryTaskFactory
     /// Start a new retriable task for an action.
     /// </summary>
     /// <param name="action">The action for which to start a retriable tasks.</param>
-    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="strategy">
+    /// The retry strategy. The remarks on <see cref="RetryTaskFactory"/> describe the <see cref="RetryAttempt"/> it is given.
+    /// </param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action action, IRetryStrategy strategy, IRetryPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -382,9 +490,14 @@ public sealed class RetryTaskFactory
     /// </summary>
     /// <param name="action">The action for which to start a retriable tasks.</param>
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
-    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="strategy">
+    /// The retry strategy. The remarks on <see cref="RetryTaskFactory"/> describe the <see cref="RetryAttempt"/> it is given.
+    /// </param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action action, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -399,9 +512,14 @@ public sealed class RetryTaskFactory
     /// </summary>
     /// <param name="action">The action for which to start a retriable tasks.</param>
     /// <param name="taskCreationOptions">The task creation options.</param>
-    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="strategy">
+    /// The retry strategy. The remarks on <see cref="RetryTaskFactory"/> describe the <see cref="RetryAttempt"/> it is given.
+    /// </param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action action, TaskCreationOptions taskCreationOptions, IRetryStrategy strategy, IRetryPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -416,9 +534,14 @@ public sealed class RetryTaskFactory
     /// </summary>
     /// <param name="action">The action for which to start a retriable tasks.</param>
     /// <param name="state">The state to pass to the task on creation.</param>
-    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="strategy">
+    /// The retry strategy. The remarks on <see cref="RetryTaskFactory"/> describe the <see cref="RetryAttempt"/> it is given.
+    /// </param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action<object?> action, object? state, IRetryStrategy strategy, IRetryPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -434,9 +557,14 @@ public sealed class RetryTaskFactory
     /// <param name="action">The action for which to start a retriable tasks.</param>
     /// <param name="state">The state to pass to the task on creation.</param>
     /// <param name="taskCreationOptions">The task creation options.</param>
-    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="strategy">
+    /// The retry strategy. The remarks on <see cref="RetryTaskFactory"/> describe the <see cref="RetryAttempt"/> it is given.
+    /// </param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action<object?> action, object? state, TaskCreationOptions taskCreationOptions, IRetryStrategy strategy, IRetryPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -452,9 +580,14 @@ public sealed class RetryTaskFactory
     /// <param name="action">The action for which to start a retriable tasks.</param>
     /// <param name="state">The state to pass to the task on creation.</param>
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
-    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="strategy">
+    /// The retry strategy. The remarks on <see cref="RetryTaskFactory"/> describe the <see cref="RetryAttempt"/> it is given.
+    /// </param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action<object?> action, object? state, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -472,12 +605,18 @@ public sealed class RetryTaskFactory
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
     /// <param name="taskCreationOptions">The task creation options.</param>
     /// <param name="scheduler">The task scheduler.</param>
-    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="strategy">
+    /// The retry strategy. The remarks on <see cref="RetryTaskFactory"/> describe the <see cref="RetryAttempt"/> it is given.
+    /// </param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action<object?> action, object? state, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy, IRetryPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(action);
+        ArgumentNullException.ThrowIfNull(scheduler);
         ArgumentNullException.ThrowIfNull(strategy);
         ArgumentNullException.ThrowIfNull(policy);
 
@@ -491,12 +630,18 @@ public sealed class RetryTaskFactory
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
     /// <param name="taskCreationOptions">The task creation options.</param>
     /// <param name="scheduler">The task scheduler.</param>
-    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="strategy">
+    /// The retry strategy. The remarks on <see cref="RetryTaskFactory"/> describe the <see cref="RetryAttempt"/> it is given.
+    /// </param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>A task which completes when the action is complete.</returns>
+    /// <exception cref="TaskSchedulerException">
+    /// The scheduler refused to queue the first try. See the remarks on <see cref="RetryTaskFactory"/>.
+    /// </exception>
     public Task StartNew(Action action, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy, IRetryPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(action);
+        ArgumentNullException.ThrowIfNull(scheduler);
         ArgumentNullException.ThrowIfNull(strategy);
         ArgumentNullException.ThrowIfNull(policy);
 
@@ -660,7 +805,9 @@ public sealed class RetryTaskFactory
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
     /// <param name="taskCreationOptions">The caller's task creation options.</param>
     /// <param name="scheduler">The scheduler on which every try runs.</param>
-    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="strategy">
+    /// The retry strategy. The remarks on <see cref="RetryTaskFactory"/> describe the <see cref="RetryAttempt"/> it is given.
+    /// </param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>
     /// A task that completes with the result of the first successful try; faults with the exceptions of the failed

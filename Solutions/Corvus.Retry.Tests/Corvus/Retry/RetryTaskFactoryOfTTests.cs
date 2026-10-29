@@ -28,6 +28,24 @@ public class RetryTaskFactoryOfTTests
 
     private readonly RetryTaskFactory<string> factory = new();
 
+    /// <summary>
+    /// A kind of task that a function can return as a value of a type that is not a task type.
+    /// </summary>
+    public enum TaskValue
+    {
+        /// <summary>A <see cref="System.Threading.Tasks.Task"/>.</summary>
+        Task,
+
+        /// <summary>A <see cref="Task{TResult}"/>.</summary>
+        TaskOfInt,
+
+        /// <summary>A <see cref="System.Threading.Tasks.ValueTask"/>.</summary>
+        ValueTask,
+
+        /// <summary>A <see cref="ValueTask{TResult}"/>.</summary>
+        ValueTaskOfInt,
+    }
+
     [TestMethod]
     [DynamicData(nameof(RetryTaskFactoryDriver.All), typeof(RetryTaskFactoryDriver))]
     public async Task WhenTheFunctionFailsTwiceThenSucceeds_TheResultOfTheThirdTryIsReturned(StartNewOverload overload, StartNewDefaults defaults)
@@ -41,22 +59,60 @@ public class RetryTaskFactoryOfTTests
     }
 
     [TestMethod]
-    public async Task WithAttachedToParent_TheResultOfTheSuccessfulTryIsReturnedAndTheParentIsNotFaulted()
+    public async Task WithAttachedToParent_TheParentDoesNotCompleteUntilTheRetriedFunctionHasAndIsNotFaulted()
     {
+        using ManualResetEventSlim gate = new();
         FlakyOperation operation = new(2);
-        Task<string>? retryTask = null;
 
-        Task parent = Task.Factory.StartNew(
-            () => retryTask = this.factory.StartNew(operation.Invoke, TaskCreationOptions.AttachedToParent, new Count(5), new AnyExceptionPolicy()),
-            CancellationToken.None,
-            TaskCreationOptions.None,
-            TaskScheduler.Default);
+        // The first two tries fail; the third waits for the gate.
+        (Task parent, Task<TaskStatus> statusWhenItsBodyHasReturned, Task<Task<string>> started) = ParentTask.Run(
+            () => this.factory.StartNew(
+                () =>
+                {
+                    string result = operation.Invoke();
+                    Assert.IsTrue(gate.Wait(Timeout));
+                    return result;
+                },
+                TaskCreationOptions.AttachedToParent,
+                new Count(5),
+                new AnyExceptionPolicy()));
 
+        try
+        {
+            // The parent's body has returned, but the parent waits for the retried function.
+            Assert.AreEqual(TaskStatus.WaitingForChildrenToComplete, await statusWhenItsBodyHasReturned.WaitAsync(Timeout).ConfigureAwait(false));
+        }
+        finally
+        {
+            gate.Set();
+        }
+
+        // The parent saw only the successful outcome, not the failures of the tries that were retried.
         await parent.WaitAsync(Timeout).ConfigureAwait(false);
-
         Assert.AreEqual(TaskStatus.RanToCompletion, parent.Status);
-        Assert.IsNotNull(retryTask);
-        Assert.AreEqual("attempt-3", retryTask.Result);
+        Assert.AreEqual("attempt-3", await (await started.ConfigureAwait(false)).ConfigureAwait(false));
+    }
+
+    [TestMethod]
+    public async Task WithAttachedToParent_WhenEveryTryFails_TheParentFaultsWithTheOutcome()
+    {
+        FlakyOperation operation = new(FlakyOperation.AlwaysFails);
+
+        (Task parent, _, Task<Task<string>> started) = ParentTask.Run(
+            () => this.factory.StartNew(operation.Invoke, TaskCreationOptions.AttachedToParent, new Count(3), new AnyExceptionPolicy()));
+
+        AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(() => parent.WaitAsync(Timeout)).ConfigureAwait(false);
+
+        // The parent reports the retried function's failure once, not each try's.
+        Task<string> retryTask = await started.ConfigureAwait(false);
+        AggregateException outcome = Assert.IsInstanceOfType<AggregateException>(Assert.ContainsSingle(retryTask.Exception!.InnerExceptions));
+        Assert.AreSame(outcome, Assert.ContainsSingle(thrown.InnerExceptions));
+        Assert.AreEqual(3, operation.Invocations);
+        Assert.HasCount(3, outcome.InnerExceptions);
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.AreSame(operation.Thrown[i], outcome.InnerExceptions[i]);
+        }
     }
 
     [TestMethod]
@@ -103,11 +159,14 @@ public class RetryTaskFactoryOfTTests
             new Count(5),
             policy);
 
-        await Assert.ThrowsExactlyAsync<AggregateException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
+        AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
 
         // There is nothing to flatten, so the policy is asked about the AggregateException itself, and says no.
         Assert.AreEqual(1, invocations);
         Assert.AreSame(failure, Assert.ContainsSingle(policy.Consulted));
+
+        // The failure is not lost: the task reports that AggregateException, not an empty one.
+        Assert.AreSame(failure, Assert.ContainsSingle(thrown.InnerExceptions));
     }
 
     [TestMethod]
@@ -244,6 +303,97 @@ public class RetryTaskFactoryOfTTests
         AssertStartNewThrowsBeforeTheFunctionRuns(overload, defaults, () => ValueTask.CompletedTask);
         AssertStartNewThrowsBeforeTheFunctionRuns(overload, defaults, () => new ValueTask<int>(1));
     }
+
+    [TestMethod]
+    [DynamicData(nameof(RetryTaskFactoryDriver.All), typeof(RetryTaskFactoryDriver))]
+    public async Task WhenTIsObjectAndTheFunctionReturnsATask_TheTaskFaultsWithNotSupportedExceptionAndIsNotRetried(StartNewOverload overload, StartNewDefaults defaults)
+    {
+        // T is not a task type, so StartNew cannot refuse the call. The returned value is checked instead.
+        int invocations = 0;
+        RecordingRetryPolicy policy = new(true);
+
+        Task<object> task = RetryTaskFactoryDriver.StartNew(
+            new RetryTaskFactory<object>(),
+            overload,
+            defaults,
+            _ =>
+            {
+                Interlocked.Increment(ref invocations);
+                return Task.CompletedTask;
+            },
+            State,
+            CancellationToken.None,
+            new Count(5),
+            policy);
+
+        NotSupportedException thrown = await Assert.ThrowsExactlyAsync<NotSupportedException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
+        Assert.AreEqual(TaskStatus.Faulted, task.Status);
+        Assert.AreSame(thrown, Assert.ContainsSingle(task.Exception!.InnerExceptions));
+        Assert.Contains("Retriable.RetryAsync", thrown.Message);
+        Assert.AreEqual(1, Volatile.Read(ref invocations));
+        Assert.IsEmpty(policy.Consulted);
+    }
+
+    [TestMethod]
+    [DataRow(TaskValue.Task)]
+    [DataRow(TaskValue.TaskOfInt)]
+    [DataRow(TaskValue.ValueTask)]
+    [DataRow(TaskValue.ValueTaskOfInt)]
+    public async Task WhenTheFunctionReturnsATaskAsAWiderType_TheTaskFaultsWithNotSupportedExceptionAndIsNotRetried(TaskValue value)
+    {
+        // Every type here is one that the value converts to: object, or an interface that the task type implements.
+        await AssertFaultsWithoutRetrying<object>(() => CreateTaskValue(value)).ConfigureAwait(false);
+        switch (value)
+        {
+            case TaskValue.Task or TaskValue.TaskOfInt:
+                await AssertFaultsWithoutRetrying<IAsyncResult>(() => (IAsyncResult)CreateTaskValue(value)).ConfigureAwait(false);
+                await AssertFaultsWithoutRetrying<IDisposable>(() => (IDisposable)CreateTaskValue(value)).ConfigureAwait(false);
+                break;
+            case TaskValue.ValueTask:
+                await AssertFaultsWithoutRetrying<IEquatable<ValueTask>>(() => ValueTask.CompletedTask).ConfigureAwait(false);
+                break;
+            default:
+                await AssertFaultsWithoutRetrying<IEquatable<ValueTask<int>>>(() => new ValueTask<int>(1)).ConfigureAwait(false);
+                break;
+        }
+
+        static async Task AssertFaultsWithoutRetrying<T>(Func<T> function)
+        {
+            int invocations = 0;
+            RecordingRetryPolicy policy = new(true);
+
+            Task<T> task = new RetryTaskFactory<T>().StartNew(
+                () =>
+                {
+                    Interlocked.Increment(ref invocations);
+                    return function();
+                },
+                new Count(5),
+                policy);
+
+            await Assert.ThrowsExactlyAsync<NotSupportedException>(() => task.WaitAsync(Timeout), typeof(T).Name).ConfigureAwait(false);
+            Assert.AreEqual(1, Volatile.Read(ref invocations), typeof(T).Name);
+            Assert.IsEmpty(policy.Consulted, typeof(T).Name);
+        }
+    }
+
+    [TestMethod]
+    public async Task WhenTIsObjectAndTheFunctionReturnsAValueThatIsNotATask_TheResultIsReturned()
+    {
+        object value = new();
+
+        object result = await new RetryTaskFactory<object>().StartNew(() => value, new Count(5), new AnyExceptionPolicy()).WaitAsync(Timeout).ConfigureAwait(false);
+
+        Assert.AreSame(value, result);
+    }
+
+    private static object CreateTaskValue(TaskValue value) => value switch
+    {
+        TaskValue.Task => Task.CompletedTask,
+        TaskValue.TaskOfInt => Task.FromResult(1),
+        TaskValue.ValueTask => ValueTask.CompletedTask,
+        _ => new ValueTask<int>(1),
+    };
 
     private static void AssertStartNewThrowsBeforeTheFunctionRuns<T>(StartNewOverload overload, StartNewDefaults defaults, Func<T> function)
     {
