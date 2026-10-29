@@ -9,6 +9,7 @@ using System;
 /// <summary>
 /// Controls the library's process-wide <see cref="RetryDefaults.TimeProvider"/>. Any test class that calls
 /// <see cref="Install{T}(T)"/> must be marked [DoNotParallelize] and call <see cref="Reset"/> in [TestCleanup].
+/// <see cref="TimeProviderFixtureTests"/> checks both rules.
 /// </summary>
 internal static class TimeProviderFixture
 {
@@ -19,8 +20,11 @@ internal static class TimeProviderFixture
         return timeProvider;
     }
 
+    /// <summary>
+    /// Installs the <see cref="ForbiddenTimeProvider"/>, which fails a test that waits for real time.
+    /// </summary>
     public static void Reset()
     {
-        RetryDefaults.TimeProvider = TimeProvider.System;
+        RetryDefaults.TimeProvider = ForbiddenTimeProvider.Instance;
     }
 }

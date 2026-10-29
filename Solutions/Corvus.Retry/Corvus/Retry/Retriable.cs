@@ -30,6 +30,14 @@ using Corvus.Retry.Strategies;
 /// token is cancelled, and the token also stops a delay between attempts. Either way, the call throws an
 /// <see cref="OperationCanceledException"/>. A cancellation that the token caused is never retried.
 /// </para>
+/// <para>
+/// The policy is asked about the exceptions that the operation actually threw, as <see cref="RetryTask"/> does. When
+/// the operation throws an <see cref="AggregateException"/>, the policy is asked about each exception inside it, depth
+/// first, until it refuses one, and the operation is retried only if the policy accepts all of them. An
+/// <see cref="AggregateException"/> with no inner exceptions is passed to the policy itself. The strategy gets the
+/// exception as the operation threw it, in <see cref="RetryAttempt.Exception"/>, and a call that is not retried throws
+/// that exception.
+/// </para>
 /// </remarks>
 public static class Retriable
 {
@@ -163,7 +171,10 @@ public static class Retriable
     /// <param name="func">The function to retry.</param>
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
     /// <param name="strategy">The retry strategy to use.</param>
-    /// <param name="policy">The retry policy to use.</param>
+    /// <param name="policy">
+    /// The retry policy. It is asked about the exceptions that the operation threw, not about an
+    /// <see cref="AggregateException"/> that contains them. See the remarks of <see cref="Retriable"/>.
+    /// </param>
     /// <param name="onRetry">
     /// An optional callback that is called before the delay of each retry. It is not called for the final failure. If
     /// it returns a task that is not complete, the thread waits for it. An exception from the callback stops the retries.
@@ -187,7 +198,10 @@ public static class Retriable
     /// <param name="asyncFunc">The asynchronous function to retry.</param>
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
     /// <param name="strategy">The retry strategy to use.</param>
-    /// <param name="policy">The retry policy to use.</param>
+    /// <param name="policy">
+    /// The retry policy. It is asked about the exceptions that the operation threw, not about an
+    /// <see cref="AggregateException"/> that contains them. See the remarks of <see cref="Retriable"/>.
+    /// </param>
     /// <returns>A task which, when complete, provides the result of the function.</returns>
     /// <remarks>This function does not continue on the captured context. See the overload if you want to override this default behaviour.</remarks>
     /// <exception cref="InvalidOperationException">
@@ -227,7 +241,10 @@ public static class Retriable
     /// <param name="asyncFunc">The asynchronous function to retry.</param>
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
     /// <param name="strategy">The retry strategy.</param>
-    /// <param name="policy">The retry policy.</param>
+    /// <param name="policy">
+    /// The retry policy. It is asked about the exceptions that the operation threw, not about an
+    /// <see cref="AggregateException"/> that contains them. See the remarks of <see cref="Retriable"/>.
+    /// </param>
     /// <param name="continueOnCapturedContext">Determines whether to continue on the captured context or not.</param>
     /// <param name="onRetry">
     /// An optional callback that is called, and awaited, before the delay of each retry. It is not called for the final
@@ -275,7 +292,10 @@ public static class Retriable
     /// </param>
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
     /// <param name="strategy">The retry strategy.</param>
-    /// <param name="policy">The retry policy.</param>
+    /// <param name="policy">
+    /// The retry policy. It is asked about the exceptions that the operation threw, not about an
+    /// <see cref="AggregateException"/> that contains them. See the remarks of <see cref="Retriable"/>.
+    /// </param>
     /// <returns>A task which, when complete, provides the result of the function.</returns>
     /// <remarks>This function does not continue on the captured context. See the overload if you want to override this default behaviour.</remarks>
     /// <exception cref="InvalidOperationException">
@@ -299,7 +319,10 @@ public static class Retriable
     /// </param>
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
     /// <param name="strategy">The retry strategy.</param>
-    /// <param name="policy">The retry policy.</param>
+    /// <param name="policy">
+    /// The retry policy. It is asked about the exceptions that the operation threw, not about an
+    /// <see cref="AggregateException"/> that contains them. See the remarks of <see cref="Retriable"/>.
+    /// </param>
     /// <param name="continueOnCapturedContext">Determines whether to continue on the captured context or not.</param>
     /// <param name="onRetry">
     /// An optional callback that is called, and awaited, before the delay of each retry. It is not called for the final
@@ -324,7 +347,10 @@ public static class Retriable
     /// <param name="func">The operation to retry.</param>
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
     /// <param name="strategy">The retry strategy.</param>
-    /// <param name="policy">The retry policy.</param>
+    /// <param name="policy">
+    /// The retry policy. It is asked about the exceptions that the operation threw, not about an
+    /// <see cref="AggregateException"/> that contains them. See the remarks of <see cref="Retriable"/>.
+    /// </param>
     /// <param name="onRetry">
     /// An optional callback that is called before the delay of each retry. It is not called for the final failure. If
     /// it returns a task that is not complete, the thread waits for it. An exception from the callback stops the retries.
@@ -346,7 +372,10 @@ public static class Retriable
     /// <param name="asyncFunc">The asynchronous function to retry.</param>
     /// <param name="cancellationToken">The token with which to signal cancellation.</param>
     /// <param name="strategy">The retry strategy.</param>
-    /// <param name="policy">The retry policy.</param>
+    /// <param name="policy">
+    /// The retry policy. It is asked about the exceptions that the operation threw, not about an
+    /// <see cref="AggregateException"/> that contains them. See the remarks of <see cref="Retriable"/>.
+    /// </param>
     /// <returns>A task which completes when the operation is complete.</returns>
     /// <remarks>This function does not continue on the captured context. See the overload if you want to override this default behaviour.</remarks>
     /// <exception cref="InvalidOperationException">
@@ -367,7 +396,10 @@ public static class Retriable
     /// <param name="asyncFunc">The asynchronous function to retry.</param>
     /// <param name="cancellationToken">The token with which to signal cancellation.</param>
     /// <param name="strategy">The retry strategy.</param>
-    /// <param name="policy">The retry policy.</param>
+    /// <param name="policy">
+    /// The retry policy. It is asked about the exceptions that the operation threw, not about an
+    /// <see cref="AggregateException"/> that contains them. See the remarks of <see cref="Retriable"/>.
+    /// </param>
     /// <param name="continueOnCapturedContext">Whether to continue on the captured context.</param>
     /// <param name="onRetry">
     /// An optional callback that is called, and awaited, before the delay of each retry. It is not called for the final
@@ -413,7 +445,10 @@ public static class Retriable
     /// </param>
     /// <param name="cancellationToken">The token with which to signal cancellation.</param>
     /// <param name="strategy">The retry strategy.</param>
-    /// <param name="policy">The retry policy.</param>
+    /// <param name="policy">
+    /// The retry policy. It is asked about the exceptions that the operation threw, not about an
+    /// <see cref="AggregateException"/> that contains them. See the remarks of <see cref="Retriable"/>.
+    /// </param>
     /// <returns>A task which completes when the operation is complete.</returns>
     /// <remarks>This function does not continue on the captured context. See the overload if you want to override this default behaviour.</remarks>
     /// <exception cref="InvalidOperationException">
@@ -436,7 +471,10 @@ public static class Retriable
     /// </param>
     /// <param name="cancellationToken">The token with which to signal cancellation.</param>
     /// <param name="strategy">The retry strategy.</param>
-    /// <param name="policy">The retry policy.</param>
+    /// <param name="policy">
+    /// The retry policy. It is asked about the exceptions that the operation threw, not about an
+    /// <see cref="AggregateException"/> that contains them. See the remarks of <see cref="Retriable"/>.
+    /// </param>
     /// <param name="continueOnCapturedContext">Whether to continue on the captured context.</param>
     /// <param name="onRetry">
     /// An optional callback that is called, and awaited, before the delay of each retry. It is not called for the final

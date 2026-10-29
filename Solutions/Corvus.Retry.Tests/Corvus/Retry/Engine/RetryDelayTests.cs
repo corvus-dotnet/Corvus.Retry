@@ -85,7 +85,9 @@ public class RetryDelayTests
         Task wait = RetryDelay.WaitAsync(OneHour, fake, cancellation.Token);
         await cancellation.CancelAsync().ConfigureAwait(false);
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => wait.WaitAsync(Timeout)).ConfigureAwait(false);
+        await Task.WhenAny(wait).WaitAsync(Timeout).ConfigureAwait(false);
+        TaskCanceledException thrown = await Assert.ThrowsExactlyAsync<TaskCanceledException>(() => wait).ConfigureAwait(false);
+        Assert.AreEqual(cancellation.Token, thrown.CancellationToken);
         Assert.IsTrue(wait.IsCanceled);
     }
 
@@ -99,7 +101,9 @@ public class RetryDelayTests
         await fake.WaitForTimersAsync(1).ConfigureAwait(false);
         await cancellation.CancelAsync().ConfigureAwait(false);
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => wait.WaitAsync(Timeout)).ConfigureAwait(false);
+        await Task.WhenAny(wait).WaitAsync(Timeout).ConfigureAwait(false);
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => wait).ConfigureAwait(false);
+        Assert.AreEqual(cancellation.Token, thrown.CancellationToken);
     }
 
     [TestMethod]
@@ -111,7 +115,9 @@ public class RetryDelayTests
         Task wait = RetryDelay.WaitAsync(TimeSpan.FromDays(60), fake, cancellation.Token);
         await cancellation.CancelAsync().ConfigureAwait(false);
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => wait.WaitAsync(Timeout)).ConfigureAwait(false);
+        await Task.WhenAny(wait).WaitAsync(Timeout).ConfigureAwait(false);
+        TaskCanceledException thrown = await Assert.ThrowsExactlyAsync<TaskCanceledException>(() => wait).ConfigureAwait(false);
+        Assert.AreEqual(cancellation.Token, thrown.CancellationToken);
         Assert.AreSequenceEqual(new[] { LongestTimerDelay }, fake.Delays);
     }
 
@@ -125,7 +131,9 @@ public class RetryDelayTests
         await fake.WaitForTimersAsync(1).ConfigureAwait(false);
         await cancellation.CancelAsync().ConfigureAwait(false);
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => wait.WaitAsync(Timeout)).ConfigureAwait(false);
+        await Task.WhenAny(wait).WaitAsync(Timeout).ConfigureAwait(false);
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => wait).ConfigureAwait(false);
+        Assert.AreEqual(cancellation.Token, thrown.CancellationToken);
         Assert.AreSequenceEqual(new[] { LongestTimerDelay }, fake.Delays);
     }
 
