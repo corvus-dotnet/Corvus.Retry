@@ -18,8 +18,15 @@ using Corvus.Retry.Strategies;
 /// </summary>
 /// <typeparam name="T">The type of the result of the operation.</typeparam>
 /// <remarks>
+/// <para>
 /// A pipeline is immutable and safe for many threads. Each call has its own state, so one pipeline can serve many
 /// calls at the same time.
+/// </para>
+/// <para>
+/// When <see cref="RetryPipelineOptions.Hedging"/> is set, hedging replaces the retries: the pipeline starts more
+/// attempts in parallel, and the first outcome that is not a failure wins. When every attempt fails, the call throws
+/// the last exception or returns the last result. The fallback applies to that outcome.
+/// </para>
 /// </remarks>
 public sealed class RetryPipeline<T>
 {
@@ -33,6 +40,8 @@ public sealed class RetryPipeline<T>
     private readonly bool continueOnCapturedContext;
     private readonly Func<T, bool>? shouldRetryResult;
     private readonly FallbackOptions<T>? fallback;
+    private readonly HedgingOptions? hedging;
+    private readonly Func<int, Func<CancellationToken, ValueTask<T>>?>? hedgingActionGenerator;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RetryPipeline{T}"/> class.
@@ -40,13 +49,18 @@ public sealed class RetryPipeline<T>
     /// <param name="options">The settings of the pipeline.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="options"/>, <see cref="RetryPipelineOptions.Policy"/>,
-    /// <see cref="RetryPipelineOptions.TimeProvider"/>, or the <see cref="FallbackOptions{T}.Action"/> or the
-    /// <see cref="FallbackOptions{T}.Policy"/> of <see cref="RetryPipelineOptions{T}.Fallback"/> is
-    /// <see langword="null"/>.
+    /// <see cref="RetryPipelineOptions.TimeProvider"/>, the <see cref="FallbackOptions{T}.Action"/> or the
+    /// <see cref="FallbackOptions{T}.Policy"/> of <see cref="RetryPipelineOptions{T}.Fallback"/>, or the
+    /// <see cref="HedgingOptions.Policy"/> of <see cref="RetryPipelineOptions.Hedging"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <see cref="RetryPipelineOptions.AttemptTimeout"/> or <see cref="RetryPipelineOptions.TotalTimeout"/> is not
-    /// greater than zero, or is greater than the longest time that a timer supports.
+    /// greater than zero, or is greater than the longest time that a timer supports; or the
+    /// <see cref="HedgingOptions.MaxHedgedAttempts"/> or the <see cref="HedgingOptions.Delay"/> of
+    /// <see cref="RetryPipelineOptions.Hedging"/> is out of range.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <see cref="RetryPipelineOptions.Hedging"/> and <see cref="RetryPipelineOptions.Strategy"/> are both set.
     /// </exception>
     /// <remarks>
     /// The <see cref="ArgumentException.ParamName"/> of each exception is the name of the property that is not correct.
@@ -66,6 +80,8 @@ public sealed class RetryPipeline<T>
         this.continueOnCapturedContext = options.ContinueOnCapturedContext;
         this.shouldRetryResult = options.ShouldRetryResult;
         this.fallback = options.Fallback;
+        this.hedging = options.Hedging;
+        this.hedgingActionGenerator = options.HedgingActionGenerator;
     }
 
     /// <summary>
@@ -102,17 +118,30 @@ public sealed class RetryPipeline<T>
     {
         ArgumentNullException.ThrowIfNull(operation);
 
-        ValueTask<T> core = RetryEngine.RunAsync<RetryOperations.ResultCheckedOperation<T>, T>(
-            new(operation, this.shouldRetryResult),
-            cancellationToken,
-            this.strategy,
-            this.policy,
-            this.timeProvider,
-            this.attemptTimeout,
-            this.totalTimeout,
-            this.onRetry,
-            this.circuitBreaker,
-            this.continueOnCapturedContext);
+        // Hedging replaces the retry part. The fallback stays outside it.
+        ValueTask<T> core = this.hedging is not null
+            ? HedgingEngine.RunAsync(
+                operation,
+                this.hedgingActionGenerator,
+                this.shouldRetryResult,
+                this.hedging,
+                cancellationToken,
+                this.timeProvider,
+                this.attemptTimeout,
+                this.totalTimeout,
+                this.circuitBreaker,
+                this.continueOnCapturedContext)
+            : RetryEngine.RunAsync<RetryOperations.ResultCheckedOperation<T>, T>(
+                new(operation, this.shouldRetryResult),
+                cancellationToken,
+                this.strategy,
+                this.policy,
+                this.timeProvider,
+                this.attemptTimeout,
+                this.totalTimeout,
+                this.onRetry,
+                this.circuitBreaker,
+                this.continueOnCapturedContext);
 
         // Without a fallback, the call has no extra state machine.
         return this.fallback is null ? core : this.WithFallbackAsync(core, this.fallback, cancellationToken);

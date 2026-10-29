@@ -36,6 +36,12 @@ public class ConstructionBenchmarks
         Fallback = new FallbackOptions<int> { Action = static _ => new ValueTask<int>(0) },
     };
 
+    private static readonly RetryPipelineOptions<int> PipelineOptionsWithHedging = new()
+    {
+        Hedging = new HedgingOptions { MaxHedgedAttempts = 2 },
+        HedgingActionGenerator = static _ => null,
+    };
+
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("Strategies")]
     public IRetryStrategy Count_Default() => new Count();
@@ -188,6 +194,10 @@ public class ConstructionBenchmarks
     [Benchmark]
     [BenchmarkCategory("Other")]
     public RetryPipeline<int> RetryPipelineOfT_WithFallback() => new(PipelineOptionsWithFallback);
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public RetryPipeline<int> RetryPipelineOfT_WithHedging() => new(PipelineOptionsWithHedging);
 
     [Benchmark]
     [BenchmarkCategory("Other")]

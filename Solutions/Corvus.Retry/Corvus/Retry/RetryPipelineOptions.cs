@@ -36,7 +36,8 @@ public record RetryPipelineOptions
     /// Gets the strategy that decides whether to retry, and the delay before the retry.
     /// </summary>
     /// <remarks>
-    /// When this is <see langword="null"/>, the pipeline makes up to 4 attempts, with 2 seconds before each retry.
+    /// When this is <see langword="null"/>, the pipeline makes up to 4 attempts, with 2 seconds before each retry. It
+    /// must be <see langword="null"/> when <see cref="Hedging"/> is set.
     /// </remarks>
     public IRetryStrategy? Strategy { get; init; }
 
@@ -105,6 +106,22 @@ public record RetryPipelineOptions
     public CircuitBreaker? CircuitBreaker { get; init; }
 
     /// <summary>
+    /// Gets the settings of hedging, or <see langword="null"/> for no hedging.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Hedging replaces the retry part of the pipeline: it starts more attempts in parallel when an attempt is slow or
+    /// fails, and the first acceptable outcome wins. When this is set, <see cref="Strategy"/> must be
+    /// <see langword="null"/>, and the pipeline does not call <see cref="OnRetry"/>.
+    /// </para>
+    /// <para>
+    /// The total timeout applies to all the attempts. Each attempt goes through the circuit breaker and has its own
+    /// attempt timeout. To retry and hedge in one call, run one pipeline inside the operation of another pipeline.
+    /// </para>
+    /// </remarks>
+    public HedgingOptions? Hedging { get; init; }
+
+    /// <summary>
     /// Gets the time provider for the delays and the timeouts.
     /// </summary>
     /// <remarks>The default is <see cref="TimeProvider.System"/>. A test can use a fake time provider.</remarks>
@@ -121,12 +138,15 @@ public record RetryPipelineOptions
     /// </summary>
     /// <param name="options">The options.</param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="options"/>, <see cref="Policy"/> or <see cref="TimeProvider"/> is <see langword="null"/>.
+    /// <paramref name="options"/>, <see cref="Policy"/>, <see cref="TimeProvider"/> or the
+    /// <see cref="HedgingOptions.Policy"/> of <see cref="Hedging"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <see cref="AttemptTimeout"/> or <see cref="TotalTimeout"/> is not greater than zero, or is greater than the
-    /// longest time that a timer supports.
+    /// longest time that a timer supports; or the <see cref="HedgingOptions.MaxHedgedAttempts"/> or the
+    /// <see cref="HedgingOptions.Delay"/> of <see cref="Hedging"/> is out of range.
     /// </exception>
+    /// <exception cref="ArgumentException"><see cref="Hedging"/> and <see cref="Strategy"/> are both set.</exception>
     /// <remarks>
     /// The <see cref="ArgumentException.ParamName"/> of each exception is the name of the property that is not
     /// correct.
@@ -138,6 +158,42 @@ public record RetryPipelineOptions
         ThrowIfOutOfRange(options.TotalTimeout, nameof(TotalTimeout));
         ArgumentNullException.ThrowIfNull(options.Policy, nameof(Policy));
         ArgumentNullException.ThrowIfNull(options.TimeProvider, nameof(TimeProvider));
+        ValidateHedging(options);
+    }
+
+    private static void ValidateHedging(RetryPipelineOptions options)
+    {
+        if (options.Hedging is not HedgingOptions hedging)
+        {
+            return;
+        }
+
+        if (options.Strategy is not null)
+        {
+            throw new ArgumentException("Hedging replaces the retry part of the pipeline, so Strategy must be null when Hedging is set.", nameof(Hedging));
+        }
+
+        if (hedging.MaxHedgedAttempts is < 1 or > 10)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(Hedging),
+                hedging.MaxHedgedAttempts,
+                "The MaxHedgedAttempts of the hedging must be from 1 thru 10.");
+        }
+
+        TimeSpan delay = hedging.Delay;
+        if (delay != TimeSpan.Zero && delay != Timeout.InfiniteTimeSpan && (delay < TimeSpan.Zero || delay > RetryDelay.MaxSupported))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(Hedging),
+                delay,
+                $"The Delay of the hedging must be TimeSpan.Zero, Timeout.InfiniteTimeSpan, or greater than zero and not greater than {RetryDelay.MaxSupported}.");
+        }
+
+        if (hedging.Policy is null)
+        {
+            throw new ArgumentNullException(nameof(Hedging), "The Policy of the hedging must not be null.");
+        }
     }
 
     private static void ThrowIfOutOfRange(TimeSpan? timeout, string propertyName)

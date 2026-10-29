@@ -22,6 +22,11 @@ using Corvus.Retry.Strategies;
 /// <para>
 /// To retry a result that is a failure, use <see cref="RetryPipeline{T}"/>.
 /// </para>
+/// <para>
+/// When <see cref="RetryPipelineOptions.Hedging"/> is set, hedging replaces the retries: the pipeline starts more
+/// attempts in parallel, and the first attempt that succeeds wins. When every attempt fails, the call throws the last
+/// exception.
+/// </para>
 /// </remarks>
 public sealed class RetryPipeline
 {
@@ -33,18 +38,25 @@ public sealed class RetryPipeline
     private readonly Func<RetryEventArgs, ValueTask>? onRetry;
     private readonly CircuitBreaker? circuitBreaker;
     private readonly bool continueOnCapturedContext;
+    private readonly HedgingOptions? hedging;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RetryPipeline"/> class.
     /// </summary>
     /// <param name="options">The settings of the pipeline.</param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="options"/>, <see cref="RetryPipelineOptions.Policy"/> or
-    /// <see cref="RetryPipelineOptions.TimeProvider"/> is <see langword="null"/>.
+    /// <paramref name="options"/>, <see cref="RetryPipelineOptions.Policy"/>,
+    /// <see cref="RetryPipelineOptions.TimeProvider"/> or the <see cref="HedgingOptions.Policy"/> of
+    /// <see cref="RetryPipelineOptions.Hedging"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <see cref="RetryPipelineOptions.AttemptTimeout"/> or <see cref="RetryPipelineOptions.TotalTimeout"/> is not
-    /// greater than zero, or is greater than the longest time that a timer supports.
+    /// greater than zero, or is greater than the longest time that a timer supports; or the
+    /// <see cref="HedgingOptions.MaxHedgedAttempts"/> or the <see cref="HedgingOptions.Delay"/> of
+    /// <see cref="RetryPipelineOptions.Hedging"/> is out of range.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <see cref="RetryPipelineOptions.Hedging"/> and <see cref="RetryPipelineOptions.Strategy"/> are both set.
     /// </exception>
     /// <remarks>
     /// The <see cref="ArgumentException.ParamName"/> of each exception is the name of the property that is not correct.
@@ -61,6 +73,7 @@ public sealed class RetryPipeline
         this.onRetry = options.OnRetry;
         this.circuitBreaker = options.CircuitBreaker;
         this.continueOnCapturedContext = options.ContinueOnCapturedContext;
+        this.hedging = options.Hedging;
     }
 
     /// <summary>
@@ -90,6 +103,21 @@ public sealed class RetryPipeline
     public ValueTask<T> ExecuteAsync<T>(Func<CancellationToken, ValueTask<T>> operation, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(operation);
+
+        if (this.hedging is not null)
+        {
+            return HedgingEngine.RunAsync(
+                operation,
+                null,
+                null,
+                this.hedging,
+                cancellationToken,
+                this.timeProvider,
+                this.attemptTimeout,
+                this.totalTimeout,
+                this.circuitBreaker,
+                this.continueOnCapturedContext);
+        }
 
         return RetryEngine.RunAsync<RetryOperations.ValueTaskTokenOperation<T>, T>(
             new(operation),
@@ -131,19 +159,37 @@ public sealed class RetryPipeline
     {
         ArgumentNullException.ThrowIfNull(operation);
 
-        ValueTask<Unit> call = RetryEngine.RunAsync<RetryOperations.ValueTaskTokenUnitOperation, Unit>(
-            new(operation),
-            cancellationToken,
-            this.strategy,
-            this.policy,
-            this.timeProvider,
-            this.attemptTimeout,
-            this.totalTimeout,
-            this.onRetry,
-            this.circuitBreaker,
-            this.continueOnCapturedContext);
+        ValueTask<Unit> call = this.hedging is not null
+            ? this.ExecuteHedgedAsync(operation, this.hedging, cancellationToken)
+            : RetryEngine.RunAsync<RetryOperations.ValueTaskTokenUnitOperation, Unit>(
+                new(operation),
+                cancellationToken,
+                this.strategy,
+                this.policy,
+                this.timeProvider,
+                this.attemptTimeout,
+                this.totalTimeout,
+                this.onRetry,
+                this.circuitBreaker,
+                this.continueOnCapturedContext);
 
         // A call that completed synchronously needs no task. Otherwise the task carries the outcome of the call.
         return call.IsCompletedSuccessfully ? default : new ValueTask(call.AsTask());
+    }
+
+    // This is a separate method, so that a call without hedging does not allocate the closure.
+    private ValueTask<Unit> ExecuteHedgedAsync(Func<CancellationToken, ValueTask> operation, HedgingOptions hedging, CancellationToken cancellationToken)
+    {
+        return HedgingEngine.RunAsync(
+            token => new RetryOperations.ValueTaskTokenUnitOperation(operation).InvokeAsync(token),
+            null,
+            null,
+            hedging,
+            cancellationToken,
+            this.timeProvider,
+            this.attemptTimeout,
+            this.totalTimeout,
+            this.circuitBreaker,
+            this.continueOnCapturedContext);
     }
 }

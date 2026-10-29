@@ -5,6 +5,8 @@
 namespace Corvus.Retry;
 
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 
 /// <summary>
 /// The settings of a <see cref="RetryPipeline{T}"/>.
@@ -47,4 +49,21 @@ public sealed record RetryPipelineOptions<T> : RetryPipelineOptions
     /// </para>
     /// </remarks>
     public FallbackOptions<T>? Fallback { get; init; }
+
+    /// <summary>
+    /// Gets a function that gives the operation for each attempt of hedging, or <see langword="null"/> to use the
+    /// primary operation for every attempt.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The function receives the number of the attempt, starting at 1, and can give a different operation for each
+    /// attempt (for example, a different endpoint). When it returns <see langword="null"/>, the attempt uses the
+    /// primary operation: the operation that the caller gives to <see cref="RetryPipeline{T}.ExecuteAsync"/>. An
+    /// exception from the function stops the call.
+    /// </para>
+    /// <para>
+    /// The pipeline uses this function only when <see cref="RetryPipelineOptions.Hedging"/> is set.
+    /// </para>
+    /// </remarks>
+    public Func<int, Func<CancellationToken, ValueTask<T>>?>? HedgingActionGenerator { get; init; }
 }
