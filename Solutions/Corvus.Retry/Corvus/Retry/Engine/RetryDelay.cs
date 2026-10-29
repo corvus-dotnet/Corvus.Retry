@@ -48,9 +48,9 @@ internal static class RetryDelay
     /// <param name="cancellationToken">The token with which to stop the wait.</param>
     /// <exception cref="OperationCanceledException">The token was cancelled before the delay elapsed.</exception>
     /// <remarks>
-    /// A zero delay returns at once. If the wait cannot be cancelled and the provider is
-    /// <see cref="TimeProvider.System"/>, this uses <see cref="Thread.Sleep(TimeSpan)"/>. Otherwise it waits for a timer
-    /// from the provider, so that a test's time provider controls the wait.
+    /// A zero delay returns at once. If <see cref="CanUseThreadSleep"/> returns <see langword="true"/>, this uses
+    /// <see cref="Thread.Sleep(TimeSpan)"/>. Otherwise it waits for a timer from the provider, so that a test's time
+    /// provider controls the wait.
     /// </remarks>
     internal static void Wait(TimeSpan delay, TimeProvider timeProvider, CancellationToken cancellationToken)
     {
@@ -61,7 +61,7 @@ internal static class RetryDelay
 
         delay = Clamp(delay);
 
-        if (!cancellationToken.CanBeCanceled && ReferenceEquals(timeProvider, TimeProvider.System))
+        if (CanUseThreadSleep(delay, timeProvider, cancellationToken))
         {
             Thread.Sleep(delay);
             return;
@@ -70,6 +70,27 @@ internal static class RetryDelay
         using ManualResetEventSlim gate = new();
         using ITimer timer = timeProvider.CreateTimer(static s => ((ManualResetEventSlim)s!).Set(), gate, delay, Timeout.InfiniteTimeSpan);
         gate.Wait(Timeout.Infinite, cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets a value that tells whether <see cref="Wait"/> can use <see cref="Thread.Sleep(TimeSpan)"/> for a delay.
+    /// </summary>
+    /// <param name="delay">The delay, already limited by <see cref="Clamp(TimeSpan)"/>.</param>
+    /// <param name="timeProvider">The time provider with which to measure the delay.</param>
+    /// <param name="cancellationToken">The token with which to stop the wait.</param>
+    /// <returns>
+    /// <see langword="true"/> if the wait cannot be cancelled, the provider is <see cref="TimeProvider.System"/>, and
+    /// the delay is not longer than <see cref="int.MaxValue"/> milliseconds (about 24.9 days).
+    /// </returns>
+    /// <remarks>
+    /// <see cref="Thread.Sleep(TimeSpan)"/> throws for a delay longer than <see cref="int.MaxValue"/> milliseconds,
+    /// but a timer supports delays up to <see cref="MaxSupported"/>. A longer delay uses a timer.
+    /// </remarks>
+    internal static bool CanUseThreadSleep(TimeSpan delay, TimeProvider timeProvider, CancellationToken cancellationToken)
+    {
+        return !cancellationToken.CanBeCanceled
+            && ReferenceEquals(timeProvider, TimeProvider.System)
+            && delay.TotalMilliseconds <= int.MaxValue;
     }
 
     /// <summary>

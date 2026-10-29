@@ -128,4 +128,22 @@ public class RetryDelayTests
         await Assert.ThrowsAsync<OperationCanceledException>(() => wait.WaitAsync(Timeout)).ConfigureAwait(false);
         Assert.AreSequenceEqual(new[] { LongestTimerDelay }, fake.Delays);
     }
+
+    [TestMethod]
+    public void WaitUsesThreadSleepOnlyForADelayThatThreadSleepAccepts()
+    {
+        TimeSpan longestSleep = TimeSpan.FromMilliseconds(int.MaxValue);
+        using CancellationTokenSource cancellation = new();
+
+        Assert.IsTrue(RetryDelay.CanUseThreadSleep(longestSleep, TimeProvider.System, CancellationToken.None));
+
+        // Thread.Sleep throws for these delays, so a timer must wait for them.
+        Assert.IsFalse(RetryDelay.CanUseThreadSleep(longestSleep + TimeSpan.FromMilliseconds(1), TimeProvider.System, CancellationToken.None));
+        Assert.IsFalse(RetryDelay.CanUseThreadSleep(TimeSpan.FromDays(30), TimeProvider.System, CancellationToken.None));
+        Assert.IsFalse(RetryDelay.CanUseThreadSleep(LongestTimerDelay, TimeProvider.System, CancellationToken.None));
+
+        // A token that can be cancelled, or a different provider, always needs a timer.
+        Assert.IsFalse(RetryDelay.CanUseThreadSleep(OneHour, TimeProvider.System, cancellation.Token));
+        Assert.IsFalse(RetryDelay.CanUseThreadSleep(OneHour, new RecordingFakeTimeProvider(), CancellationToken.None));
+    }
 }
