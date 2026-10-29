@@ -15,7 +15,7 @@ public class AnyExceptionPolicy : IRetryPolicy
     /// Gets a shared instance, used by the overloads that default the policy. The policy has no state, so one
     /// instance serves every caller.
     /// </summary>
-    internal static AnyExceptionPolicy Default { get; } = new();
+    public static AnyExceptionPolicy Default { get; } = new();
 
     /// <inheritdoc/>
     public bool CanRetry(Exception exception)

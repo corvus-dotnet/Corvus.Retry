@@ -52,6 +52,65 @@ public class LinearTests
     }
 
     [TestMethod]
+    public void TheMaximumDelayApplies()
+    {
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(new Linear(TimeSpan.FromSeconds(5), 3, TimeSpan.FromSeconds(2)), 3);
+
+        Assert.AreSequenceEqual(new TimeSpan?[] { TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2), null }, delays);
+    }
+
+    [TestMethod]
+    public void WithoutAMaximumDelayOrJitter_TheNewConstructorGivesThePeriodicity()
+    {
+        TimeSpan periodicity = TimeSpan.FromMilliseconds(250);
+
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(new Linear(periodicity, 3, null), 3);
+
+        Assert.AreSequenceEqual(new TimeSpan?[] { periodicity, periodicity, null }, delays);
+    }
+
+    [TestMethod]
+    public void WithJitter_EachDelayIsWithinTwentyFivePercentOfThePeriodicity()
+    {
+        var strategy = new Linear(TimeSpan.FromSeconds(1), 6, null, useJitter: true);
+
+        for (int iteration = 0; iteration < 50; iteration++)
+        {
+            List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 6);
+
+            Assert.IsNull(delays[^1]);
+            for (int i = 0; i < 5; i++)
+            {
+                Assert.IsNotNull(delays[i]);
+                Assert.IsInRange(TimeSpan.FromMilliseconds(750), TimeSpan.FromMilliseconds(1250), delays[i]!.Value);
+            }
+        }
+    }
+
+    [TestMethod]
+    public void WithJitter_TheMaximumDelayAppliesAfterTheJitter()
+    {
+        var strategy = new Linear(TimeSpan.FromSeconds(1), 6, TimeSpan.FromSeconds(1), useJitter: true);
+
+        for (int iteration = 0; iteration < 50; iteration++)
+        {
+            foreach (TimeSpan? delay in StrategyDriver.FailTimes(strategy, 5))
+            {
+                Assert.IsNotNull(delay);
+                Assert.IsInRange(TimeSpan.FromMilliseconds(750), TimeSpan.FromSeconds(1), delay.Value);
+            }
+        }
+    }
+
+    [TestMethod]
+    public void WhenTheMaximumDelayIsNegative_TheConstructorThrows()
+    {
+        ArgumentOutOfRangeException ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new Linear(TimeSpan.FromSeconds(1), 3, TimeSpan.FromMilliseconds(-1)));
+
+        Assert.AreEqual("maxDelay", ex.ParamName);
+    }
+
+    [TestMethod]
     public void TheSameInstanceGivesTheSameAnswersForTwoIndependentSequences()
     {
         TimeSpan periodicity = TimeSpan.FromSeconds(1);

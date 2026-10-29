@@ -68,6 +68,68 @@ public class IncrementalTests
     }
 
     [TestMethod]
+    public void TheMaximumDelayApplies()
+    {
+        var strategy = new Incremental(6, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3));
+
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 6);
+
+        Assert.AreSequenceEqual(Seconds(1, 2, 3, 3, 3, null), delays);
+    }
+
+    [TestMethod]
+    public void WithoutAMaximumDelayOrJitter_TheNewConstructorGivesTheSameDelays()
+    {
+        var strategy = new Incremental(5, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), null);
+
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 5);
+
+        Assert.AreSequenceEqual(Seconds(1, 3, 5, 7, null), delays);
+    }
+
+    [TestMethod]
+    public void WithJitter_EachDelayIsWithinTwentyFivePercentOfTheDelayWithoutJitter()
+    {
+        var strategy = new Incremental(6, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), null, useJitter: true);
+
+        for (int iteration = 0; iteration < 50; iteration++)
+        {
+            List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 6);
+
+            Assert.IsNull(delays[^1]);
+            for (int retry = 1; retry <= 5; retry++)
+            {
+                TimeSpan? delay = delays[retry - 1];
+                Assert.IsNotNull(delay);
+                Assert.IsInRange(TimeSpan.FromMilliseconds(750 * retry), TimeSpan.FromMilliseconds(1250 * retry), delay.Value);
+            }
+        }
+    }
+
+    [TestMethod]
+    public void WithJitter_TheMaximumDelayAppliesAfterTheJitter()
+    {
+        var strategy = new Incremental(6, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), useJitter: true);
+
+        for (int iteration = 0; iteration < 50; iteration++)
+        {
+            foreach (TimeSpan? delay in StrategyDriver.FailTimes(strategy, 5))
+            {
+                Assert.IsNotNull(delay);
+                Assert.IsLessThanOrEqualTo(TimeSpan.FromSeconds(2), delay.Value);
+            }
+        }
+    }
+
+    [TestMethod]
+    public void WhenTheMaximumDelayIsNegative_TheConstructorThrows()
+    {
+        ArgumentOutOfRangeException ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new Incremental(3, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(-1)));
+
+        Assert.AreEqual("maxDelay", ex.ParamName);
+    }
+
+    [TestMethod]
     public void TheSameInstanceGivesTheSameAnswersForTwoIndependentSequences()
     {
         var strategy = new Incremental(4, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));

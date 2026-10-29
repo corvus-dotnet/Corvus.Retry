@@ -6,12 +6,65 @@ namespace Corvus.Retry.Policies;
 
 using System;
 using System.Collections.ObjectModel;
+using System.Diagnostics.CodeAnalysis;
 
 /// <summary>
-/// Helpers for consulting an <see cref="IRetryPolicy"/> about the failure of a task.
+/// Extension members that combine <see cref="IRetryPolicy"/> instances.
 /// </summary>
-internal static class RetryPolicyExtensions
+/// <remarks>
+/// Every combination is a new, immutable policy. The policies that it combines do not change.
+/// </remarks>
+[SuppressMessage(
+    "StyleCop.CSharp.ReadabilityRules",
+    "SA1101:PrefixLocalCallsWithThis",
+    Justification = "StyleCop 1.2.0-beta.556 treats the receiver parameter of a C# 14 extension block as a member. A static class has no this.")]
+public static class RetryPolicyExtensions
 {
+    /// <summary>
+    /// Extension members for an <see cref="IRetryPolicy"/>.
+    /// </summary>
+    /// <param name="policy">The policy.</param>
+    extension(IRetryPolicy policy)
+    {
+        /// <summary>
+        /// Creates a policy that retries an exception that this policy or the other policy accepts.
+        /// </summary>
+        /// <param name="other">The other policy.</param>
+        /// <returns>The policy. It asks this policy first.</returns>
+        /// <exception cref="ArgumentNullException">The policy or <paramref name="other"/> is <see langword="null"/>.</exception>
+        public IRetryPolicy Or(IRetryPolicy other)
+        {
+            ArgumentNullException.ThrowIfNull(policy);
+            ArgumentNullException.ThrowIfNull(other);
+
+            return new AnyRetryPolicy([policy, other]);
+        }
+
+        /// <summary>
+        /// Creates a policy that retries an exception that this policy and the other policy both accept.
+        /// </summary>
+        /// <param name="other">The other policy.</param>
+        /// <returns>The policy. It asks this policy first.</returns>
+        /// <exception cref="ArgumentNullException">The policy or <paramref name="other"/> is <see langword="null"/>.</exception>
+        public IRetryPolicy And(IRetryPolicy other)
+        {
+            ArgumentNullException.ThrowIfNull(policy);
+            ArgumentNullException.ThrowIfNull(other);
+
+            return new AllRetryPolicy([policy, other]);
+        }
+
+        /// <summary>
+        /// Creates a policy that retries an exception that this policy refuses.
+        /// </summary>
+        /// <returns>The policy.</returns>
+        /// <exception cref="ArgumentNullException">The policy is <see langword="null"/>.</exception>
+        public IRetryPolicy Not()
+        {
+            return RetryPolicies.Not(policy);
+        }
+    }
+
     /// <summary>
     /// Determines whether the policy allows a retry after a task faulted with the given exception.
     /// </summary>

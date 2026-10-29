@@ -89,4 +89,26 @@ internal static class RetryDelay
 
         return delay > MaxSupported ? MaxSupported : delay;
     }
+
+    /// <summary>
+    /// Limits a delay calculated in milliseconds to an optional maximum, and then to the range that a timer supports.
+    /// </summary>
+    /// <param name="milliseconds">The delay in milliseconds.</param>
+    /// <param name="maxDelay">The longest delay that the caller allows, or <see langword="null"/> for no limit.</param>
+    /// <returns>The limited delay.</returns>
+    /// <remarks>
+    /// Strategies calculate delays as a <see langword="double"/>, so that a long sequence cannot overflow. This limits
+    /// the value before it becomes a <see cref="TimeSpan"/>. A value that is not a number becomes
+    /// <see cref="TimeSpan.Zero"/>.
+    /// </remarks>
+    internal static TimeSpan Clamp(double milliseconds, TimeSpan? maxDelay)
+    {
+        if (double.IsNaN(milliseconds) || milliseconds <= 0)
+        {
+            return TimeSpan.Zero;
+        }
+
+        double limit = maxDelay is TimeSpan max && max < MaxSupported ? max.TotalMilliseconds : MaxSupported.TotalMilliseconds;
+        return TimeSpan.FromMilliseconds(Math.Min(milliseconds, limit));
+    }
 }
