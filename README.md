@@ -510,7 +510,7 @@ In the formulas, `n` is the number of the attempt that failed. The first attempt
 | `RetryStrategies.Linear(retries, d)` | `retries + 1` | `d × n` |
 | `RetryStrategies.Exponential(retries, d)` | `retries + 1` | `d × 2^(n−1)` |
 | `RetryStrategies.FromDelegate(getRetryDelay)` | The delegate decides | The value of the delegate, or `null` to stop |
-| `RetryStrategies.RetryAfter(inner)` | The inner strategy decides | The `Retry-After` header of an `HttpResponseMessage` result, or `BrokenCircuitException.RetryAfter`. A header wins over a rejection. If there is no value, the delay of the inner strategy. The `maxDelay` of the inner strategy does not limit a header or rejection delay. |
+| `RetryStrategies.RetryAfter(inner)` | The inner strategy decides | The `Retry-After` header of an `HttpResponseMessage` result, or `BrokenCircuitException.RetryAfter`. A header wins over a rejection. If there is no value, or the framework cannot parse the header, the delay of the inner strategy. A past date gives zero. The `maxDelay` of the inner strategy does not limit a header or rejection delay. |
 
 > **Note:** The `Linear` class and the `RetryStrategies.Linear` method have different formulas. The delay of the `Linear` class is always `d`. The delay of `RetryStrategies.Linear` is `d × n`. `RetryStrategies.Constant` has the same formula as the `Linear` class.
 

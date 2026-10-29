@@ -70,7 +70,10 @@ not do the steps in the guide, your project can fail to compile, or your retries
   `Retriable`.
 - `RetryStrategies.RetryAfter` uses the `Retry-After` header of an `HttpResponseMessage` result, or
   `BrokenCircuitException.RetryAfter`, for the delay. A header wins over a circuit rejection. The maximum delay of the
-  inner strategy does not limit a header or rejection delay; only the timer limit does.
+  inner strategy does not limit a header or rejection delay; only the timer limit does. A header that the framework
+  cannot parse, including a negative number of seconds or one larger than `int.MaxValue`, has no value, so the delay
+  of the inner strategy applies. A date in the past gives a zero delay. The strategy does not examine the status
+  code, thus a `Retry-After` on a response that `ShouldRetryResult` rejects is used.
 - The static class `RetryPolicies` makes immutable policies: `FromPredicate`, `Handle<T>`, `HandleInner<T>`, `Not`,
   `Any` and `All`. `Handle<T>` returns an `ExceptionTypeRetryPolicy`, which has the method `Or<T>`.
 - `RetryPolicies.TransientHttp` retries transient HTTP failures. `RetryPolicies.IsTransientHttpResponse` finds a
