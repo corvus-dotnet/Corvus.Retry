@@ -13,7 +13,14 @@ using System.Threading.Tasks;
 /// </summary>
 /// <typeparam name="T">The type of the result of the operation.</typeparam>
 /// <remarks>
+/// <para>
 /// These options add the settings that apply to the result of the operation.
+/// </para>
+/// <para>
+/// Only <see cref="ReliabilityPipeline{T}"/> can use <see cref="ShouldRetryResult"/>, <see cref="Fallback"/> and
+/// <see cref="HedgingActionGenerator"/>. If one of them is set, the constructor of <see cref="ReliabilityPipeline"/>
+/// throws an <see cref="ArgumentException"/>. Without them, <see cref="ReliabilityPipeline"/> accepts these options.
+/// </para>
 /// </remarks>
 public sealed record ReliabilityPipelineOptions<T> : ReliabilityPipelineOptions
 {
@@ -66,4 +73,8 @@ public sealed record ReliabilityPipelineOptions<T> : ReliabilityPipelineOptions
     /// </para>
     /// </remarks>
     public Func<int, Func<CancellationToken, ValueTask<T>>?>? HedgingActionGenerator { get; init; }
+
+    /// <inheritdoc/>
+    internal override bool HasResultSettings =>
+        this.ShouldRetryResult is not null || this.Fallback is not null || this.HedgingActionGenerator is not null;
 }

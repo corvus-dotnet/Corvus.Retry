@@ -130,8 +130,17 @@ public record ReliabilityPipelineOptions
     /// <summary>
     /// Gets a value indicating whether the pipeline continues on the captured context after each await.
     /// </summary>
-    /// <remarks>The default is <see langword="false"/>.</remarks>
+    /// <remarks>
+    /// The default is <see langword="false"/>. With <see cref="Hedging"/>, each attempt after the first starts on the
+    /// thread pool, so it has no captured context.
+    /// </remarks>
     public bool ContinueOnCapturedContext { get; init; }
+
+    /// <summary>
+    /// Gets a value indicating whether the options have a setting that only <see cref="ReliabilityPipeline{T}"/> can
+    /// use.
+    /// </summary>
+    internal virtual bool HasResultSettings => false;
 
     /// <summary>
     /// Checks the options for a pipeline.
@@ -146,12 +155,50 @@ public record ReliabilityPipelineOptions
     /// longest time that a timer supports; or the <see cref="HedgingOptions.MaxHedgedAttempts"/> or the
     /// <see cref="HedgingOptions.Delay"/> of <see cref="Hedging"/> is out of range.
     /// </exception>
-    /// <exception cref="ArgumentException"><see cref="Hedging"/> and <see cref="Strategy"/> are both set.</exception>
+    /// <exception cref="ArgumentException">
+    /// <see cref="Hedging"/> and <see cref="Strategy"/> are both set; or <paramref name="options"/> is a
+    /// <see cref="ReliabilityPipelineOptions{T}"/> with a setting for a result, which only
+    /// <see cref="ReliabilityPipeline{T}"/> can use.
+    /// </exception>
     /// <remarks>
+    /// <para>
     /// The <see cref="ArgumentException.ParamName"/> of each exception is the name of the property that is not
-    /// correct.
+    /// correct. For a setting for a result, it is <c>options</c>.
+    /// </para>
+    /// <para>
+    /// <see cref="ReliabilityPipeline"/> calls this overload. <see cref="ReliabilityPipeline{T}"/> calls
+    /// <see cref="Validate{T}(ReliabilityPipelineOptions{T})"/>: its argument has the type
+    /// <see cref="ReliabilityPipelineOptions{T}"/>, so the compiler selects the overload with that more specific
+    /// parameter type.
+    /// </para>
     /// </remarks>
     internal static void Validate(ReliabilityPipelineOptions options)
+    {
+        ValidateCore(options);
+
+        if (options.HasResultSettings)
+        {
+            throw new ArgumentException(
+                "The options have settings for a result (ShouldRetryResult, Fallback or HedgingActionGenerator). Use ReliabilityPipeline<T> with these options.",
+                nameof(options));
+        }
+    }
+
+    /// <summary>
+    /// Checks the options for a <see cref="ReliabilityPipeline{T}"/>, which can use the settings for a result.
+    /// </summary>
+    /// <typeparam name="T">The type of the result.</typeparam>
+    /// <param name="options">The options.</param>
+    /// <remarks>
+    /// This makes the same checks as <see cref="Validate(ReliabilityPipelineOptions)"/>, but accepts the settings for
+    /// a result.
+    /// </remarks>
+    internal static void Validate<T>(ReliabilityPipelineOptions<T> options)
+    {
+        ValidateCore(options);
+    }
+
+    private static void ValidateCore(ReliabilityPipelineOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         ThrowIfOutOfRange(options.AttemptTimeout, nameof(AttemptTimeout));

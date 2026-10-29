@@ -167,6 +167,64 @@ public class ReliabilityPipelineOptionsTests
     }
 
     [TestMethod]
+    [DataRow(nameof(ReliabilityPipelineOptions<>.ShouldRetryResult))]
+    [DataRow(nameof(ReliabilityPipelineOptions<>.Fallback))]
+    [DataRow(nameof(ReliabilityPipelineOptions<>.HedgingActionGenerator))]
+    public void TheNonGenericPipelineRejectsGenericOptionsThatHaveAResultSetting(string setting)
+    {
+        ReliabilityPipelineOptions<int> options = setting switch
+        {
+            nameof(ReliabilityPipelineOptions<>.ShouldRetryResult) => new() { ShouldRetryResult = r => r < 0 },
+            nameof(ReliabilityPipelineOptions<>.Fallback) => new() { Fallback = new FallbackOptions<int> { Action = _ => ValueTask.FromResult(0) } },
+            _ => new() { Hedging = new HedgingOptions(), HedgingActionGenerator = _ => null },
+        };
+
+        // The non-generic pipeline cannot use a setting for a result, so it must not ignore the setting.
+        ArgumentException thrown = Assert.ThrowsExactly<ArgumentException>(() => new ReliabilityPipeline(options));
+
+        Assert.AreEqual("options", thrown.ParamName);
+    }
+
+    [TestMethod]
+    public async Task TheNonGenericPipelineAcceptsGenericOptionsWithoutAResultSetting()
+    {
+        ReliabilityPipelineOptions<int> options = new() { Strategy = new Count(2) };
+        int invocations = 0;
+
+        var pipeline = new ReliabilityPipeline(options);
+        await pipeline.ExecuteAsync(_ =>
+        {
+            if (Interlocked.Increment(ref invocations) == 1)
+            {
+                throw new InvalidOperationException("First attempt failed");
+            }
+
+            return ValueTask.CompletedTask;
+        }).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual(2, invocations);
+    }
+
+    [TestMethod]
+    public async Task TheGenericPipelineAcceptsAResultSetting()
+    {
+        ReliabilityPipelineOptions<int> options = new()
+        {
+            Strategy = new Count(2),
+            ShouldRetryResult = r => r < 0,
+            Fallback = new FallbackOptions<int> { Action = _ => ValueTask.FromResult(99) },
+        };
+        int invocations = 0;
+
+        var pipeline = new ReliabilityPipeline<int>(options);
+        int result = await pipeline.ExecuteAsync(_ => ValueTask.FromResult(Interlocked.Increment(ref invocations) == 1 ? -1 : 1)).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        // The predicate rejected the first result, so the pipeline used the setting and tried again.
+        Assert.AreEqual(1, result);
+        Assert.AreEqual(2, invocations);
+    }
+
+    [TestMethod]
     [DataRow("one tick")]
     [DataRow("longest")]
     public void TheConstructorsAcceptTheShortestAndTheLongestTimeouts(string value)
