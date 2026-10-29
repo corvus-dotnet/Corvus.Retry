@@ -185,11 +185,11 @@ public class ReliabilityPipelineTests
 
         RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
         Assert.AreEqual(totalTimeout, thrown.Timeout);
+
+        // The total timeout expired between two attempts, so the inner exception is the exception of the last attempt.
+        Assert.AreSame(op.LastThrown, thrown.InnerException);
         fake.Advance(OneHour);
         Assert.AreEqual(1, op.Invocations);
-
-        // TODO(review): defect D1 (owner A, RetryEngine.cs:314) pins the inner exception of this case; owner A adds
-        // that assertion at pipeline level.
     }
 
     // REQ-04
@@ -293,7 +293,7 @@ public class ReliabilityPipelineTests
     }
 
     [TestMethod]
-    public async Task WhenTheCallerCancelsDuringADelayWithATotalTimeout_TheExceptionCarriesTheTokenThatTheCallersTokenCancelled()
+    public async Task WhenTheCallerCancelsDuringADelayWithATotalTimeout_TheExceptionCarriesTheCallersToken()
     {
         RecordingFakeTimeProvider fake = new();
         using var cts = new CancellationTokenSource();
@@ -312,13 +312,11 @@ public class ReliabilityPipelineTests
         Assert.IsFalse(call.IsCompleted);
         await cts.CancelAsync().ConfigureAwait(false);
 
-        // The documented promise is an OperationCanceledException when the caller cancels. With a total timeout, the
-        // delay waits on a token that the caller's token cancels, so the exception carries that token: the token that
-        // the operation received.
-        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
-        Assert.IsNotInstanceOfType<TimeoutException>(thrown);
-        Assert.AreEqual(Assert.ContainsSingle(tokens), thrown.CancellationToken);
-        Assert.AreNotEqual(cts.Token, thrown.CancellationToken);
+        // With a total timeout, the delay waits on a token that the caller's token cancels. The exception the caller
+        // sees still carries the caller's own token, not the operation's, so a filter on the caller's token matches.
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
+        Assert.AreNotEqual(Assert.ContainsSingle(tokens), thrown.CancellationToken);
         Assert.AreEqual(1, op.Invocations);
     }
 

@@ -1159,7 +1159,8 @@ public class FallbackTests
             Fallback = RecordingFallback(calls),
         });
 
-        Task<string> call = pipeline.ExecuteAsync(_ => throw new InvalidOperationException("Failure")).AsTask();
+        var op = new FlakyOperation(FlakyOperation.AlwaysFails);
+        Task<string> call = pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask();
 
         Assert.IsFalse(call.IsCompleted);
         fake.Advance(totalTimeout);
@@ -1168,8 +1169,8 @@ public class FallbackTests
         RetryTimeoutException timeout = Assert.IsInstanceOfType<RetryTimeoutException>(Assert.ContainsSingle(calls).Exception);
         Assert.AreEqual(totalTimeout, timeout.Timeout);
 
-        // TODO(review): after defect D1 is fixed (owner A, RetryEngine.cs:314), also assert that the inner exception is
-        // the exception of the last attempt, by reference.
+        // The total timeout expired between two attempts, so the fallback sees the last attempt's failure as the cause.
+        Assert.AreSame(op.LastThrown, timeout.InnerException);
     }
 
     [TestMethod]
