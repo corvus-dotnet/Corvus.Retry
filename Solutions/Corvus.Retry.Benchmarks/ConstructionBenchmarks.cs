@@ -5,6 +5,7 @@
 namespace Corvus.Retry.Benchmarks;
 
 using System;
+using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
 using Corvus.Retry.Policies;
@@ -30,6 +31,10 @@ public class ConstructionBenchmarks
     private static readonly RetryPipelineOptions PipelineOptions = new() { Strategy = SharedStrategy, AttemptTimeout = TimeSpan.FromSeconds(5) };
     private static readonly RetryPipelineOptions<int> PipelineOptionsOfT = new() { Strategy = SharedStrategy, ShouldRetryResult = static r => r < 0 };
     private static readonly CircuitBreakerOptions BreakerOptions = new() { MinimumThroughput = 10, FailureRatio = 0.5 };
+    private static readonly RetryPipelineOptions<int> PipelineOptionsWithFallback = PipelineOptionsOfT with
+    {
+        Fallback = new FallbackOptions<int> { Action = static _ => new ValueTask<int>(0) },
+    };
 
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("Strategies")]
@@ -179,6 +184,10 @@ public class ConstructionBenchmarks
     [Benchmark]
     [BenchmarkCategory("Other")]
     public RetryPipeline<int> RetryPipelineOfT() => new(PipelineOptionsOfT);
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public RetryPipeline<int> RetryPipelineOfT_WithFallback() => new(PipelineOptionsWithFallback);
 
     [Benchmark]
     [BenchmarkCategory("Other")]

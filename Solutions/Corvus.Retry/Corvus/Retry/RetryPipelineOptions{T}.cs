@@ -32,4 +32,19 @@ public sealed record RetryPipelineOptions<T> : RetryPipelineOptions
     /// </para>
     /// </remarks>
     public Func<T, bool>? ShouldRetryResult { get; init; }
+
+    /// <summary>
+    /// Gets the fallback that gives a value when the pipeline fails, or <see langword="null"/> for no fallback.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The fallback is the outermost part of the pipeline. It receives the exception or the last result after the
+    /// retries, the total timeout and the circuit breaker. It never applies when the caller cancels the token.
+    /// </para>
+    /// <para>
+    /// <see cref="FallbackOptions{T}.Action"/> and <see cref="FallbackOptions{T}.Policy"/> must not be
+    /// <see langword="null"/>.
+    /// </para>
+    /// </remarks>
+    public FallbackOptions<T>? Fallback { get; init; }
 }

@@ -13,7 +13,8 @@ using Corvus.Retry.Strategies;
 
 /// <summary>
 /// Runs operations that return a <typeparamref name="T"/>, and retries them when they throw an exception or return a
-/// result that is a failure, with the settings of a <see cref="RetryPipelineOptions{T}"/>.
+/// result that is a failure, with the settings of a <see cref="RetryPipelineOptions{T}"/>. A fallback can give a value
+/// when the retries fail.
 /// </summary>
 /// <typeparam name="T">The type of the result of the operation.</typeparam>
 /// <remarks>
@@ -31,14 +32,17 @@ public sealed class RetryPipeline<T>
     private readonly CircuitBreaker? circuitBreaker;
     private readonly bool continueOnCapturedContext;
     private readonly Func<T, bool>? shouldRetryResult;
+    private readonly FallbackOptions<T>? fallback;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RetryPipeline{T}"/> class.
     /// </summary>
     /// <param name="options">The settings of the pipeline.</param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="options"/>, <see cref="RetryPipelineOptions.Policy"/> or
-    /// <see cref="RetryPipelineOptions.TimeProvider"/> is <see langword="null"/>.
+    /// <paramref name="options"/>, <see cref="RetryPipelineOptions.Policy"/>,
+    /// <see cref="RetryPipelineOptions.TimeProvider"/>, or the <see cref="FallbackOptions{T}.Action"/> or the
+    /// <see cref="FallbackOptions{T}.Policy"/> of <see cref="RetryPipelineOptions{T}.Fallback"/> is
+    /// <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <see cref="RetryPipelineOptions.AttemptTimeout"/> or <see cref="RetryPipelineOptions.TotalTimeout"/> is not
@@ -50,6 +54,7 @@ public sealed class RetryPipeline<T>
     public RetryPipeline(RetryPipelineOptions<T> options)
     {
         RetryPipelineOptions.Validate(options);
+        ValidateFallback(options.Fallback);
 
         this.strategy = options.Strategy ?? RetryPipelineOptions.DefaultStrategy;
         this.policy = options.Policy;
@@ -60,6 +65,7 @@ public sealed class RetryPipeline<T>
         this.circuitBreaker = options.CircuitBreaker;
         this.continueOnCapturedContext = options.ContinueOnCapturedContext;
         this.shouldRetryResult = options.ShouldRetryResult;
+        this.fallback = options.Fallback;
     }
 
     /// <summary>
@@ -70,7 +76,8 @@ public sealed class RetryPipeline<T>
     /// </param>
     /// <param name="cancellationToken">The caller's token.</param>
     /// <returns>
-    /// The result of the first attempt that succeeds, or the last result if it is a failure and no retries remain.
+    /// The result of the first attempt that succeeds, or the last result if it is a failure and no retries remain. When
+    /// the fallback applies, the value of <see cref="FallbackOptions{T}.Action"/>.
     /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="operation"/> is <see langword="null"/>.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
@@ -83,6 +90,10 @@ public sealed class RetryPipeline<T>
     /// with its original stack trace. When the strategy refuses to retry a result, the call returns that result.
     /// </para>
     /// <para>
+    /// When <see cref="RetryPipelineOptions{T}.Fallback"/> is set, the fallback receives that exception or that result.
+    /// It does not receive a cancellation that the caller caused. An exception from the fallback stops the call.
+    /// </para>
+    /// <para>
     /// The operation returns a <see cref="ValueTask{TResult}"/>. For a method that returns a <see cref="Task{TResult}"/>,
     /// write <c>ct => new ValueTask&lt;T&gt;(GetAsync(ct))</c>.
     /// </para>
@@ -91,7 +102,7 @@ public sealed class RetryPipeline<T>
     {
         ArgumentNullException.ThrowIfNull(operation);
 
-        return RetryEngine.RunAsync<RetryOperations.ResultCheckedOperation<T>, T>(
+        ValueTask<T> core = RetryEngine.RunAsync<RetryOperations.ResultCheckedOperation<T>, T>(
             new(operation, this.shouldRetryResult),
             cancellationToken,
             this.strategy,
@@ -102,5 +113,62 @@ public sealed class RetryPipeline<T>
             this.onRetry,
             this.circuitBreaker,
             this.continueOnCapturedContext);
+
+        // Without a fallback, the call has no extra state machine.
+        return this.fallback is null ? core : this.WithFallbackAsync(core, this.fallback, cancellationToken);
+    }
+
+    private static void ValidateFallback(FallbackOptions<T>? fallback)
+    {
+        if (fallback is null)
+        {
+            return;
+        }
+
+        if (fallback.Action is null)
+        {
+            throw new ArgumentNullException(nameof(RetryPipelineOptions<T>.Fallback), "The Action of the fallback must not be null.");
+        }
+
+        if (fallback.Policy is null)
+        {
+            throw new ArgumentNullException(nameof(RetryPipelineOptions<T>.Fallback), "The Policy of the fallback must not be null.");
+        }
+    }
+
+    private async ValueTask<T> WithFallbackAsync(ValueTask<T> core, FallbackOptions<T> fallback, CancellationToken cancellationToken)
+    {
+        T result;
+        try
+        {
+            result = await core.ConfigureAwait(this.continueOnCapturedContext);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The caller cancelled, so the fallback does not apply.
+            throw;
+        }
+        catch (Exception ex) when (fallback.Policy.CanRetry(ex))
+        {
+            return await this.FallBackAsync(fallback, new FallbackArgs<T>(ex, default, cancellationToken)).ConfigureAwait(this.continueOnCapturedContext);
+        }
+
+        if (fallback.ShouldFallbackResult is not { } shouldFallbackResult || !shouldFallbackResult(result))
+        {
+            return result;
+        }
+
+        (result as IDisposable)?.Dispose();
+        return await this.FallBackAsync(fallback, new FallbackArgs<T>(null, result, cancellationToken)).ConfigureAwait(this.continueOnCapturedContext);
+    }
+
+    private async ValueTask<T> FallBackAsync(FallbackOptions<T> fallback, FallbackArgs<T> args)
+    {
+        if (fallback.OnFallback is { } onFallback)
+        {
+            await onFallback(args).ConfigureAwait(this.continueOnCapturedContext);
+        }
+
+        return await fallback.Action(args).ConfigureAwait(this.continueOnCapturedContext);
     }
 }
