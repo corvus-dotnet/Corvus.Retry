@@ -197,6 +197,93 @@ public class BackoffTests
     }
 
     [TestMethod]
+    [DataRow(-1)] // Timeout.InfiniteTimeSpan is -1 ms, so it is rejected too.
+    [DataRow(-100_000)]
+    public void WhenMinBackoffIsNegative_TheInitialiserThrows(int milliseconds)
+    {
+        ArgumentOutOfRangeException ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+            () => new Backoff(3, TimeSpan.FromSeconds(1)) { MinBackoff = TimeSpan.FromMilliseconds(milliseconds) });
+
+        Assert.AreEqual("MinBackoff", ex.ParamName);
+    }
+
+    [TestMethod]
+    [DataRow(-1)] // Timeout.InfiniteTimeSpan is -1 ms, so it is rejected too.
+    [DataRow(-100_000)]
+    public void WhenMaxBackoffIsNegative_TheInitialiserThrows(int milliseconds)
+    {
+        ArgumentOutOfRangeException ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+            () => new Backoff(3, TimeSpan.FromSeconds(1)) { MaxBackoff = TimeSpan.FromMilliseconds(milliseconds) });
+
+        Assert.AreEqual("MaxBackoff", ex.ParamName);
+    }
+
+    [TestMethod]
+    public void WhenMinBackoffIsGreaterThanMaxBackoff_GetRetryDelayThrows()
+    {
+        // The initialiser cannot check the pair, because the caller sets the bounds in any order (see
+        // TheBoundsCanBeSetInEitherOrder), so the first call checks it.
+        var strategy = new Backoff(3, TimeSpan.FromSeconds(1)) { MinBackoff = TimeSpan.FromSeconds(10), MaxBackoff = TimeSpan.FromSeconds(2) };
+
+        ArgumentException ex = Assert.ThrowsExactly<ArgumentException>(
+            () => strategy.GetRetryDelay(new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero)));
+
+        Assert.AreEqual("MinBackoff", ex.ParamName);
+    }
+
+    [TestMethod]
+    public void WhenOnlyMinBackoffIsSetAboveTheDefaultMaxBackoff_GetRetryDelayThrows()
+    {
+        var strategy = new Backoff(3, TimeSpan.FromSeconds(1)) { MinBackoff = TimeSpan.FromSeconds(60) };
+
+        ArgumentException ex = Assert.ThrowsExactly<ArgumentException>(
+            () => strategy.GetRetryDelay(new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero)));
+
+        Assert.AreEqual("MinBackoff", ex.ParamName);
+    }
+
+    [TestMethod]
+    public void WhenMinBackoffIsGreaterThanMaxBackoff_GetRetryDelayThrowsEvenWhenNoRetriesRemain()
+    {
+        var strategy = new Backoff(1, TimeSpan.FromSeconds(1)) { MinBackoff = TimeSpan.FromSeconds(10), MaxBackoff = TimeSpan.FromSeconds(2) };
+
+        ArgumentException ex = Assert.ThrowsExactly<ArgumentException>(
+            () => strategy.GetRetryDelay(new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero)));
+
+        Assert.AreEqual("MinBackoff", ex.ParamName);
+    }
+
+    [TestMethod]
+    public void TheBoundsCanBeSetInEitherOrder()
+    {
+        // Each initialiser on its own moves MinBackoff above the default MaxBackoff of 30 s.
+        TimeSpan min = TimeSpan.FromSeconds(60);
+        TimeSpan max = TimeSpan.FromSeconds(120);
+        var minFirst = new Backoff(2, TimeSpan.Zero) { MinBackoff = min, MaxBackoff = max };
+        var maxFirst = new Backoff(2, TimeSpan.Zero) { MaxBackoff = max, MinBackoff = min };
+
+        Assert.AreSequenceEqual(new TimeSpan?[] { min, null }, StrategyDriver.FailTimes(minFirst, 2));
+        Assert.AreSequenceEqual(new TimeSpan?[] { min, null }, StrategyDriver.FailTimes(maxFirst, 2));
+    }
+
+    [TestMethod]
+    public void WhenMinBackoffEqualsMaxBackoff_EveryDelayIsThatValue()
+    {
+        TimeSpan bound = TimeSpan.FromSeconds(5);
+        var strategy = new Backoff(4, TimeSpan.FromSeconds(1)) { MinBackoff = bound, MaxBackoff = bound };
+
+        Assert.AreSequenceEqual(new TimeSpan?[] { bound, bound, bound, null }, StrategyDriver.FailTimes(strategy, 4));
+    }
+
+    [TestMethod]
+    public void ZeroBoundsAreAccepted()
+    {
+        var strategy = new Backoff(2, TimeSpan.FromSeconds(1)) { MinBackoff = TimeSpan.Zero, MaxBackoff = TimeSpan.Zero };
+
+        Assert.AreSequenceEqual(new TimeSpan?[] { TimeSpan.Zero, null }, StrategyDriver.FailTimes(strategy, 2));
+    }
+
+    [TestMethod]
     [DataRow(0)]
     [DataRow(-1)]
     public void WhenMaxTriesIsNotPositive_TheConstructorThrows(int maxTries)

@@ -76,18 +76,59 @@ public class Backoff : IRetryStrategy
     /// <summary>
     /// Gets the minimum delay.
     /// </summary>
-    /// <remarks>Set this with an object initialiser. It cannot change after the strategy is created.</remarks>
-    public TimeSpan MinBackoff { get; init; }
+    /// <remarks>
+    /// <para>Set this with an object initialiser. It cannot change after the strategy is created.</para>
+    /// <para>
+    /// It must not be greater than <see cref="MaxBackoff"/>. An object initialiser can set the two bounds in either
+    /// order, so this is checked when <see cref="GetRetryDelay(in RetryAttempt)"/> is called, not when the bound is set.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">The value is negative.</exception>
+    public TimeSpan MinBackoff
+    {
+        get;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, TimeSpan.Zero, nameof(this.MinBackoff));
+            field = value;
+        }
+    }
 
     /// <summary>
     /// Gets the maximum delay.
     /// </summary>
-    /// <remarks>Set this with an object initialiser. It cannot change after the strategy is created.</remarks>
-    public TimeSpan MaxBackoff { get; init; }
+    /// <remarks>
+    /// <para>Set this with an object initialiser. It cannot change after the strategy is created.</para>
+    /// <para>
+    /// It must not be less than <see cref="MinBackoff"/>. This is checked when
+    /// <see cref="GetRetryDelay(in RetryAttempt)"/> is called.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">The value is negative.</exception>
+    public TimeSpan MaxBackoff
+    {
+        get;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, TimeSpan.Zero, nameof(this.MaxBackoff));
+            field = value;
+        }
+    }
 
     /// <inheritdoc/>
+    /// <exception cref="ArgumentException">
+    /// <see cref="MinBackoff"/> is greater than <see cref="MaxBackoff"/>. The parameter name is
+    /// <c>MinBackoff</c>. This is checked on every call, also when no retries remain, so that the error is not hidden.
+    /// </exception>
     public TimeSpan? GetRetryDelay(in RetryAttempt attempt)
     {
+        if (this.MinBackoff > this.MaxBackoff)
+        {
+            throw new ArgumentException(
+                $"MinBackoff ({this.MinBackoff}) must not be greater than MaxBackoff ({this.MaxBackoff}).",
+                nameof(this.MinBackoff));
+        }
+
         if (attempt.AttemptNumber >= this.maxTries)
         {
             return null;
