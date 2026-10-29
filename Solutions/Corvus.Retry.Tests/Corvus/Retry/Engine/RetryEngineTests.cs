@@ -299,6 +299,55 @@ public class RetryEngineTests
         Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
     }
 
+    // Decision Q1 as it applies to RetryEngine. The engine awaits each attempt to its end, and does not wait on the token
+    // instead, so a call cannot return while its attempt holds the test call of a half-open circuit. When the attempt
+    // ends with the caller's cancellation, the engine releases the test call before it throws.
+    [TestMethod]
+    public async Task WhenTheCallerCancelsTheTestCallOfAHalfOpenCircuit_TheCallEndsWithTheAttemptAndTheNextCallMakesTheTest()
+    {
+        RecordingFakeTimeProvider fake = new();
+        var breaker = new CircuitBreaker(new CircuitBreakerOptions { MinimumThroughput = 2, FailureRatio = 1, TimeProvider = fake });
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new DoNotRetry(), CircuitBreaker = breaker, TimeProvider = fake });
+        for (int i = 0; i < 2; i++)
+        {
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+                () => pipeline.ExecuteAsync<int>(_ => throw new InvalidOperationException("Failure")).AsTask()).ConfigureAwait(false);
+        }
+
+        fake.Advance(new CircuitBreakerOptions().BreakDuration);
+        using var cts = new CancellationTokenSource();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // The operation ignores its token until the gate opens.
+        Task<string> call = pipeline.ExecuteAsync(
+            async ct =>
+            {
+                started.SetResult();
+                await gate.Task.ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
+                return "not cancelled";
+            },
+            cts.Token).AsTask();
+
+        await started.Task.WaitAsync(WaitLimit).ConfigureAwait(false);
+        Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
+        await cts.CancelAsync().ConfigureAwait(false);
+
+        // The cancelled call still waits for its attempt, so the attempt still holds the test call.
+        await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
+            () => pipeline.ExecuteAsync(_ => new ValueTask<string>("rejected")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.IsFalse(call.IsCompleted);
+
+        gate.SetResult();
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => WhenCompleteAsync(call)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
+
+        // The cancelled call released the test call before it threw, so the next call makes the test call at once.
+        Assert.AreEqual("success", await pipeline.ExecuteAsync(_ => new ValueTask<string>("success")).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.AreEqual(CircuitState.Closed, breaker.State);
+    }
+
     [TestMethod]
     public async Task WhenTheCallerCancelsDuringADelayWithATotalTimeout_TheCallIsCancelledRatherThanTimedOut()
     {
@@ -736,6 +785,14 @@ public class RetryEngineTests
             onRetry,
             null,
             false).AsTask();
+    }
+
+    // Waits, with a time limit, until the task completes, and then awaits the task itself, so that the caller sees the
+    // exact exception of the task.
+    private static async Task<T> WhenCompleteAsync<T>(Task<T> task)
+    {
+        await Task.WhenAny(task).WaitAsync(WaitLimit).ConfigureAwait(false);
+        return await task.ConfigureAwait(false);
     }
 
     // A real infinite delay that only the token ends, so that no timer from the fake time provider is involved.
