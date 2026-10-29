@@ -27,6 +27,8 @@ public class ConstructionBenchmarks
     private static readonly Func<RetryAttempt, TimeSpan?> GetRetryDelay = static attempt => attempt.AttemptNumber < 10 ? TimeSpan.Zero : null;
     private static readonly Func<Exception, bool> IsTransient = static ex => ex is TimeoutException;
     private static readonly Func<TimeoutException, bool> IsTimeoutTransient = static ex => ex.Message.Length > 0;
+    private static readonly RetryPipelineOptions PipelineOptions = new() { Strategy = SharedStrategy, AttemptTimeout = TimeSpan.FromSeconds(5) };
+    private static readonly RetryPipelineOptions<int> PipelineOptionsOfT = new() { Strategy = SharedStrategy, ShouldRetryResult = static r => r < 0 };
 
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("Strategies")]
@@ -168,4 +170,12 @@ public class ConstructionBenchmarks
     [Benchmark]
     [BenchmarkCategory("Other")]
     public RetryTaskFactory<int> RetryTaskFactoryOfT() => new();
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public RetryPipeline RetryPipeline() => new(PipelineOptions);
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public RetryPipeline<int> RetryPipelineOfT() => new(PipelineOptionsOfT);
 }
