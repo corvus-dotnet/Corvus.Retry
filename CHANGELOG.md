@@ -97,7 +97,9 @@ not do the steps in the guide, your project can fail to compile, or your retries
 - The benchmarks report the number of exceptions for each operation.
 - The benchmarks measure the pipeline, the fallback, the circuit breaker, hedging, the new strategies and the new
   policies. `DelayBenchmarks` replaces `SleepBenchmarks`.
-- A sample for `ReliabilityPipeline` is in `Examples/ReliabilityPipelineSample.cs`.
+- The `Examples` folder has fifteen demos, each a single-file .NET 10 app that renders what the library did
+  with Spectre.Console, and an interactive launcher (`dotnet run Examples/menu.cs`). They replace the four
+  notebook-style samples, and need no network access. See `Examples/README.md`.
 - ADR 0002 records the decision to use `TimeProvider`. It replaces ADR 0001.
 
 ### Changed

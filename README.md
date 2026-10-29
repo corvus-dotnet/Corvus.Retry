@@ -337,7 +337,7 @@ string body = await pipeline.ExecuteAsync(
 
 The operation must be idempotent. It must also be safe when two or more attempts run at the same time.
 
-A pipeline cannot use hedging and retries together. To retry a hedged call, use two pipelines. Run the hedging pipeline in the operation of the retry pipeline:
+A pipeline cannot use hedging and retries together. To retry a hedged call, use two pipelines. Run the hedging pipeline in the operation of the retry pipeline. Give a circuit breaker to the inner pipeline only: if both pipelines share one breaker, the outer attempt takes the single test call of a half-open circuit, the inner attempt is then rejected, and the circuit never closes. See `Examples/composed-pipelines.cs`:
 
 ```csharp
 string body = await retryPipeline.ExecuteAsync(
@@ -586,7 +586,7 @@ Task<string> task = RetryTask<string>.Factory.StartNew(() => File.ReadAllText("s
 You can also give an `IRetryPolicy` and an `IRetryStrategy`. The default strategy is `new Count()` (5 attempts) and the default policy is `AnyExceptionPolicy`. These defaults are different from the defaults of `Retriable`.
 
 - A retry does not block a thread. A delay task and continuations start each retry on the scheduler of the caller.
-- If the operation stops, the task faults with the failures that the operation recorded. `RetryTask` keeps a maximum of 100 failures: the first 99 failures and the last failure.
+- If the operation stops, the task faults with the failures that the operation recorded, inside one `AggregateException`. Thus `task.Exception.InnerException` is that `AggregateException`, and its `InnerExceptions` are the failures of the tries. `RetryTask` keeps a maximum of 100 failures: the first 99 failures and the last failure.
 - A cancellation gives a `Canceled` task.
 - The returned task obeys `TaskCreationOptions.RunContinuationsAsynchronously`.
 - `RetryTask` has no retry callback.
@@ -738,14 +738,14 @@ string body = await pipeline.ExecuteAsync(
 
 ## Samples
 
-The folder `Examples` has samples. Each sample is a .NET 10 file-based app. Each sample uses the library source with `#:project`, thus it always uses the code in this repository. To run a sample, use one of these commands from the root of the repository:
+The folder [`Examples`](Examples) has fifteen demos, each a standalone [Spectre.Console](https://spectreconsole.net/) app in one file. Each demo shows one feature or one scenario, simulates the dependency it retries against, and renders what the library did: the attempts, the delays, the state of the circuit, or which hedged attempt won. The demos need only the .NET 10 SDK and no network access. Each demo uses the library source with `#:project`, thus it always uses the code in this repository.
 
-    dotnet run Examples/ReliabilityPipelineSample.cs
-    dotnet run Examples/RetriableSample.cs
-    dotnet run Examples/ReliableTaskRunnerSample.cs
-    dotnet run Examples/RetryTaskSample.cs
+Run the interactive launcher, or run any demo directly, from the root of the repository:
 
-The samples use the .NET 10 SDK. `RetriableSample` sends pings to `endjin.com`, thus it must have network access. The other samples do not use the network. Some samples wait between the retries: `RetriableSample` takes approximately 2 minutes, and the other samples take approximately 20 seconds each.
+    dotnet run Examples/menu.cs
+    dotnet run Examples/http-client-resilience.cs
+
+See the [demos README](Examples/README.md) for the full list. Each demo takes between 2 and 13 seconds after the first build.
 
 ## Benchmarks
 
