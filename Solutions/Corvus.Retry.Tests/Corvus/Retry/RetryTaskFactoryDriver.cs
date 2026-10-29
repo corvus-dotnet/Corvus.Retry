@@ -28,8 +28,8 @@ public static class RetryTaskFactoryDriver
     /// Gets every (overload, defaults) pair that exists as a public <c>StartNew</c> method on each factory.
     /// </summary>
     public static IReadOnlyList<(StartNewOverload Overload, StartNewDefaults Defaults)> AllOverloads { get; } =
-        (from StartNewDefaults defaults in Enum.GetValues(typeof(StartNewDefaults))
-         from StartNewOverload overload in Enum.GetValues(typeof(StartNewOverload))
+        (from StartNewDefaults defaults in Enum.GetValues<StartNewDefaults>()
+         from StartNewOverload overload in Enum.GetValues<StartNewOverload>()
          where Exists(overload, defaults)
          select (overload, defaults)).ToList();
 

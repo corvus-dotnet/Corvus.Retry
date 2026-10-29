@@ -41,23 +41,13 @@ internal static class RetryOperations
     /// Adapts a <see cref="Func{TResult}"/> that returns a <see cref="Task{TResult}"/>.
     /// </summary>
     /// <typeparam name="T">The type of the result.</typeparam>
-    internal readonly struct TaskOperation<T> : IRetryOperation<T>
+    /// <param name="operation">The operation.</param>
+    internal readonly struct TaskOperation<T>(Func<Task<T>> operation) : IRetryOperation<T>
     {
-        private readonly Func<Task<T>> operation;
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="TaskOperation{T}"/> struct.
-        /// </summary>
-        /// <param name="operation">The operation.</param>
-        public TaskOperation(Func<Task<T>> operation)
-        {
-            this.operation = operation;
-        }
-
         /// <inheritdoc/>
         public ValueTask<T> InvokeAsync(CancellationToken cancellationToken)
         {
-            return FromTask(this.operation());
+            return FromTask(operation());
         }
 
         /// <inheritdoc/>
@@ -70,23 +60,13 @@ internal static class RetryOperations
     /// <summary>
     /// Adapts a <see cref="Func{TResult}"/> that returns a <see cref="Task"/>.
     /// </summary>
-    internal readonly struct TaskUnitOperation : IRetryOperation<Unit>
+    /// <param name="operation">The operation.</param>
+    internal readonly struct TaskUnitOperation(Func<Task> operation) : IRetryOperation<Unit>
     {
-        private readonly Func<Task> operation;
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="TaskUnitOperation"/> struct.
-        /// </summary>
-        /// <param name="operation">The operation.</param>
-        public TaskUnitOperation(Func<Task> operation)
-        {
-            this.operation = operation;
-        }
-
         /// <inheritdoc/>
         public ValueTask<Unit> InvokeAsync(CancellationToken cancellationToken)
         {
-            return FromTask(this.operation());
+            return FromTask(operation());
         }
 
         /// <inheritdoc/>
@@ -100,23 +80,13 @@ internal static class RetryOperations
     /// Adapts a <see cref="Func{T, TResult}"/> that takes a token and returns a <see cref="Task{TResult}"/>.
     /// </summary>
     /// <typeparam name="T">The type of the result.</typeparam>
-    internal readonly struct TaskTokenOperation<T> : IRetryOperation<T>
+    /// <param name="operation">The operation.</param>
+    internal readonly struct TaskTokenOperation<T>(Func<CancellationToken, Task<T>> operation) : IRetryOperation<T>
     {
-        private readonly Func<CancellationToken, Task<T>> operation;
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="TaskTokenOperation{T}"/> struct.
-        /// </summary>
-        /// <param name="operation">The operation.</param>
-        public TaskTokenOperation(Func<CancellationToken, Task<T>> operation)
-        {
-            this.operation = operation;
-        }
-
         /// <inheritdoc/>
         public ValueTask<T> InvokeAsync(CancellationToken cancellationToken)
         {
-            return FromTask(this.operation(cancellationToken));
+            return FromTask(operation(cancellationToken));
         }
 
         /// <inheritdoc/>
@@ -129,23 +99,13 @@ internal static class RetryOperations
     /// <summary>
     /// Adapts a <see cref="Func{T, TResult}"/> that takes a token and returns a <see cref="Task"/>.
     /// </summary>
-    internal readonly struct TaskTokenUnitOperation : IRetryOperation<Unit>
+    /// <param name="operation">The operation.</param>
+    internal readonly struct TaskTokenUnitOperation(Func<CancellationToken, Task> operation) : IRetryOperation<Unit>
     {
-        private readonly Func<CancellationToken, Task> operation;
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="TaskTokenUnitOperation"/> struct.
-        /// </summary>
-        /// <param name="operation">The operation.</param>
-        public TaskTokenUnitOperation(Func<CancellationToken, Task> operation)
-        {
-            this.operation = operation;
-        }
-
         /// <inheritdoc/>
         public ValueTask<Unit> InvokeAsync(CancellationToken cancellationToken)
         {
-            return FromTask(this.operation(cancellationToken));
+            return FromTask(operation(cancellationToken));
         }
 
         /// <inheritdoc/>
@@ -159,23 +119,13 @@ internal static class RetryOperations
     /// Adapts a <see cref="Func{T, TResult}"/> that takes a token and returns a <see cref="ValueTask{TResult}"/>.
     /// </summary>
     /// <typeparam name="T">The type of the result.</typeparam>
-    internal readonly struct ValueTaskTokenOperation<T> : IRetryOperation<T>
+    /// <param name="operation">The operation.</param>
+    internal readonly struct ValueTaskTokenOperation<T>(Func<CancellationToken, ValueTask<T>> operation) : IRetryOperation<T>
     {
-        private readonly Func<CancellationToken, ValueTask<T>> operation;
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="ValueTaskTokenOperation{T}"/> struct.
-        /// </summary>
-        /// <param name="operation">The operation.</param>
-        public ValueTaskTokenOperation(Func<CancellationToken, ValueTask<T>> operation)
-        {
-            this.operation = operation;
-        }
-
         /// <inheritdoc/>
         public ValueTask<T> InvokeAsync(CancellationToken cancellationToken)
         {
-            return this.operation(cancellationToken);
+            return operation(cancellationToken);
         }
 
         /// <inheritdoc/>
@@ -188,23 +138,13 @@ internal static class RetryOperations
     /// <summary>
     /// Adapts a <see cref="Func{T, TResult}"/> that takes a token and returns a <see cref="ValueTask"/>.
     /// </summary>
-    internal readonly struct ValueTaskTokenUnitOperation : IRetryOperation<Unit>
+    /// <param name="operation">The operation.</param>
+    internal readonly struct ValueTaskTokenUnitOperation(Func<CancellationToken, ValueTask> operation) : IRetryOperation<Unit>
     {
-        private readonly Func<CancellationToken, ValueTask> operation;
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="ValueTaskTokenUnitOperation"/> struct.
-        /// </summary>
-        /// <param name="operation">The operation.</param>
-        public ValueTaskTokenUnitOperation(Func<CancellationToken, ValueTask> operation)
-        {
-            this.operation = operation;
-        }
-
         /// <inheritdoc/>
         public ValueTask<Unit> InvokeAsync(CancellationToken cancellationToken)
         {
-            ValueTask valueTask = this.operation(cancellationToken);
+            ValueTask valueTask = operation(cancellationToken);
             if (valueTask.IsCompletedSuccessfully)
             {
                 // Get the result, so that a pooled source behind the value task is released.
@@ -233,35 +173,23 @@ internal static class RetryOperations
     /// uses a predicate to find the results that are failures.
     /// </summary>
     /// <typeparam name="T">The type of the result.</typeparam>
-    internal readonly struct ResultCheckedOperation<T> : IRetryOperation<T>
+    /// <param name="operation">The operation.</param>
+    /// <param name="isFailure">
+    /// The predicate that returns <see langword="true"/> for a result that is a failure, or <see langword="null"/> if
+    /// no result is a failure.
+    /// </param>
+    internal readonly struct ResultCheckedOperation<T>(Func<CancellationToken, ValueTask<T>> operation, Func<T, bool>? isFailure) : IRetryOperation<T>
     {
-        private readonly Func<CancellationToken, ValueTask<T>> operation;
-        private readonly Func<T, bool>? isFailure;
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="ResultCheckedOperation{T}"/> struct.
-        /// </summary>
-        /// <param name="operation">The operation.</param>
-        /// <param name="isFailure">
-        /// The predicate that returns <see langword="true"/> for a result that is a failure, or <see langword="null"/>
-        /// if no result is a failure.
-        /// </param>
-        public ResultCheckedOperation(Func<CancellationToken, ValueTask<T>> operation, Func<T, bool>? isFailure)
-        {
-            this.operation = operation;
-            this.isFailure = isFailure;
-        }
-
         /// <inheritdoc/>
         public ValueTask<T> InvokeAsync(CancellationToken cancellationToken)
         {
-            return this.operation(cancellationToken);
+            return operation(cancellationToken);
         }
 
         /// <inheritdoc/>
         public bool IsFailure(T result)
         {
-            return this.isFailure?.Invoke(result) ?? false;
+            return isFailure?.Invoke(result) ?? false;
         }
     }
 
@@ -269,46 +197,26 @@ internal static class RetryOperations
     /// Adapts a synchronous <see cref="Func{TResult}"/>.
     /// </summary>
     /// <typeparam name="T">The type of the result.</typeparam>
-    internal readonly struct FuncOperation<T> : IRetrySyncOperation<T>
+    /// <param name="operation">The operation.</param>
+    internal readonly struct FuncOperation<T>(Func<T> operation) : IRetrySyncOperation<T>
     {
-        private readonly Func<T> operation;
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="FuncOperation{T}"/> struct.
-        /// </summary>
-        /// <param name="operation">The operation.</param>
-        public FuncOperation(Func<T> operation)
-        {
-            this.operation = operation;
-        }
-
         /// <inheritdoc/>
         public T Invoke()
         {
-            return this.operation();
+            return operation();
         }
     }
 
     /// <summary>
     /// Adapts a synchronous <see cref="Action"/>.
     /// </summary>
-    internal readonly struct ActionOperation : IRetrySyncOperation<Unit>
+    /// <param name="operation">The operation.</param>
+    internal readonly struct ActionOperation(Action operation) : IRetrySyncOperation<Unit>
     {
-        private readonly Action operation;
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="ActionOperation"/> struct.
-        /// </summary>
-        /// <param name="operation">The operation.</param>
-        public ActionOperation(Action operation)
-        {
-            this.operation = operation;
-        }
-
         /// <inheritdoc/>
         public Unit Invoke()
         {
-            this.operation();
+            operation();
             return default;
         }
     }

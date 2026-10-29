@@ -282,7 +282,10 @@ public class ReliableTaskRunnerTests
         await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
 
         Assert.IsTrue(stopTask.IsFaulted);
-        CollectionAssert.AreEquivalent(new Exception[] { first, second }, stopTask.Exception!.InnerExceptions.ToArray());
+        IReadOnlyCollection<Exception> thrown = stopTask.Exception!.InnerExceptions;
+        Assert.HasCount(2, thrown);
+        Assert.Contains(first, thrown);
+        Assert.Contains(second, thrown);
     }
 
     [TestMethod]

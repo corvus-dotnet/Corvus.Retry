@@ -104,3 +104,7 @@ dotnet_diagnostic.CA1303.severity = None
 
 # RCS1089: Use --/++ operator instead of assignment.
 dotnet_diagnostic.RCS1089.severity = none
+
+# MSTEST0049: Flow TestContext.CancellationToken to async calls. The tests have no run timeout, and each wait in a
+# test has its own time limit, so the token adds nothing. The MSTest "Recommended" mode makes this rule a warning.
+dotnet_diagnostic.MSTEST0049.severity = suggestion

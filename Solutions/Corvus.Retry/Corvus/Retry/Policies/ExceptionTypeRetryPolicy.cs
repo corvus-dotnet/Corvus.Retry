@@ -42,10 +42,7 @@ public sealed class ExceptionTypeRetryPolicy : IRetryPolicy
     public ExceptionTypeRetryPolicy Or<TException>(Func<TException, bool>? predicate = null)
         where TException : Exception
     {
-        Func<Exception, bool>[] combined = new Func<Exception, bool>[this.handlers.Length + 1];
-        this.handlers.CopyTo(combined, 0);
-        combined[^1] = CreateMatch(predicate);
-        return new ExceptionTypeRetryPolicy(combined);
+        return new ExceptionTypeRetryPolicy([.. this.handlers, CreateMatch(predicate)]);
     }
 
     /// <inheritdoc/>

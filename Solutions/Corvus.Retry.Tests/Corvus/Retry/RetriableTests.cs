@@ -507,7 +507,7 @@ public class RetriableTests
         Exception thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
             () => RetriableDriver.RetryAsync(shape, ThrowFromADistinctiveMethod, CancellationToken.None, new Count(2), new AnyExceptionPolicy())).ConfigureAwait(false);
 
-        StringAssert.Contains(thrown.StackTrace, nameof(ThrowFromADistinctiveMethod));
+        Assert.Contains(nameof(ThrowFromADistinctiveMethod), thrown.StackTrace!);
     }
 
     // Not inlined, so that its frame is in the stack trace of the exception it throws.

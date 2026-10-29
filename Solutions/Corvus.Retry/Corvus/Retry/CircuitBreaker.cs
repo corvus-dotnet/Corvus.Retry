@@ -124,16 +124,7 @@ public sealed class CircuitBreaker
     /// after the break ends, not when the break ends. Until that call, this property gives
     /// <see cref="CircuitState.Open"/>.
     /// </remarks>
-    public CircuitState State
-    {
-        get
-        {
-            lock (this.sync)
-            {
-                return this.state;
-            }
-        }
-    }
+    public CircuitState State => this.state;
 
     /// <summary>
     /// Isolates the circuit: the breaker rejects each call with an <see cref="IsolatedCircuitException"/> until
