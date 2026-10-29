@@ -5,6 +5,8 @@
 namespace Corvus.Retry;
 
 using System;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -30,6 +32,8 @@ using Corvus.Retry.Strategies;
 /// </remarks>
 public sealed class ReliabilityPipeline
 {
+    private const string NestedTaskMessage = "ExecuteAsync received an operation that returns a task inside its ValueTask. Await the task in the operation.";
+
     private readonly IRetryStrategy strategy;
     private readonly IRetryPolicy policy;
     private readonly TimeProvider timeProvider;
@@ -56,10 +60,15 @@ public sealed class ReliabilityPipeline
     /// <see cref="ReliabilityPipelineOptions.Hedging"/> is out of range.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// <see cref="ReliabilityPipelineOptions.Hedging"/> and <see cref="ReliabilityPipelineOptions.Strategy"/> are both set.
+    /// <see cref="ReliabilityPipelineOptions.Hedging"/> and <see cref="ReliabilityPipelineOptions.Strategy"/> are both set; or
+    /// <paramref name="options"/> is a <see cref="ReliabilityPipelineOptions{T}"/> that sets
+    /// <see cref="ReliabilityPipelineOptions{T}.ShouldRetryResult"/>, <see cref="ReliabilityPipelineOptions{T}.Fallback"/> or
+    /// <see cref="ReliabilityPipelineOptions{T}.HedgingActionGenerator"/>. Only <see cref="ReliabilityPipeline{T}"/> can use
+    /// these settings.
     /// </exception>
     /// <remarks>
-    /// The <see cref="ArgumentException.ParamName"/> of each exception is the name of the property that is not correct.
+    /// The <see cref="ArgumentException.ParamName"/> of each exception is the name of the property that is not correct. For
+    /// the settings that only <see cref="ReliabilityPipeline{T}"/> can use, it is <c>options</c>.
     /// </remarks>
     public ReliabilityPipeline(ReliabilityPipelineOptions options)
     {
@@ -175,6 +184,34 @@ public sealed class ReliabilityPipeline
 
         // A call that completed synchronously needs no task. Otherwise the task carries the outcome of the call.
         return call.IsCompletedSuccessfully ? default : new ValueTask(call.AsTask());
+    }
+
+    /// <summary>
+    /// Stops the compiler from binding an operation that returns a task inside its <see cref="ValueTask{TResult}"/> to
+    /// <see cref="ExecuteAsync{T}(Func{CancellationToken, ValueTask{T}}, CancellationToken)"/>.
+    /// </summary>
+    /// <typeparam name="TTask">The type of the task inside the <see cref="ValueTask{TResult}"/> of the operation.</typeparam>
+    /// <param name="operation">The operation.</param>
+    /// <param name="cancellationToken">The caller's token.</param>
+    /// <param name="arguments">No arguments. This parameter makes the signature different from the overload that this one blocks.</param>
+    /// <returns>This method does not return.</returns>
+    /// <remarks>
+    /// <para>
+    /// Without this overload, <c>ExecuteAsync(async ct => GetAsync(ct))</c> binds to
+    /// <see cref="ExecuteAsync{T}(Func{CancellationToken, ValueTask{T}}, CancellationToken)"/> with the task of
+    /// <c>GetAsync</c> as the result. The operation does not wait for that task, so a failure of that task is not
+    /// retried.
+    /// </para>
+    /// <para>Write <c>ExecuteAsync(async ct => await GetAsync(ct))</c>.</para>
+    /// </remarks>
+    /// <exception cref="NotSupportedException">Always. The compiler does not let a call bind to this method.</exception>
+    [Obsolete(NestedTaskMessage, error: true)]
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    [OverloadResolutionPriority(1)]
+    public ValueTask<TTask> ExecuteAsync<TTask>(Func<CancellationToken, ValueTask<TTask>> operation, CancellationToken cancellationToken = default, params object?[] arguments)
+        where TTask : Task
+    {
+        throw new NotSupportedException(NestedTaskMessage);
     }
 
     // This is a separate method, so that a call without hedging does not allocate the closure.

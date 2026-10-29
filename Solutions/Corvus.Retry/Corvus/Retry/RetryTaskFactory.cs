@@ -26,6 +26,10 @@ using Corvus.Retry.Strategies;
 /// <item><see cref="ReliableTaskRunner"/> -wrapping a long-running asynchronous operation in a host that ensures it continues to run even after failure. You can use <see cref="IRetryPolicy"/> to control when the task restarts.</item>
 /// </list>
 /// </para>
+/// <para>
+/// When the operation is not retried, the task faults with an <see cref="AggregateException"/> of the failures. It
+/// keeps at most 100 failures: the first 99 and the last.
+/// </para>
 /// </remarks>
 public sealed class RetryTaskFactory
 {
@@ -36,6 +40,7 @@ public sealed class RetryTaskFactory
     internal static readonly IRetryStrategy DefaultStrategy = new Count();
 
     private const string AsyncActionMessage = "StartNew runs an asynchronous action as async void, and does not retry it. Use Retriable.RetryAsync.";
+    private const string ValueTaskActionMessage = "StartNew does not wait for a ValueTask, and does not retry it. Use Retriable.RetryAsync, or ReliabilityPipeline.ExecuteAsync for a ValueTask.";
 
     // An action has no result, so the task returned for it carries none.
     private static readonly Func<Task, object?> NoResult = _ => null;
@@ -552,6 +557,100 @@ public sealed class RetryTaskFactory
     }
 
     /// <summary>
+    /// Stops the compiler from binding an action that returns a <see cref="ValueTask"/> to
+    /// <see cref="StartNew(Action)"/> or its overloads.
+    /// </summary>
+    /// <typeparam name="TValueTask">The type that the action returns. Only <see cref="ValueTask"/> meets the constraints.</typeparam>
+    /// <param name="asyncAction">The asynchronous action.</param>
+    /// <param name="arguments">The other arguments of the call.</param>
+    /// <returns>This method does not return.</returns>
+    /// <remarks>
+    /// <para>
+    /// The returned task of <see cref="StartNew(Action)"/> completes when the action returns its
+    /// <see cref="ValueTask"/>. It does not wait for the operation, and does not retry a failure after the first
+    /// <see langword="await"/>. This overload has a higher priority than the <see cref="Action"/> overloads, so the
+    /// compiler reports an error.
+    /// </para>
+    /// <para>
+    /// This method is generic, so that a lambda that only throws does not bind to it. Its last parameter is a span,
+    /// so that its signature is different from <see cref="StartNew{TTask}(Func{TTask}, object?[])"/>.
+    /// </para>
+    /// <para>Use <see cref="Retriable.RetryAsync(Func{Task})"/>, or <see cref="ReliabilityPipeline.ExecuteAsync(Func{CancellationToken, ValueTask}, CancellationToken)"/>.</para>
+    /// </remarks>
+    /// <exception cref="NotSupportedException">Always. The compiler does not let a call bind to this method.</exception>
+    [Obsolete(ValueTaskActionMessage, error: true)]
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    [OverloadResolutionPriority(1)]
+    public Task StartNew<TValueTask>(Func<TValueTask> asyncAction, params ReadOnlySpan<object?> arguments)
+        where TValueTask : struct, IEquatable<ValueTask>
+    {
+        throw new NotSupportedException(ValueTaskActionMessage);
+    }
+
+    /// <summary>
+    /// Stops the compiler from binding an action that returns a <see cref="ValueTask{TResult}"/> to
+    /// <see cref="StartNew(Action)"/> or its overloads.
+    /// </summary>
+    /// <typeparam name="TResult">The type of the result of the action.</typeparam>
+    /// <param name="asyncAction">The asynchronous action.</param>
+    /// <param name="arguments">The other arguments of the call.</param>
+    /// <returns>This method does not return.</returns>
+    /// <remarks>
+    /// See <see cref="StartNew{TValueTask}(Func{TValueTask}, ReadOnlySpan{object?})"/> for the reason.
+    /// </remarks>
+    /// <exception cref="NotSupportedException">Always. The compiler does not let a call bind to this method.</exception>
+    [Obsolete(ValueTaskActionMessage, error: true)]
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    [OverloadResolutionPriority(1)]
+    public Task StartNew<TResult>(Func<ValueTask<TResult>> asyncAction, params object?[] arguments)
+    {
+        throw new NotSupportedException(ValueTaskActionMessage);
+    }
+
+    /// <summary>
+    /// Stops the compiler from binding an action that returns a <see cref="ValueTask"/> to
+    /// <see cref="StartNew(Action{object?}, object?)"/> or its overloads.
+    /// </summary>
+    /// <typeparam name="TValueTask">The type that the action returns. Only <see cref="ValueTask"/> meets the constraints.</typeparam>
+    /// <param name="asyncAction">The asynchronous action.</param>
+    /// <param name="state">The state for the action.</param>
+    /// <param name="arguments">The other arguments of the call.</param>
+    /// <returns>This method does not return.</returns>
+    /// <remarks>
+    /// See <see cref="StartNew{TValueTask}(Func{TValueTask}, ReadOnlySpan{object?})"/> for the reason.
+    /// </remarks>
+    /// <exception cref="NotSupportedException">Always. The compiler does not let a call bind to this method.</exception>
+    [Obsolete(ValueTaskActionMessage, error: true)]
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    [OverloadResolutionPriority(1)]
+    public Task StartNew<TValueTask>(Func<object?, TValueTask> asyncAction, object? state, params ReadOnlySpan<object?> arguments)
+        where TValueTask : struct, IEquatable<ValueTask>
+    {
+        throw new NotSupportedException(ValueTaskActionMessage);
+    }
+
+    /// <summary>
+    /// Stops the compiler from binding an action that returns a <see cref="ValueTask{TResult}"/> to
+    /// <see cref="StartNew(Action{object?}, object?)"/> or its overloads.
+    /// </summary>
+    /// <typeparam name="TResult">The type of the result of the action.</typeparam>
+    /// <param name="asyncAction">The asynchronous action.</param>
+    /// <param name="state">The state for the action.</param>
+    /// <param name="arguments">The other arguments of the call.</param>
+    /// <returns>This method does not return.</returns>
+    /// <remarks>
+    /// See <see cref="StartNew{TValueTask}(Func{TValueTask}, ReadOnlySpan{object?})"/> for the reason.
+    /// </remarks>
+    /// <exception cref="NotSupportedException">Always. The compiler does not let a call bind to this method.</exception>
+    [Obsolete(ValueTaskActionMessage, error: true)]
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    [OverloadResolutionPriority(1)]
+    public Task StartNew<TResult>(Func<object?, ValueTask<TResult>> asyncAction, object? state, params object?[] arguments)
+    {
+        throw new NotSupportedException(ValueTaskActionMessage);
+    }
+
+    /// <summary>
     /// Returns a task that completes when the first try, and any retries, of an operation have finished.
     /// </summary>
     /// <typeparam name="TResult">The type of the result of the returned task.</typeparam>
@@ -564,15 +663,16 @@ public sealed class RetryTaskFactory
     /// <param name="strategy">The retry strategy.</param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>
-    /// A task that completes with the result of the first successful try; faults with the exceptions of every failed
-    /// try when the operation will not be retried; or is
+    /// A task that completes with the result of the first successful try; faults with the exceptions of the failed
+    /// tries (the first 99 and the last, when more than 100 tries fail) when the operation will not be retried; or is
     /// cancelled, with <paramref name="cancellationToken"/>, when cancellation stops the operation.
     /// </returns>
     /// <remarks>
     /// <para>
     /// The tries must be created with <see cref="Detached(TaskCreationOptions)"/> options. If the caller asked for
     /// <see cref="TaskCreationOptions.AttachedToParent"/>, it is the returned task that attaches to the parent, so
-    /// that the parent sees the outcome of the operation rather than the failures of tries that were retried.
+    /// that the parent sees the outcome of the operation rather than the failures of tries that were retried. The
+    /// returned task also honours <see cref="TaskCreationOptions.RunContinuationsAsynchronously"/>.
     /// </para>
     /// <para>
     /// No thread is blocked while the operation is retried. Retry decisions run on the thread pool, each delay is a
@@ -619,6 +719,9 @@ public sealed class RetryTaskFactory
     /// </remarks>
     private sealed class RetryOperation<TResult> : TaskCompletionSource<TResult>
     {
+        // The most failures that the task reports.
+        private const int MaxRecordedFailures = 100;
+
         // The operation is passed as each continuation's state, so the continuations need no closure.
         private static readonly Action<Task, object?> OnTryCompleted = static (t, state) => ((RetryOperation<TResult>)state!).Complete(t);
         private static readonly Action<Task, object?> OnDelayCompleted = static (t, state) => ((RetryOperation<TResult>)state!).AfterDelay(t);
@@ -639,7 +742,7 @@ public sealed class RetryTaskFactory
         private List<Exception>? failures;
 
         public RetryOperation(Func<Task> createTask, Func<Task, TResult> getResult, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy, IRetryPolicy policy)
-            : base(taskCreationOptions & TaskCreationOptions.AttachedToParent)
+            : base(taskCreationOptions & (TaskCreationOptions.AttachedToParent | TaskCreationOptions.RunContinuationsAsynchronously))
         {
             this.createTask = createTask;
             this.getResult = getResult;
@@ -736,20 +839,41 @@ public sealed class RetryTaskFactory
         /// </summary>
         /// <param name="exception">The exception of the try's task.</param>
         /// <remarks>
+        /// <para>
         /// The inner exceptions are recorded, so that the task's own <see cref="AggregateException"/> does not wrap
         /// each failure. An <see cref="AggregateException"/> with no inner exceptions is recorded as itself, so that
         /// the failure is not lost.
+        /// </para>
+        /// <para>
+        /// At most <see cref="MaxRecordedFailures"/> failures are kept, so that a strategy with no limit does not use
+        /// more and more memory. The operation keeps the first 99 failures and the last.
+        /// </para>
         /// </remarks>
         private void Record(AggregateException exception)
         {
             List<Exception> failures = this.failures ??= [];
             if (exception.InnerExceptions.Count == 0)
             {
-                failures.Add(exception);
+                Add(failures, exception);
             }
             else
             {
-                failures.AddRange(exception.InnerExceptions);
+                foreach (Exception inner in exception.InnerExceptions)
+                {
+                    Add(failures, inner);
+                }
+            }
+
+            static void Add(List<Exception> failures, Exception failure)
+            {
+                if (failures.Count < MaxRecordedFailures)
+                {
+                    failures.Add(failure);
+                }
+                else
+                {
+                    failures[^1] = failure;
+                }
             }
         }
 

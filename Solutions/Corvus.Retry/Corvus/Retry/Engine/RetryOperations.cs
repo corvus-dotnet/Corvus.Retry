@@ -5,6 +5,7 @@
 namespace Corvus.Retry;
 
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -19,14 +20,25 @@ internal static class RetryOperations
 {
     // A task that has already completed with a result needs no await in the engine. A task that is still running, or
     // that failed, is wrapped as it is, so that the engine's await observes its outcome with the original stack trace.
-    private static ValueTask<T> FromTask<T>(Task<T> task)
+    // A null task fails the attempt. The strategy and the policy decide whether it is retried, as for any exception.
+    private static ValueTask<T> FromTask<T>(Task<T>? task)
     {
+        ThrowIfNull(task);
         return task.IsCompletedSuccessfully ? new ValueTask<T>(task.Result) : new ValueTask<T>(task);
     }
 
-    private static ValueTask<Unit> FromTask(Task task)
+    private static ValueTask<Unit> FromTask(Task? task)
     {
+        ThrowIfNull(task);
         return task.IsCompletedSuccessfully ? default : AwaitAsync(task);
+    }
+
+    private static void ThrowIfNull([NotNull] Task? task)
+    {
+        if (task is null)
+        {
+            throw new InvalidOperationException("The operation returned a null task.");
+        }
     }
 
     // The engine applies its own ConfigureAwait(continueOnCapturedContext) when it awaits the result of this method,

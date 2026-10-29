@@ -6,6 +6,7 @@ namespace Corvus.Retry;
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
@@ -428,6 +429,42 @@ public class RetryTaskFactoryTests
         AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
         Assert.AreEqual(1, operation.Invocations);
         Assert.AreSame(operation.Thrown[0], Assert.ContainsSingle(thrown.InnerExceptions));
+    }
+
+    [TestMethod]
+    public async Task WhenMoreThanOneHundredTriesFail_TheTaskFaultsWithTheFirstNinetyNineFailuresAndTheLast()
+    {
+        FlakyOperation operation = new(FlakyOperation.AlwaysFails);
+        IRetryStrategy strategy = RetryStrategies.FromDelegate(a => a.AttemptNumber < 150 ? TimeSpan.Zero : null);
+
+        Task task = this.factory.StartNew(() => operation.Invoke(), strategy, new AnyExceptionPolicy());
+
+        AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
+        Assert.AreEqual(150, operation.Invocations);
+        Assert.HasCount(100, thrown.InnerExceptions);
+        Assert.AreSame(operation.Thrown[0], thrown.InnerExceptions[0]);
+        Assert.AreSame(operation.Thrown[98], thrown.InnerExceptions[98]);
+        Assert.AreSame(operation.Thrown[149], thrown.InnerExceptions[99]);
+    }
+
+    [TestMethod]
+    [DataRow(TaskCreationOptions.None, true)]
+    [DataRow(TaskCreationOptions.RunContinuationsAsynchronously, false)]
+    public async Task WithRunContinuationsAsynchronously_AContinuationOfTheReturnedTaskDoesNotRunInsideTheRetryMachinery(TaskCreationOptions options, bool expectedInside)
+    {
+        using ManualResetEventSlim gate = new();
+
+        Task task = this.factory.StartNew(() => gate.Wait(Timeout), options, new DoNotRetry(), new AnyExceptionPolicy());
+
+        // The try waits for the gate, so the continuation is registered before the returned task completes.
+        Task<bool> ranInside = task.ContinueWith(
+            static _ => new StackTrace().GetFrames().Any(f => f.GetMethod()?.DeclaringType?.FullName?.Contains("RetryOperation", StringComparison.Ordinal) == true),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        gate.Set();
+
+        Assert.AreEqual(expectedInside, await ranInside.WaitAsync(Timeout).ConfigureAwait(false));
     }
 
     private static int CountPublicStartNewMethods(Type factoryType)

@@ -16,6 +16,9 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 /// <summary>
 /// An asynchronous lambda passed to <see cref="Retriable.Retry{T}(Func{T})"/> or to
 /// <see cref="RetryTaskFactory.StartNew(Action)"/> is a compile error, and synchronous lambdas bind as before.
+/// An operation that returns a task inside its task, passed to <c>RetryAsync</c> or
+/// <see cref="ReliabilityPipeline.ExecuteAsync{T}(Func{System.Threading.CancellationToken, System.Threading.Tasks.ValueTask{T}}, System.Threading.CancellationToken)"/>,
+/// is also a compile error.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -40,6 +43,13 @@ public class AsyncLambdaBindingTests
     [DataRow("Retriable.Retry(async () => await Task.Yield(), CancellationToken.None, new Count(3), AnyExceptionPolicy.Default);")]
     [DataRow("Retriable.Retry(async () => { await Task.Yield(); return 1; }, CancellationToken.None, new Count(3), AnyExceptionPolicy.Default);")]
     [DataRow("Retriable.Retry(async () => await Task.Yield(), CancellationToken.None, new Count(3), AnyExceptionPolicy.Default, _ => ValueTask.CompletedTask);")]
+    [DataRow("Retriable.Retry(async ValueTask () => await Task.Yield());")]
+    [DataRow("Retriable.Retry(async ValueTask<int> () => { await Task.Yield(); return 1; });")]
+    [DataRow("Retriable.Retry(() => new ValueTask<int>(1));")]
+    [DataRow("Retriable.Retry(() => default(ValueTask));")]
+    [DataRow("Retriable.Retry(() => default(ValueTask), CancellationToken.None, new Count(3), AnyExceptionPolicy.Default);")]
+    [DataRow("Retriable.Retry(() => default(ValueTask), CancellationToken.None, new Count(3), AnyExceptionPolicy.Default, _ => ValueTask.CompletedTask);")]
+    [DataRow("Retriable.Retry(() => new ValueTask<int>(1), CancellationToken.None, new Count(3), AnyExceptionPolicy.Default, _ => ValueTask.CompletedTask);")]
     public void AnAsynchronousOperationPassedToRetryIsACompileError(string call)
     {
         ImmutableArray<Diagnostic> errors = Compile(call, out _);
@@ -61,6 +71,11 @@ public class AsyncLambdaBindingTests
     [DataRow("RetryTask.Factory.StartNew(async state => await Task.Yield(), 42);")]
     [DataRow("RetryTask.Factory.StartNew(async state => await Task.Yield(), 42, new Count(3), AnyExceptionPolicy.Default);")]
     [DataRow("RetryTask.Factory.StartNew(async state => await Task.Yield(), 42, CancellationToken.None, TaskCreationOptions.None, TaskScheduler.Default);")]
+    [DataRow("RetryTask.Factory.StartNew(async ValueTask () => await Task.Yield());")]
+    [DataRow("RetryTask.Factory.StartNew(() => default(ValueTask));")]
+    [DataRow("RetryTask.Factory.StartNew(() => new ValueTask<int>(1), new Count(3));")]
+    [DataRow("RetryTask.Factory.StartNew(state => default(ValueTask), 42);")]
+    [DataRow("RetryTask.Factory.StartNew(state => new ValueTask<int>(1), 42, new Count(3), AnyExceptionPolicy.Default);")]
     public void AnAsynchronousActionPassedToStartNewIsACompileError(string call)
     {
         ImmutableArray<Diagnostic> errors = Compile(call, out _);
@@ -71,15 +86,44 @@ public class AsyncLambdaBindingTests
     }
 
     [TestMethod]
+    [DataRow("pipeline.ExecuteAsync(async ct => Task.CompletedTask);", "ExecuteAsync received an operation that returns a task inside its ValueTask.")]
+    [DataRow("pipeline.ExecuteAsync(async ct => Task.FromResult(1), CancellationToken.None);", "ExecuteAsync received an operation that returns a task inside its ValueTask.")]
+    [DataRow("Retriable.RetryAsync(async () => Task.FromResult(1));", "RetryAsync received an operation that returns a task inside its task.")]
+    [DataRow("Retriable.RetryAsync(async () => Task.CompletedTask, true);", "RetryAsync received an operation that returns a task inside its task.")]
+    [DataRow("Retriable.RetryAsync(async () => Task.CompletedTask, CancellationToken.None, new Count(3), AnyExceptionPolicy.Default);", "RetryAsync received an operation that returns a task inside its task.")]
+    [DataRow("Retriable.RetryAsync(async () => Task.CompletedTask, CancellationToken.None, new Count(3), AnyExceptionPolicy.Default, false, _ => ValueTask.CompletedTask);", "RetryAsync received an operation that returns a task inside its task.")]
+    [DataRow("Retriable.RetryAsync(async ct => Task.CompletedTask, CancellationToken.None);", "RetryAsync received an operation that returns a task inside its task.")]
+    [DataRow("Retriable.RetryAsync(async ct => Task.CompletedTask, CancellationToken.None, new Count(3), AnyExceptionPolicy.Default);", "RetryAsync received an operation that returns a task inside its task.")]
+    [DataRow("Retriable.RetryAsync(async ct => Task.CompletedTask, CancellationToken.None, new Count(3), AnyExceptionPolicy.Default, false, _ => ValueTask.CompletedTask);", "RetryAsync received an operation that returns a task inside its task.")]
+    public void AnOperationThatReturnsATaskInsideItsTaskIsACompileError(string call, string expectedMessage)
+    {
+        ImmutableArray<Diagnostic> errors = Compile(call, out _);
+
+        Diagnostic error = Assert.ContainsSingle(errors);
+        Assert.AreEqual(ObsoleteAsError, error.Id);
+        Assert.Contains(expectedMessage, error.GetMessage());
+        Assert.Contains("Await the task in the operation.", error.GetMessage());
+    }
+
+    [TestMethod]
     [DataRow("Retriable.Retry(() => 1);", "System.Func<T>")]
+    [DataRow("Retriable.Retry(() => new object());", "System.Func<T>")]
+    [DataRow("Retriable.Retry(() => { throw new InvalidOperationException(); }, CancellationToken.None, new Count(3), AnyExceptionPolicy.Default, _ => ValueTask.CompletedTask);", "System.Action")]
     [DataRow("Retriable.Retry(() => { });", "System.Action")]
     [DataRow("Retriable.Retry(() => { throw new InvalidOperationException(); });", "System.Action")]
     [DataRow("Retriable.Retry(() => { }, CancellationToken.None, new Count(3), AnyExceptionPolicy.Default);", "System.Action")]
     [DataRow("Retriable.RetryAsync(async () => await Task.Yield());", "System.Func<System.Threading.Tasks.Task>")]
     [DataRow("Retriable.RetryAsync(async () => { await Task.Yield(); return 1; });", "System.Func<System.Threading.Tasks.Task<T>>")]
+    [DataRow("Retriable.RetryAsync(async () => { await Task.Yield(); return \"x\"; });", "System.Func<System.Threading.Tasks.Task<T>>")]
+    [DataRow("Retriable.RetryAsync(async ct => { await Task.Yield(); return 1; }, CancellationToken.None);", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>>")]
+    [DataRow("Retriable.RetryAsync(() => { throw new InvalidOperationException(); });", "System.Func<System.Threading.Tasks.Task>")]
+    [DataRow("pipeline.ExecuteAsync(ct => new ValueTask<int>(1));", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<T>>")]
+    [DataRow("pipeline.ExecuteAsync(async ct => { await Task.Yield(); return 1; });", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<T>>")]
+    [DataRow("pipeline.ExecuteAsync(ct => ValueTask.CompletedTask);", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>")]
     [DataRow("RetryTask.Factory.StartNew(() => { });", "System.Action")]
     [DataRow("RetryTask.Factory.StartNew(() => { throw new InvalidOperationException(); }, new Count(5), AnyExceptionPolicy.Default);", "System.Action")]
     [DataRow("RetryTask.Factory.StartNew(state => { }, 42);", "System.Action<object?>")]
+    [DataRow("RetryTask.Factory.StartNew(state => { throw new InvalidOperationException(); }, 42);", "System.Action<object?>")]
     [DataRow("RetryTask<int>.Factory.StartNew(() => 1);", "System.Func<T>")]
     public void ASynchronousOperationBindsAsBefore(string call, string expectedFirstParameterType)
     {
@@ -106,6 +150,7 @@ public class AsyncLambdaBindingTests
             {
                 public static void Call()
                 {
+                    ReliabilityPipeline pipeline = null!;
                     {{call}}
                 }
             }

@@ -234,6 +234,40 @@ public class RetryTaskFactoryOfTTests
         Assert.AreEqual(1, operation.Invocations);
     }
 
+    [TestMethod]
+    [DynamicData(nameof(RetryTaskFactoryDriver.All), typeof(RetryTaskFactoryDriver))]
+    public void WhenTIsATaskType_StartNewThrowsNotSupportedExceptionBeforeTheFunctionRuns(StartNewOverload overload, StartNewDefaults defaults)
+    {
+        // The task of a try would complete when the function returns, before the asynchronous operation ends.
+        AssertStartNewThrowsBeforeTheFunctionRuns(overload, defaults, () => Task.CompletedTask);
+        AssertStartNewThrowsBeforeTheFunctionRuns(overload, defaults, () => Task.FromResult(1));
+        AssertStartNewThrowsBeforeTheFunctionRuns(overload, defaults, () => ValueTask.CompletedTask);
+        AssertStartNewThrowsBeforeTheFunctionRuns(overload, defaults, () => new ValueTask<int>(1));
+    }
+
+    private static void AssertStartNewThrowsBeforeTheFunctionRuns<T>(StartNewOverload overload, StartNewDefaults defaults, Func<T> function)
+    {
+        int invocations = 0;
+
+        NotSupportedException thrown = Assert.ThrowsExactly<NotSupportedException>(
+            () => RetryTaskFactoryDriver.StartNew(
+                new RetryTaskFactory<T>(),
+                overload,
+                defaults,
+                _ =>
+                {
+                    Interlocked.Increment(ref invocations);
+                    return function();
+                },
+                State,
+                CancellationToken.None,
+                new Count(5),
+                new AnyExceptionPolicy()));
+
+        Assert.AreEqual(0, Volatile.Read(ref invocations), typeof(T).Name);
+        Assert.Contains("Retriable.RetryAsync", thrown.Message);
+    }
+
     private Task<string> StartNew(
         StartNewOverload overload,
         StartNewDefaults defaults,

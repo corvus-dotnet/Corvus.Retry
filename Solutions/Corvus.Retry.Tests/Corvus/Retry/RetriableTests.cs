@@ -510,6 +510,37 @@ public class RetriableTests
         Assert.Contains(nameof(ThrowFromADistinctiveMethod), thrown.StackTrace!);
     }
 
+    [TestMethod]
+    public async Task WhenTheOperationReturnsANullTask_RetryAsyncThrowsInvalidOperationException()
+    {
+        int invocations = 0;
+
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            () => Retriable.RetryAsync(
+                () =>
+                {
+                    invocations++;
+                    return (Task)null!;
+                },
+                CancellationToken.None,
+                new DoNotRetry(),
+                new AnyExceptionPolicy())).ConfigureAwait(false);
+        Assert.AreEqual(1, invocations);
+
+        invocations = 0;
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            () => Retriable.RetryAsync(
+                () =>
+                {
+                    invocations++;
+                    return (Task<string>)null!;
+                },
+                CancellationToken.None,
+                new DoNotRetry(),
+                new AnyExceptionPolicy())).ConfigureAwait(false);
+        Assert.AreEqual(1, invocations);
+    }
+
     // Not inlined, so that its frame is in the stack trace of the exception it throws.
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static string ThrowFromADistinctiveMethod() => throw new InvalidOperationException("Always fails");
