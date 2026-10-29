@@ -307,7 +307,7 @@ public class ReliableTaskRunnerRestartDelayTests
 
         ReliableTaskRunner runner = ReliableTaskRunner.Run(
             _ => FailAsynchronously(failures[Interlocked.Increment(ref invocations) - 1]),
-            RetryStrategies.FromDelegate(attempt =>
+            new UnlimitedDelayStrategy(attempt =>
             {
                 lock (previousDelays)
                 {
@@ -342,6 +342,17 @@ public class ReliableTaskRunnerRestartDelayTests
         {
             return [.. previousDelays];
         }
+    }
+
+    /// <summary>
+    /// A strategy that returns the delay of a delegate as it is.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="RetryStrategies.FromDelegate"/> limits the delay itself, which would hide whether the runner limits it.
+    /// </remarks>
+    private sealed class UnlimitedDelayStrategy(Func<RetryAttempt, TimeSpan?> getRetryDelay) : IRetryStrategy
+    {
+        public TimeSpan? GetRetryDelay(in RetryAttempt attempt) => getRetryDelay(attempt);
     }
 
     /// <summary>
