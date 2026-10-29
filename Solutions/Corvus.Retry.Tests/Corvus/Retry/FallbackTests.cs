@@ -393,6 +393,25 @@ public class FallbackTests
     }
 
     [TestMethod]
+    public async Task AnExceptionFromThePolicy_PropagatesAndTheFallbackIsNotCalled()
+    {
+        var op = new FlakyOperation(FlakyOperation.AlwaysFails);
+        var policyException = new FormatException("The policy failed.");
+        var calls = new List<FallbackArgs<string>>();
+        var pipeline = new RetryPipeline<string>(new RetryPipelineOptions<string>
+        {
+            Strategy = new DoNotRetry(),
+            Fallback = RecordingFallback(calls) with { Policy = RetryPolicies.FromPredicate(_ => throw policyException) },
+        });
+
+        FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
+            () => pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask()).ConfigureAwait(false);
+
+        Assert.AreSame(policyException, thrown);
+        Assert.IsEmpty(calls);
+    }
+
+    [TestMethod]
     public async Task TheFallbackPolicyIsIndependentOfTheRetryPolicy()
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails, attempt => new FormatException($"Attempt {attempt} failed"));

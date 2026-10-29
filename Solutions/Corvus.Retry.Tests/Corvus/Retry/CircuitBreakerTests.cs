@@ -117,6 +117,47 @@ public class CircuitBreakerTests
     }
 
     [TestMethod]
+    public async Task WhenTheWallClockMovesBack_TheSamplingWindowStillMovesWithTheMonotonicClock()
+    {
+        var clock = new SplitClockTimeProvider();
+        CircuitBreaker breaker = this.NewBreaker(options => options with { TimeProvider = clock });
+        RetryPipeline pipeline = this.NewPipeline(breaker);
+
+        // The old failures leave the window only if the breaker ignores the wall clock.
+        await FailAsync(pipeline, 4).ConfigureAwait(false);
+        clock.MoveWallClock(TimeSpan.FromHours(-1));
+        clock.MoveMonotonicClock(TimeSpan.FromSeconds(30));
+        await SucceedAsync(pipeline, 5).ConfigureAwait(false);
+        await FailAsync(pipeline, 1).ConfigureAwait(false);
+
+        Assert.AreEqual(CircuitState.Closed, breaker.State);
+        Assert.AreEqual((6, 1), breaker.GetCounts());
+    }
+
+    [TestMethod]
+    public async Task WhenTheWallClockMoves_TheBreakStillEndsWithTheMonotonicClock()
+    {
+        var clock = new SplitClockTimeProvider();
+        CircuitBreaker breaker = this.NewBreaker(options => options with { TimeProvider = clock });
+        RetryPipeline pipeline = this.NewPipeline(breaker);
+        await FailAsync(pipeline, 10).ConfigureAwait(false);
+
+        // A jump of the wall clock past the break does not end the break.
+        clock.MoveWallClock(TimeSpan.FromDays(1));
+        clock.MoveMonotonicClock(TimeSpan.FromSeconds(2));
+        BrokenCircuitException thrown = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
+            () => pipeline.ExecuteAsync(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(TimeSpan.FromSeconds(3), thrown.RetryAfter);
+
+        // A move of the wall clock back does not make the break longer.
+        clock.MoveWallClock(TimeSpan.FromDays(-2));
+        clock.MoveMonotonicClock(TimeSpan.FromSeconds(3));
+        await SucceedAsync(pipeline, 1).ConfigureAwait(false);
+
+        Assert.AreEqual(CircuitState.Closed, breaker.State);
+    }
+
+    [TestMethod]
     public async Task AnOpenCircuit_RejectsCallsWithTheTimeThatRemainsInTheBreak()
     {
         CircuitBreaker breaker = this.NewBreaker();
@@ -651,5 +692,25 @@ public class CircuitBreakerTests
     {
         this.Record(change);
         throw exception;
+    }
+
+    /// <summary>
+    /// A time provider whose wall clock and monotonic clock move separately. <see cref="FakeTimeProvider"/> cannot
+    /// move its wall clock back.
+    /// </summary>
+    private sealed class SplitClockTimeProvider : TimeProvider
+    {
+        private DateTimeOffset utcNow = new(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        private long timestamp;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override DateTimeOffset GetUtcNow() => this.utcNow;
+
+        public override long GetTimestamp() => this.timestamp;
+
+        public void MoveWallClock(TimeSpan time) => this.utcNow += time;
+
+        public void MoveMonotonicClock(TimeSpan time) => this.timestamp += time.Ticks;
     }
 }

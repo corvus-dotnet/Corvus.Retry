@@ -98,7 +98,7 @@ public sealed class ReliableTaskRunner : IAsyncDisposable
     /// run ended.
     /// </para>
     /// </remarks>
-    public async Task StopAsync()
+    public Task StopAsync()
     {
         Task task;
         Task cancellation;
@@ -113,8 +113,14 @@ public sealed class ReliableTaskRunner : IAsyncDisposable
             cancellation = this.disposed ? Task.CompletedTask : this.cancellationTokenSource.CancelAsync();
         }
 
-        await cancellation.ConfigureAwait(false);
-        await task.ConfigureAwait(false);
+        // Compose the tasks without await, which would keep only the first exception of a run that faulted with
+        // several. Unwrap gives the returned task all the exceptions of the task that the continuation selects.
+        return cancellation.ContinueWith(
+            static (c, state) => c.IsFaulted ? c : (Task)state!,
+            task,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default).Unwrap();
     }
 
     /// <summary>

@@ -177,8 +177,14 @@ public sealed class RetryPipeline<T>
             // The caller cancelled, so the fallback does not apply.
             throw;
         }
-        catch (Exception ex) when (fallback.Policy.CanRetry(ex))
+        catch (Exception ex)
         {
+            // The policy is evaluated here, not in a filter, so that an exception from the policy propagates.
+            if (!fallback.Policy.CanRetry(ex))
+            {
+                throw;
+            }
+
             return await this.FallBackAsync(fallback, new FallbackArgs<T>(ex, default, cancellationToken)).ConfigureAwait(this.continueOnCapturedContext);
         }
 

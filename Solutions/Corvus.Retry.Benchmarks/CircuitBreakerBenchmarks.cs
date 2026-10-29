@@ -129,10 +129,13 @@ public class CircuitBreakerBenchmarks
     /// </summary>
     private sealed class ManualTimeProvider : TimeProvider
     {
-        private DateTimeOffset now = new(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        // The breaker reads the monotonic timestamp, so this clock gives a timestamp in ticks.
+        private long timestamp;
 
-        public override DateTimeOffset GetUtcNow() => this.now;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
-        public void Advance(TimeSpan time) => this.now += time;
+        public override long GetTimestamp() => this.timestamp;
+
+        public void Advance(TimeSpan time) => this.timestamp += time.Ticks;
     }
 }

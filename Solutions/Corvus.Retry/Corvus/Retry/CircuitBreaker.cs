@@ -53,16 +53,20 @@ public sealed class CircuitBreaker
     private readonly Func<CircuitStateChange, ValueTask>? onStateChanged;
     private readonly TimeProvider timeProvider;
 
-    // The sliding window is a ring of buckets. The head bucket is the newest, and started at headBucketStart.
+    // All times are measured from this timestamp of the monotonic clock, so a change of the wall clock has no effect.
+    private readonly long originTimestamp;
+
+    // The sliding window is a ring of buckets. The head bucket is the newest, and started at headBucketStart
+    // (a time since originTimestamp).
     private readonly int[] calls = new int[BucketCount];
     private readonly int[] failures = new int[BucketCount];
     private int head;
-    private DateTimeOffset headBucketStart;
+    private TimeSpan headBucketStart;
     private int windowCalls;
     private int windowFailures;
 
     private CircuitState state;
-    private DateTimeOffset breakUntil;
+    private TimeSpan breakUntil;
     private bool probeInFlight;
 
     /// <summary>
@@ -108,7 +112,7 @@ public sealed class CircuitBreaker
         this.policy = options.Policy;
         this.onStateChanged = options.OnStateChanged;
         this.timeProvider = options.TimeProvider;
-        this.headBucketStart = this.timeProvider.GetUtcNow();
+        this.originTimestamp = this.timeProvider.GetTimestamp();
     }
 
     /// <summary>
@@ -163,7 +167,7 @@ public sealed class CircuitBreaker
     /// </remarks>
     public void Close()
     {
-        DateTimeOffset now = this.timeProvider.GetUtcNow();
+        TimeSpan now = this.Now();
         CircuitStateChange? change = null;
         lock (this.sync)
         {
@@ -213,7 +217,7 @@ public sealed class CircuitBreaker
         }
 
         // The time provider is the caller's code, so do not run it under the lock.
-        DateTimeOffset now = this.timeProvider.GetUtcNow();
+        TimeSpan now = this.Now();
         TimeSpan retryAfter = TimeSpan.Zero;
         CircuitState rejectedState;
         lock (this.sync)
@@ -262,7 +266,7 @@ public sealed class CircuitBreaker
     /// <returns>The change of state that the success caused, or <see langword="null"/>.</returns>
     internal CircuitStateChange? OnSuccess(bool probe)
     {
-        DateTimeOffset now = this.timeProvider.GetUtcNow();
+        TimeSpan now = this.Now();
         lock (this.sync)
         {
             if (this.state == CircuitState.Closed)
@@ -303,7 +307,7 @@ public sealed class CircuitBreaker
             return this.OnSuccess(probe);
         }
 
-        DateTimeOffset now = this.timeProvider.GetUtcNow();
+        TimeSpan now = this.Now();
         lock (this.sync)
         {
             if (this.state == CircuitState.Closed)
@@ -360,7 +364,7 @@ public sealed class CircuitBreaker
     /// <returns>The number of calls and the number of failures.</returns>
     internal (int Calls, int Failures) GetCounts()
     {
-        DateTimeOffset now = this.timeProvider.GetUtcNow();
+        TimeSpan now = this.Now();
         lock (this.sync)
         {
             this.Slide(now);
@@ -393,7 +397,7 @@ public sealed class CircuitBreaker
         }
     }
 
-    private void Open(DateTimeOffset now)
+    private void Open(TimeSpan now)
     {
         this.state = CircuitState.Open;
         this.breakUntil = now + this.breakDuration;
@@ -411,8 +415,8 @@ public sealed class CircuitBreaker
         }
     }
 
-    // Drops the buckets that are older than the window. A clock that moves back changes nothing.
-    private void Slide(DateTimeOffset now)
+    // Drops the buckets that are older than the window.
+    private void Slide(TimeSpan now)
     {
         long elapsedBuckets = (now - this.headBucketStart).Ticks / this.bucketTicks;
         if (elapsedBuckets <= 0)
@@ -438,7 +442,10 @@ public sealed class CircuitBreaker
         this.headBucketStart += TimeSpan.FromTicks(elapsedBuckets * this.bucketTicks);
     }
 
-    private void ResetWindow(DateTimeOffset now)
+    // Gets the time since originTimestamp from the monotonic clock of the time provider.
+    private TimeSpan Now() => this.timeProvider.GetElapsedTime(this.originTimestamp);
+
+    private void ResetWindow(TimeSpan now)
     {
         Array.Clear(this.calls);
         Array.Clear(this.failures);

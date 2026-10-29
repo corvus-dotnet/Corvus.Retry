@@ -261,6 +261,50 @@ public class ReliableTaskRunnerTests
     }
 
     [TestMethod]
+    public async Task WhenTheLastRunFaultedWithSeveralExceptions_StopAsyncReturnsATaskWithAllOfThem()
+    {
+        var first = new InvalidOperationException("First failure");
+        var second = new FormatException("Second failure");
+        TaskCompletionSource policyConsulted = NewSignal();
+        var policy = new RecordingRetryPolicy(_ =>
+        {
+            policyConsulted.TrySetResult();
+            return false;
+        });
+
+        ReliableTaskRunner runner = ReliableTaskRunner.Run(
+            _ => Task.WhenAll(FailAsynchronously(first), FailAsynchronously(second)),
+            policy);
+
+        await WaitAsync(policyConsulted.Task, "the policy to be consulted").ConfigureAwait(false);
+
+        Task stopTask = runner.StopAsync();
+        await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+
+        Assert.IsTrue(stopTask.IsFaulted);
+        CollectionAssert.AreEquivalent(new Exception[] { first, second }, stopTask.Exception!.InnerExceptions.ToArray());
+    }
+
+    [TestMethod]
+    public async Task WhenATokenCallbackThrows_StopAsyncReturnsAFaultedTask()
+    {
+        var callbackFailure = new InvalidOperationException("Callback failure");
+
+        ReliableTaskRunner runner = ReliableTaskRunner.Run(ct =>
+        {
+            ct.Register(() => throw callbackFailure);
+            return WaitForCancellationAsync(ct);
+        });
+
+        Task stopTask = runner.StopAsync();
+        await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+
+        Assert.IsTrue(stopTask.IsFaulted);
+        AggregateException thrown = Assert.IsInstanceOfType<AggregateException>(Assert.ContainsSingle(stopTask.Exception!.InnerExceptions));
+        Assert.AreSame(callbackFailure, Assert.ContainsSingle(thrown.InnerExceptions));
+    }
+
+    [TestMethod]
     public async Task WhenTheOperationFailsWithSeveralExceptions_ItIsRestartedOnlyIfThePolicyAcceptsEveryOne()
     {
         var accepted = new TimeoutException("Transient failure");

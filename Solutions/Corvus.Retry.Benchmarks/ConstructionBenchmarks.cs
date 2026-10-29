@@ -28,12 +28,13 @@ public class ConstructionBenchmarks
     private static readonly Func<RetryAttempt, TimeSpan?> GetRetryDelay = static attempt => attempt.AttemptNumber < 10 ? TimeSpan.Zero : null;
     private static readonly Func<Exception, bool> IsTransient = static ex => ex is TimeoutException;
     private static readonly Func<TimeoutException, bool> IsTimeoutTransient = static ex => ex.Message.Length > 0;
+    private static readonly Func<FallbackArgs<int>, ValueTask<int>> FallbackAction = static _ => new ValueTask<int>(0);
     private static readonly RetryPipelineOptions PipelineOptions = new() { Strategy = SharedStrategy, AttemptTimeout = TimeSpan.FromSeconds(5) };
     private static readonly RetryPipelineOptions<int> PipelineOptionsOfT = new() { Strategy = SharedStrategy, ShouldRetryResult = static r => r < 0 };
     private static readonly CircuitBreakerOptions BreakerOptions = new() { MinimumThroughput = 10, FailureRatio = 0.5 };
     private static readonly RetryPipelineOptions<int> PipelineOptionsWithFallback = PipelineOptionsOfT with
     {
-        Fallback = new FallbackOptions<int> { Action = static _ => new ValueTask<int>(0) },
+        Fallback = new FallbackOptions<int> { Action = FallbackAction },
     };
 
     private static readonly RetryPipelineOptions<int> PipelineOptionsWithHedging = new()
@@ -202,4 +203,48 @@ public class ConstructionBenchmarks
     [Benchmark]
     [BenchmarkCategory("Other")]
     public CircuitBreaker CircuitBreaker() => new(BreakerOptions);
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public BrokenCircuitException BrokenCircuitException() => new("The circuit is open.", TimeSpan.FromSeconds(1));
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public IsolatedCircuitException IsolatedCircuitException() => new();
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public RetryAttempt RetryAttempt() => new(1, Failure, null, TimeSpan.FromSeconds(1));
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public CircuitStateChange CircuitStateChange() => new(CircuitState.Closed, CircuitState.Open, Failure);
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public HedgingEventArgs HedgingEventArgs() => new(2, Failure);
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public FallbackArgs<int> FallbackArgsOfT() => new(Failure, 0, default);
+
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Options")]
+    public RetryPipelineOptions RetryPipelineOptions() => new() { Strategy = SharedStrategy };
+
+    [Benchmark]
+    [BenchmarkCategory("Options")]
+    public RetryPipelineOptions<int> RetryPipelineOptionsOfT() => new() { Strategy = SharedStrategy };
+
+    [Benchmark]
+    [BenchmarkCategory("Options")]
+    public HedgingOptions HedgingOptions() => new() { MaxHedgedAttempts = 2 };
+
+    [Benchmark]
+    [BenchmarkCategory("Options")]
+    public FallbackOptions<int> FallbackOptionsOfT() => new() { Action = FallbackAction };
+
+    [Benchmark]
+    [BenchmarkCategory("Options")]
+    public CircuitBreakerOptions CircuitBreakerOptions() => new() { MinimumThroughput = 10, FailureRatio = 0.5 };
 }

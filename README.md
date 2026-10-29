@@ -700,7 +700,7 @@ The samples use the .NET 10 SDK. `RetriableSample` sends pings to `endjin.com`, 
 
 ## Benchmarks
 
-`Solutions/Corvus.Retry.Benchmarks` uses [BenchmarkDotNet](https://benchmarkdotnet.org/) to measure the time and the memory that the library adds. These classes measure the public API:
+`Solutions/Corvus.Retry.Benchmarks` uses [BenchmarkDotNet](https://benchmarkdotnet.org/) to measure the time and the memory that the library adds. These classes measure every public type:
 
 | Class | Public API that it measures | Baseline |
 |-------|-----------------------------|----------|
@@ -708,16 +708,16 @@ The samples use the .NET 10 SDK. `RetriableSample` sends pings to `endjin.com`, 
 | `CircuitBreakerBenchmarks` | A pipeline with a `CircuitBreaker`: a closed circuit, a failure, a rejection by an open or isolated circuit, and the test call of a half-open circuit | The same pipeline without a breaker |
 | `FallbackBenchmarks` | A `RetryPipeline<T>` with `Fallback`, when the operation succeeds, throws an exception, or returns a rejected result | The same pipeline without a fallback |
 | `HedgingBenchmarks` | A pipeline with `Hedging`: a success, a failure that starts a hedged attempt, and two attempts in parallel | The same operation through a pipeline that retries |
-| `RetriableOverloadBenchmarks` | All the `Retriable.Retry` and `RetryAsync` overloads, with the token overloads and `onRetry`,, when the first attempt succeeds | `Retry(func)`, `RetryAsync(func)` and the first token overload |
+| `RetriableOverloadBenchmarks` | All the `Retriable.Retry` and `RetryAsync` overloads, with the token overloads and `onRetry`, when the first attempt succeeds | `Retry(func)`, `RetryAsync(func)` and the first token overload |
 | `RetriableBenchmarks` | `Retry`, `RetryAsync` and the token overload (with and without `onRetry`), with 0 and 2 failures before a success | A hand-written retry loop |
 | `RetryTaskFactoryOverloadBenchmarks` | All the `StartNew` overloads of `RetryTask.Factory` and `RetryTask<T>.Factory` (29 each), when the first attempt succeeds | |
 | `RetryTaskBenchmarks` | `RetryTask<T>.Factory.StartNew` with 0 and 2 failures | `Task<T>.Factory.StartNew` with a hand-written loop |
 | `ReliableTaskRunnerBenchmarks` | `ReliableTaskRunner.Run` (the two overloads), `StopAsync` and `DisposeAsync`, with restarts after 1 and 4 failures | `Run` and then `StopAsync` |
-| `StrategyBenchmarks` | `GetRetryDelay` of all the strategy classes and the `RetryStrategies` methods, with jitter, `maxDelay`, `RetryAfter` and `RetryStrategies.Default`,, for 1 and 9 failures | `Count` |
+| `StrategyBenchmarks` | `GetRetryDelay` of all the strategy classes and the `RetryStrategies` methods, with jitter, `maxDelay`, `RetryAfter` and `RetryStrategies.Default`, for 1 and 9 failures | `Count` |
 | `PolicyBenchmarks` | `CanRetry` of `AnyExceptionPolicy`, `DoNotRetryPolicy`, the `RetryPolicies` methods, the extension members and `TransientHttp`, and `IsTransientHttpResponse` | The first item of each category |
 | `AggregatePolicyBenchmarks` | `AggregatePolicy.CanRetry` with 1, 4 and 16 child policies | One policy |
 | `DelayBenchmarks` | The delay of `Retriable.Retry` (`Thread.Sleep`) and of `Retriable.RetryAsync` (`Task.Delay` with `TimeProvider.System`) | The same retry with no delay |
-| `ConstructionBenchmarks` | The public constructors and factory methods: the strategies, the `RetryStrategies` methods, the policies, the `RetryPolicies` methods and the extension members, `RetryEventArgs`, `RetryTimeoutException`, the two factories, the pipelines and `CircuitBreaker` | `new Count()`, `new AnyExceptionPolicy()` and `new RetryEventArgs(...)` |
+| `ConstructionBenchmarks` | The public constructors and factory methods: the strategies, the `RetryStrategies` methods, the policies, the `RetryPolicies` methods and the extension members, `RetryEventArgs`, the exceptions, the event and attempt records, the options records, the two factories, the pipelines and `CircuitBreaker` | `new Count()`, `new AnyExceptionPolicy()`, `new RetryEventArgs(...)` and `new RetryPipelineOptions()` |
 
 No benchmark waits for time to pass. The strategies calculate delays, but the benchmarks do not wait for them. `DelayBenchmarks` uses a delay of one tick, which becomes 0 ms. Each pipeline timeout is too long to expire. The benchmarks call the `StartNew` overloads through the `RetryTaskFactoryDriver` of the test project. Thus, if a new overload has no benchmark, a test fails.
 
