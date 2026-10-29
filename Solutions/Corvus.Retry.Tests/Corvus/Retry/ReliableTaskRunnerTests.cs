@@ -26,6 +26,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 public class ReliableTaskRunnerTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan SettlePeriod = TimeSpan.FromMilliseconds(100);
 
     [TestMethod]
     public async Task RunStartsTheOperationImmediatelyWithATokenThatIsNotYetCancelled()
@@ -301,11 +302,153 @@ public class ReliableTaskRunnerTests
         });
 
         Task stopTask = runner.StopAsync();
-        await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+        Assert.AreEqual(TaskStatus.Faulted, await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false));
 
-        Assert.IsTrue(stopTask.IsFaulted);
-        AggregateException thrown = Assert.IsInstanceOfType<AggregateException>(Assert.ContainsSingle(stopTask.Exception!.InnerExceptions));
-        Assert.AreSame(callbackFailure, Assert.ContainsSingle(thrown.InnerExceptions));
+        // The task holds the callback's own exception, not the AggregateException in which CancelAsync wraps it.
+        Assert.AreSame(callbackFailure, Assert.ContainsSingle(stopTask.Exception!.InnerExceptions));
+    }
+
+    [TestMethod]
+    public async Task WhenATokenCallbackThrows_StopAsyncStillWaitsForTheRunToEnd()
+    {
+        var callbackFailure = new FormatException("Callback failure");
+        var runFailure = new InvalidOperationException("The run failed while stopping");
+        TaskCompletionSource callbackEntered = NewSignal();
+        TaskCompletionSource allowRunToEnd = NewSignal();
+
+        ReliableTaskRunner runner = ReliableTaskRunner.Run(async ct =>
+        {
+            ct.Register(() =>
+            {
+                callbackEntered.TrySetResult();
+                throw callbackFailure;
+            });
+
+            await WaitForCancellationAsync(ct).ConfigureAwait(false);
+            await allowRunToEnd.Task.ConfigureAwait(false);
+            throw runFailure;
+        });
+
+        Task stopTask = runner.StopAsync();
+        await WaitAsync(callbackEntered.Task, "the token callback to run").ConfigureAwait(false);
+
+        // The callback has thrown, and the run is still going, so the runner has not stopped.
+        await AssertStaysIncompleteAsync(stopTask, "StopAsync while the run is still going").ConfigureAwait(false);
+
+        allowRunToEnd.TrySetResult();
+        Assert.AreEqual(TaskStatus.Faulted, await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false));
+
+        // The run's failure is in the task, so the task waited for the run to end.
+        Assert.AreSequenceEqual(new Exception[] { callbackFailure, runFailure }, stopTask.Exception!.InnerExceptions.ToArray());
+    }
+
+    [TestMethod]
+    [DataRow(false, DisplayName = "The run returns")]
+    [DataRow(true, DisplayName = "The run honours cancellation by throwing")]
+    public async Task WhenATokenCallbackThrowsAndTheRunDoesNotFail_StopAsyncWaitsForTheRunAndFaultsWithOnlyTheCallbackException(bool runThrowsCancellation)
+    {
+        var callbackFailure = new FormatException("Callback failure");
+        TaskCompletionSource callbackEntered = NewSignal();
+        TaskCompletionSource allowRunToEnd = NewSignal();
+        int runsEnded = 0;
+
+        ReliableTaskRunner runner = ReliableTaskRunner.Run(async ct =>
+        {
+            ct.Register(() =>
+            {
+                callbackEntered.TrySetResult();
+                throw callbackFailure;
+            });
+
+            await WaitForCancellationAsync(ct).ConfigureAwait(false);
+            await allowRunToEnd.Task.ConfigureAwait(false);
+            Interlocked.Increment(ref runsEnded);
+            if (runThrowsCancellation)
+            {
+                ct.ThrowIfCancellationRequested();
+            }
+        });
+
+        Task stopTask = runner.StopAsync();
+
+        // Record, at the moment the task completes, whether the run had ended.
+        Task<bool> runHadEndedWhenStopped = stopTask.ContinueWith(
+            _ => Volatile.Read(ref runsEnded) == 1,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+
+        await WaitAsync(callbackEntered.Task, "the token callback to run").ConfigureAwait(false);
+        await AssertStaysIncompleteAsync(stopTask, "StopAsync while the run is still going").ConfigureAwait(false);
+
+        allowRunToEnd.TrySetResult();
+        Assert.AreEqual(TaskStatus.Faulted, await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false));
+
+        Assert.IsTrue(await runHadEndedWhenStopped.ConfigureAwait(false));
+        Assert.AreSame(callbackFailure, Assert.ContainsSingle(stopTask.Exception!.InnerExceptions));
+    }
+
+    [TestMethod]
+    public async Task WhenSeveralTokenCallbacksThrow_StopAsyncFaultsWithEachOfThemFollowedByTheRunsFailure()
+    {
+        var callbackFailures = new Exception[] { new FormatException("Callback 1 failed"), new FormatException("Callback 2 failed") };
+        var runFailure = new InvalidOperationException("The run failed while stopping");
+
+        ReliableTaskRunner runner = ReliableTaskRunner.Run(async ct =>
+        {
+            foreach (Exception callbackFailure in callbackFailures)
+            {
+                ct.Register(() => throw callbackFailure);
+            }
+
+            await WaitForCancellationAsync(ct).ConfigureAwait(false);
+            throw runFailure;
+        });
+
+        Task stopTask = runner.StopAsync();
+        Assert.AreEqual(TaskStatus.Faulted, await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false));
+
+        // The token runs its callbacks in an order that it does not document, so check only that the callback
+        // exceptions come first.
+        Exception[] thrown = stopTask.Exception!.InnerExceptions.ToArray();
+        Assert.HasCount(3, thrown);
+        Assert.Contains(callbackFailures[0], thrown[..2]);
+        Assert.Contains(callbackFailures[1], thrown[..2]);
+        Assert.AreSame(runFailure, thrown[2]);
+    }
+
+    [TestMethod]
+    public async Task WhenATokenCallbackThrows_DisposeAsyncCompletesSuccessfully()
+    {
+        var callbackFailure = new FormatException("Callback failure");
+        var runFailure = new InvalidOperationException("The run failed while stopping");
+        TaskCompletionSource callbackEntered = NewSignal();
+        TaskCompletionSource allowRunToEnd = NewSignal();
+
+        ReliableTaskRunner runner = ReliableTaskRunner.Run(async ct =>
+        {
+            ct.Register(() =>
+            {
+                callbackEntered.TrySetResult();
+                throw callbackFailure;
+            });
+
+            await WaitForCancellationAsync(ct).ConfigureAwait(false);
+            await allowRunToEnd.Task.ConfigureAwait(false);
+            throw runFailure;
+        });
+
+        Task disposal = runner.DisposeAsync().AsTask();
+        await WaitAsync(callbackEntered.Task, "the token callback to run").ConfigureAwait(false);
+        await AssertStaysIncompleteAsync(disposal, "DisposeAsync while the run is still going").ConfigureAwait(false);
+
+        allowRunToEnd.TrySetResult();
+        Assert.AreEqual(TaskStatus.RanToCompletion, await WaitAsync(disposal, "the runner to be disposed").ConfigureAwait(false));
+
+        // StopAsync after DisposeAsync cancels nothing, so it reports only how the last run ended.
+        Task stopTask = runner.StopAsync();
+        Assert.AreEqual(TaskStatus.Faulted, await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false));
+        Assert.AreSame(runFailure, Assert.ContainsSingle(stopTask.Exception!.InnerExceptions));
     }
 
     [TestMethod]
@@ -1116,15 +1259,33 @@ public class ReliableTaskRunnerTests
     }
 
     /// <summary>
-    /// Waits for a task to finish (in any state) and fails the test, rather than hanging, if it does not.
+    /// Waits for a task to finish and fails the test, rather than hanging, if it does not.
     /// </summary>
-    private static async Task WaitAsync(Task task, string description)
+    /// <returns>How the task ended. The caller asserts it: the time limit is only a safety bound.</returns>
+    private static async Task<TaskStatus> WaitAsync(Task task, string description)
     {
         Task winner = await Task.WhenAny(task, Task.Delay(Timeout)).ConfigureAwait(false);
         if (winner != task)
         {
             Assert.Fail($"Timed out after {Timeout.TotalSeconds} seconds waiting for {description}.");
         }
+
+        return task.Status;
+    }
+
+    /// <summary>
+    /// Asserts that a task does not complete while the work it waits for is held on a gate.
+    /// </summary>
+    /// <remarks>
+    /// Use this only where no public signal shows that the work that would complete the task too early has ended (for
+    /// example the end of the task that <see cref="CancellationTokenSource.CancelAsync"/> returns). The method gives
+    /// that work <see cref="SettlePeriod"/> in which to complete the task. A correct runner never completes the task
+    /// while the gate is closed, so the period cannot cause a false failure: it only makes a defect visible.
+    /// </remarks>
+    private static async Task AssertStaysIncompleteAsync(Task task, string description)
+    {
+        await Task.WhenAny(task, Task.Delay(SettlePeriod)).ConfigureAwait(false);
+        Assert.IsFalse(task.IsCompleted, $"Expected {description} not to complete, but it ended as {task.Status}.");
     }
 
     /// <summary>

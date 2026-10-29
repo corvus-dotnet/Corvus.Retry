@@ -5,6 +5,7 @@
 namespace Corvus.Retry;
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
@@ -160,7 +161,9 @@ public sealed class ReliableTaskRunner : IAsyncDisposable
     /// <returns>
     /// A task which completes when the function terminates. It ends as the last run ended: it faults with the
     /// exception of a failed run, is cancelled if the run was cancelled, and otherwise completes. If the policy or the
-    /// restart strategy throws, the runner stops and the task faults with that exception.
+    /// restart strategy throws, the runner stops and the task faults with that exception. If a callback registered on
+    /// the function's cancellation token throws, the task still waits for the last run to end. It then faults with the
+    /// exceptions of the callbacks, followed by the exceptions of the run if the run failed.
     /// </returns>
     /// <remarks>
     /// <para>
@@ -194,8 +197,13 @@ public sealed class ReliableTaskRunner : IAsyncDisposable
 
         // Compose the tasks without await, which would keep only the first exception of a run that faulted with
         // several. Unwrap gives the returned task all the exceptions of the task that the continuation selects.
+        // A token callback that throws faults the cancellation while the run can still be going, so wait for the run.
         return cancellation.ContinueWith(
-            static (c, state) => c.IsFaulted ? c : ((ReliableTaskRunner)state!).WhenLastRunEnds(),
+            static (c, state) =>
+            {
+                Task lastRun = ((ReliableTaskRunner)state!).WhenLastRunEnds();
+                return c.IsFaulted ? AddCallbackFailures(c, lastRun) : lastRun;
+            },
             this,
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
@@ -209,7 +217,8 @@ public sealed class ReliableTaskRunner : IAsyncDisposable
     /// <remarks>
     /// <para>
     /// Unlike <see cref="StopAsync"/>, the returned task does not report how the last run ended: it completes even
-    /// if the run failed or was cancelled. Call <see cref="StopAsync"/> first if you need the outcome.
+    /// if the run failed or was cancelled, or a callback registered on the function's cancellation token threw. It
+    /// still waits for the last run to end. Call <see cref="StopAsync"/> first if you need the outcome.
     /// </para>
     /// <para>
     /// Calling this method more than once has no effect after the first call.
@@ -254,6 +263,47 @@ public sealed class ReliableTaskRunner : IAsyncDisposable
 
         // The run has ended and no restart can begin, so nothing uses the source any more.
         this.cancellationTokenSource.Dispose();
+    }
+
+    /// <summary>
+    /// Gets a task that ends when the last run ends, and faults with the exceptions of the token callbacks followed by
+    /// the exceptions of the run, if the run failed.
+    /// </summary>
+    /// <param name="cancellation">The task from <see cref="CancellationTokenSource.CancelAsync"/>, which has faulted.</param>
+    /// <param name="lastRun">A task that ends as the last run ended.</param>
+    /// <returns>A task that faults when the last run ends.</returns>
+    private static Task AddCallbackFailures(Task cancellation, Task lastRun)
+    {
+        return lastRun.ContinueWith(
+            static (run, state) =>
+            {
+                var exceptions = new List<Exception>();
+                foreach (Exception exception in ((Task)state!).Exception!.InnerExceptions)
+                {
+                    // CancelAsync faults with one AggregateException that holds the exceptions of the callbacks.
+                    if (exception is AggregateException callbackFailures)
+                    {
+                        exceptions.AddRange(callbackFailures.InnerExceptions);
+                    }
+                    else
+                    {
+                        exceptions.Add(exception);
+                    }
+                }
+
+                if (run.Exception is AggregateException runFailure)
+                {
+                    exceptions.AddRange(runFailure.InnerExceptions);
+                }
+
+                var stopped = new TaskCompletionSource();
+                stopped.SetException(exceptions);
+                return stopped.Task;
+            },
+            cancellation,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default).Unwrap();
     }
 
     private static OperationCanceledException GetCancellation(Task cancelledTask)
