@@ -251,7 +251,7 @@ public sealed class CircuitBreaker
         rejection = rejectedState switch
         {
             CircuitState.Isolated => new IsolatedCircuitException(),
-            CircuitState.HalfOpen => new BrokenCircuitException("The circuit is half-open, and a test call is in progress.", (TimeSpan?)null),
+            CircuitState.HalfOpen => new BrokenCircuitException("The circuit is half-open, and a test call is in progress."),
             _ => new BrokenCircuitException("The circuit is open.", retryAfter),
         };
 

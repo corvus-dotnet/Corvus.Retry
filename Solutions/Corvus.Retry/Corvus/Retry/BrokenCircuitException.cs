@@ -46,8 +46,8 @@ public class BrokenCircuitException : Exception
     /// Initializes a new instance of the <see cref="BrokenCircuitException"/> class.
     /// </summary>
     /// <param name="message">The message that describes the error.</param>
-    /// <param name="retryAfter">The time until the break ends, or <see langword="null"/> if it is not known.</param>
-    public BrokenCircuitException(string message, TimeSpan? retryAfter)
+    /// <param name="retryAfter">The time until the break ends.</param>
+    public BrokenCircuitException(string message, TimeSpan retryAfter)
         : base(message)
     {
         this.RetryAfter = retryAfter;

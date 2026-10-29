@@ -555,6 +555,11 @@ public class CircuitBreakerTests
         Assert.AreEqual("Message", new BrokenCircuitException("Message").Message);
         Assert.AreSame(inner, new BrokenCircuitException("Message", inner).InnerException);
         Assert.AreEqual(TimeSpan.FromSeconds(3), new BrokenCircuitException("Message", TimeSpan.FromSeconds(3)).RetryAfter);
+
+        // A null second argument is not ambiguous: it is the inner exception.
+        BrokenCircuitException withNull = new("Message", null);
+        Assert.IsNull(withNull.InnerException);
+        Assert.IsNull(withNull.RetryAfter);
         Assert.AreEqual("The circuit is isolated.", new IsolatedCircuitException().Message);
         Assert.AreEqual("Message", new IsolatedCircuitException("Message").Message);
         Assert.AreSame(inner, new IsolatedCircuitException("Message", inner).InnerException);

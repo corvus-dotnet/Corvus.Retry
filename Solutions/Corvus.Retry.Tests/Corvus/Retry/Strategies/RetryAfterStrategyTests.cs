@@ -106,7 +106,7 @@ public class RetryAfterStrategyTests
     {
         IRetryStrategy strategy = RetryStrategies.RetryAfter(RetryStrategies.Constant(3, InnerDelay), this.timeProvider);
 
-        Assert.AreEqual(InnerDelay, strategy.GetRetryDelay(new RetryAttempt(1, new BrokenCircuitException("Half-open", (TimeSpan?)null), null, TimeSpan.Zero)));
+        Assert.AreEqual(InnerDelay, strategy.GetRetryDelay(new RetryAttempt(1, new BrokenCircuitException("Half-open"), null, TimeSpan.Zero)));
         Assert.AreEqual(InnerDelay, strategy.GetRetryDelay(new RetryAttempt(1, new IsolatedCircuitException(), null, TimeSpan.Zero)));
     }
 
