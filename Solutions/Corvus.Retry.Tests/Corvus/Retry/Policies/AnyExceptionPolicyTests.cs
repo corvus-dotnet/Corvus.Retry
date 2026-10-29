@@ -30,6 +30,6 @@ public class AnyExceptionPolicyTests
     {
         var policy = new AnyExceptionPolicy();
 
-        Assert.ThrowsExactly<ArgumentNullException>(() => policy.CanRetry(null!));
+        Assert.AreEqual("exception", Assert.ThrowsExactly<ArgumentNullException>(() => policy.CanRetry(null!)).ParamName);
     }
 }

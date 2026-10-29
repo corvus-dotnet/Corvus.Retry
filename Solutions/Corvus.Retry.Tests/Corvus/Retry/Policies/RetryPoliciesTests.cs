@@ -133,6 +133,14 @@ public class RetryPoliciesTests
             valid.Or(valid),
             valid.And(valid),
             valid.Not(),
+            RetryPolicies.Handle<InvalidOperationException>(_ => true),
+            RetryPolicies.Handle<InvalidOperationException>().Or<TimeoutException>(),
+            RetryPolicies.HandleInner<InvalidOperationException>(_ => true),
+            new AggregatePolicy(),
+            new AggregatePolicy { Policies = { valid } },
+            new AnyExceptionPolicy(),
+            AnyExceptionPolicy.Default,
+            new DoNotRetryPolicy(),
         ];
 
         foreach (IRetryPolicy policy in policies)

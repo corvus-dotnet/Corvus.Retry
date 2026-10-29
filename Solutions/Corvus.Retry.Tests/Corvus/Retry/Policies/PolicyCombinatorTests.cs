@@ -7,6 +7,8 @@ namespace Corvus.Retry.Policies;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using Corvus.Retry.Strategies;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
@@ -16,6 +18,77 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 [TestClass]
 public class PolicyCombinatorTests
 {
+    // Each case calls a combinator whose child policy, predicate or delegate throws the given exception. The
+    // exception is an InvalidOperationException, the type a "defensive" catch would most likely swallow.
+    private static readonly Dictionary<string, Action<InvalidOperationException>> ThrowingChildCases = new()
+    {
+        ["Any"] = failure => RetryPolicies.Any(new StubRetryPolicy(false), Throwing(failure)).CanRetry(new TimeoutException()),
+        ["All"] = failure => RetryPolicies.All(new StubRetryPolicy(true), Throwing(failure)).CanRetry(new TimeoutException()),
+        ["Not"] = failure => RetryPolicies.Not(Throwing(failure)).CanRetry(new TimeoutException()),
+        [".Or"] = failure => new StubRetryPolicy(false).Or(Throwing(failure)).CanRetry(new TimeoutException()),
+        [".And"] = failure => new StubRetryPolicy(true).And(Throwing(failure)).CanRetry(new TimeoutException()),
+        [".Not"] = failure => Throwing(failure).Not().CanRetry(new TimeoutException()),
+        ["AggregatePolicy"] = failure => new AggregatePolicy { Policies = { new StubRetryPolicy(true), Throwing(failure) } }.CanRetry(new TimeoutException()),
+        ["Handle<T>(predicate)"] = failure => RetryPolicies.Handle<TimeoutException>(_ => throw failure).CanRetry(new TimeoutException()),
+        ["Handle<T>().Or<U>(predicate)"] = failure => RetryPolicies.Handle<IOException>().Or<TimeoutException>(_ => throw failure).CanRetry(new TimeoutException()),
+        ["HandleInner<T>(predicate)"] = failure => RetryPolicies.HandleInner<TimeoutException>(_ => throw failure).CanRetry(new ArgumentException("outer", new TimeoutException())),
+        ["FromDelegate strategy"] = failure => RetryStrategies.FromDelegate(_ => throw failure).GetRetryDelay(new RetryAttempt(1, new TimeoutException(), null, TimeSpan.Zero)),
+        ["RetryAfter strategy"] = failure => RetryStrategies.RetryAfter(RetryStrategies.FromDelegate(_ => throw failure)).GetRetryDelay(new RetryAttempt(1, new TimeoutException(), null, TimeSpan.Zero)),
+    };
+
+    public static IEnumerable<object[]> ThrowingChildCaseNames => ThrowingChildCases.Keys.Select(key => new object[] { key });
+
+    [TestMethod]
+    [DynamicData(nameof(ThrowingChildCaseNames))]
+    public void WhenAChildPolicyThrows_TheCombinatorThrowsThatExceptionUnchanged(string combinator)
+    {
+        InvalidOperationException failure = new("The child policy failed.");
+
+        InvalidOperationException thrown = Assert.ThrowsExactly<InvalidOperationException>(() => ThrowingChildCases[combinator](failure));
+
+        Assert.AreSame(failure, thrown);
+    }
+
+    [TestMethod]
+    public void HandleInnerAcceptsAMatchInAnAggregateExceptionInsideTheInnerExceptionChain()
+    {
+        // The chain leads to an aggregate, whose inner exceptions are then searched.
+        Exception failure = new InvalidOperationException("outer", new AggregateException(new ArgumentException(), new IOException()));
+
+        Assert.IsTrue(RetryPolicies.HandleInner<IOException>().CanRetry(failure));
+    }
+
+    [TestMethod]
+    public void HandleInnerStopsAtTheFirstMatchThatThePredicateAccepts()
+    {
+        IOException first = new("first");
+        IOException second = new("second");
+        List<Exception> seen = [];
+        IRetryPolicy policy = RetryPolicies.HandleInner<IOException>(ex =>
+        {
+            seen.Add(ex);
+            return true;
+        });
+
+        Assert.IsTrue(policy.CanRetry(new AggregateException(new InvalidOperationException("outer", first), second)));
+        Assert.AreSame(first, Assert.ContainsSingle(seen));
+    }
+
+    [TestMethod]
+    public void HandleWithAPredicateCallsThePredicateWithTheSameInstanceOfADerivedType()
+    {
+        FileNotFoundException failure = new("missing");
+        List<IOException> seen = [];
+        IRetryPolicy policy = RetryPolicies.Handle<IOException>(ex =>
+        {
+            seen.Add(ex);
+            return true;
+        });
+
+        Assert.IsTrue(policy.CanRetry(failure));
+        Assert.AreSame(failure, Assert.ContainsSingle(seen));
+    }
+
     [TestMethod]
     public void HandleInnerAcceptsTheExceptionItself()
     {
@@ -164,5 +237,10 @@ public class PolicyCombinatorTests
         Assert.IsTrue(policy.CanRetry(new InvalidOperationException("outer", new TimeoutException())));
         Assert.IsFalse(policy.CanRetry(new FileNotFoundException()));
         Assert.IsFalse(policy.CanRetry(new InvalidOperationException()));
+    }
+
+    private static IRetryPolicy Throwing(Exception failure)
+    {
+        return RetryPolicies.FromPredicate(_ => throw failure);
     }
 }
