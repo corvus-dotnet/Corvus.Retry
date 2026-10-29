@@ -5,6 +5,8 @@
 namespace Corvus.Retry;
 
 using System;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -31,6 +33,8 @@ using Corvus.Retry.Strategies;
 /// </remarks>
 public static class Retriable
 {
+    private const string AsyncRetryMessage = "Retry does not retry an asynchronous operation. Use RetryAsync.";
+
     /// <summary>
     /// Retries an operation.
     /// </summary>
@@ -398,6 +402,63 @@ public static class Retriable
         ArgumentNullException.ThrowIfNull(policy);
 
         return RunAsync(new RetryOperations.TaskTokenUnitOperation(asyncFunc), cancellationToken, strategy, policy, continueOnCapturedContext, onRetry);
+    }
+
+    /// <summary>
+    /// Stops the compiler from binding an asynchronous operation to <see cref="Retry{T}(Func{T})"/> or
+    /// <see cref="Retry(Action)"/>, and their overloads.
+    /// </summary>
+    /// <typeparam name="TTask">The type of task that the operation returns.</typeparam>
+    /// <param name="asyncFunc">The asynchronous operation.</param>
+    /// <param name="arguments">The other arguments of the call.</param>
+    /// <returns>This method does not return.</returns>
+    /// <remarks>
+    /// <para>
+    /// Without this overload, <c>Retry(async () => ...)</c> binds to <see cref="Retry{T}(Func{T})"/> with a task as
+    /// the result. That overload retries only an exception that the lambda throws before its first
+    /// <see langword="await"/>, and returns the task of the first attempt.
+    /// </para>
+    /// <para>
+    /// This overload has a higher priority than the other <c>Retry</c> overloads. Thus, a call with an operation that
+    /// returns a <see cref="Task"/> binds to it, and the compiler reports an error. A lambda that only throws has no
+    /// return type, so it does not bind to this overload.
+    /// </para>
+    /// <para>Use <see cref="RetryAsync(Func{Task})"/>, <see cref="RetryAsync{T}(Func{Task{T}})"/>, or one of their overloads.</para>
+    /// </remarks>
+    /// <exception cref="NotSupportedException">Always. The compiler does not let a call bind to this method.</exception>
+    [Obsolete(AsyncRetryMessage, error: true)]
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    [OverloadResolutionPriority(1)]
+    public static TTask Retry<TTask>(Func<TTask> asyncFunc, params object?[] arguments)
+        where TTask : Task
+    {
+        throw new NotSupportedException(AsyncRetryMessage);
+    }
+
+    /// <summary>
+    /// Stops the compiler from binding an asynchronous operation to
+    /// <see cref="Retry{T}(Func{T}, CancellationToken, IRetryStrategy, IRetryPolicy, Func{RetryEventArgs, ValueTask}?)"/>.
+    /// </summary>
+    /// <typeparam name="TTask">The type of task that the operation returns.</typeparam>
+    /// <param name="asyncFunc">The asynchronous operation.</param>
+    /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
+    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="policy">The retry policy.</param>
+    /// <param name="onRetry">The callback before each retry.</param>
+    /// <param name="arguments">No arguments. This parameter makes the signature different from the overload that this one blocks.</param>
+    /// <returns>This method does not return.</returns>
+    /// <remarks>
+    /// A lambda for <paramref name="onRetry"/> does not convert to <see cref="object"/>, so
+    /// <see cref="Retry{TTask}(Func{TTask}, object?[])"/> cannot catch this call. See that overload for the reason.
+    /// </remarks>
+    /// <exception cref="NotSupportedException">Always. The compiler does not let a call bind to this method.</exception>
+    [Obsolete(AsyncRetryMessage, error: true)]
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    [OverloadResolutionPriority(1)]
+    public static TTask Retry<TTask>(Func<TTask> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, Func<RetryEventArgs, ValueTask>? onRetry, params object?[] arguments)
+        where TTask : Task
+    {
+        throw new NotSupportedException(AsyncRetryMessage);
     }
 
     // The public overloads validate the arguments, so that a null argument throws before a task is created.

@@ -432,7 +432,8 @@ public class RetryTaskFactoryTests
 
     private static int CountPublicStartNewMethods(Type factoryType)
     {
-        return factoryType.GetMethods(BindingFlags.Public | BindingFlags.Instance).Count(m => m.Name == "StartNew");
+        // The obsolete overloads only stop an asynchronous action from binding to StartNew. No call can reach them.
+        return factoryType.GetMethods(BindingFlags.Public | BindingFlags.Instance).Count(m => m.Name == "StartNew" && m.GetCustomAttribute<ObsoleteAttribute>() is null);
     }
 
     private static void AssertSameExceptions(IReadOnlyList<Exception> expected, IReadOnlyList<Exception> actual)

@@ -6,6 +6,8 @@ namespace Corvus.Retry;
 
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Corvus.Retry.Policies;
@@ -32,6 +34,8 @@ public class RetryTaskFactory
     /// </summary>
     /// <remarks>Strategies hold no state for a call, so one instance serves every call.</remarks>
     internal static readonly IRetryStrategy DefaultStrategy = new Count();
+
+    private const string AsyncActionMessage = "StartNew runs an asynchronous action as async void, and does not retry it. Use Retriable.RetryAsync.";
 
     // An action has no result, so the task returned for it carries none.
     private static readonly Func<Task, object?> NoResult = _ => null;
@@ -492,6 +496,59 @@ public class RetryTaskFactory
         ArgumentNullException.ThrowIfNull(policy);
 
         return Start(Task.Factory.StartNew(action, cancellationToken, Detached(taskCreationOptions), scheduler), () => new Task(action, cancellationToken, Detached(taskCreationOptions)), NoResult, cancellationToken, taskCreationOptions, scheduler, strategy, policy);
+    }
+
+    /// <summary>
+    /// Stops the compiler from binding an asynchronous action to <see cref="StartNew(Action)"/> or its overloads.
+    /// </summary>
+    /// <typeparam name="TTask">The type of task that the action returns.</typeparam>
+    /// <param name="asyncAction">The asynchronous action.</param>
+    /// <param name="arguments">The other arguments of the call.</param>
+    /// <returns>This method does not return.</returns>
+    /// <remarks>
+    /// <para>
+    /// Without this overload, <c>StartNew(async () => ...)</c> binds to <see cref="StartNew(Action)"/>, and the
+    /// lambda runs as <c>async void</c>. The returned task completes at the first <see langword="await"/>, and an
+    /// exception after it is not retried and can stop the process. This overload has a higher priority than the
+    /// <see cref="Action"/> overloads, so the compiler reports an error. A lambda that only throws has no return type,
+    /// so it does not bind to this overload.
+    /// </para>
+    /// <para>Use <see cref="Retriable.RetryAsync(Func{Task})"/> or one of its overloads.</para>
+    /// </remarks>
+    /// <exception cref="NotSupportedException">Always. The compiler does not let a call bind to this method.</exception>
+    [Obsolete(AsyncActionMessage, error: true)]
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    [OverloadResolutionPriority(1)]
+    public Task StartNew<TTask>(Func<TTask> asyncAction, params object?[] arguments)
+        where TTask : Task
+    {
+        throw new NotSupportedException(AsyncActionMessage);
+    }
+
+    /// <summary>
+    /// Stops the compiler from binding an asynchronous action to <see cref="StartNew(Action{object?}, object?)"/> or its overloads.
+    /// </summary>
+    /// <typeparam name="TTask">The type of task that the action returns.</typeparam>
+    /// <param name="asyncAction">The asynchronous action.</param>
+    /// <param name="state">The state for the action.</param>
+    /// <param name="arguments">The other arguments of the call.</param>
+    /// <returns>This method does not return.</returns>
+    /// <remarks>
+    /// <para>
+    /// Without this overload, <c>StartNew(async state => ..., state)</c> binds to
+    /// <see cref="StartNew(Action{object?}, object?)"/>, and the lambda runs as <c>async void</c>. This overload has a
+    /// higher priority than the <see cref="Action{T}"/> overloads, so the compiler reports an error.
+    /// </para>
+    /// <para>Use <see cref="Retriable.RetryAsync(Func{Task})"/> or one of its overloads.</para>
+    /// </remarks>
+    /// <exception cref="NotSupportedException">Always. The compiler does not let a call bind to this method.</exception>
+    [Obsolete(AsyncActionMessage, error: true)]
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    [OverloadResolutionPriority(1)]
+    public Task StartNew<TTask>(Func<object?, TTask> asyncAction, object? state, params object?[] arguments)
+        where TTask : Task
+    {
+        throw new NotSupportedException(AsyncActionMessage);
     }
 
     /// <summary>

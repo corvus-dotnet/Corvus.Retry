@@ -519,6 +519,9 @@ public class RetriableTests
         return typeof(Retriable)
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
             .Where(m => m.Name is nameof(Retriable.Retry) or nameof(Retriable.RetryAsync))
+
+            // The obsolete overloads only stop an asynchronous operation from binding to Retry. No call can reach them.
+            .Where(m => m.GetCustomAttribute<ObsoleteAttribute>() is null)
             .Select(m => m.IsGenericMethodDefinition ? m.MakeGenericMethod(typeof(object)) : m);
     }
 
