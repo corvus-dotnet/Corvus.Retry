@@ -27,7 +27,9 @@ using Corvus.Retry.Policies;
 /// <see cref="BrokenCircuitException"/>. After <see cref="CircuitBreakerOptions.BreakDuration"/>, the circuit is
 /// half-open: the breaker lets one test call through, and rejects the other calls. If the test call succeeds, the
 /// circuit closes and the counts start again. If it fails, the circuit opens again. The outcome of a test call that
-/// started before <see cref="Isolate"/>, <see cref="Close"/> or a later break does not change the state.
+/// started before <see cref="Isolate"/>, <see cref="Close"/> or a later break does not change the state. If the circuit
+/// is closed when such a test call ends, the breaker does not count the call either: it started before the counts
+/// started again.
 /// </para>
 /// <para>
 /// A failure is an exception that <see cref="CircuitBreakerOptions.Policy"/> accepts, a <see cref="RetryTimeoutException"/>,
@@ -265,8 +267,11 @@ public sealed class CircuitBreaker
         {
             if (this.state == CircuitState.Closed)
             {
-                this.Slide(now);
-                this.Record(failed: false);
+                if (IsCallOfTheClosedWindow(probe))
+                {
+                    this.Slide(now);
+                    this.Record(failed: false);
+                }
             }
             else if (this.IsProbeInFlight(probe))
             {
@@ -316,12 +321,15 @@ public sealed class CircuitBreaker
         {
             if (this.state == CircuitState.Closed)
             {
-                this.Slide(now);
-                this.Record(failed: true);
-                if (this.windowCalls >= this.minimumThroughput && this.windowFailures / (double)this.windowCalls >= this.failureRatio)
+                if (IsCallOfTheClosedWindow(probe))
                 {
-                    this.Open(now);
-                    return new CircuitStateChange(CircuitState.Closed, CircuitState.Open, exception);
+                    this.Slide(now);
+                    this.Record(failed: true);
+                    if (this.windowCalls >= this.minimumThroughput && this.windowFailures / (double)this.windowCalls >= this.failureRatio)
+                    {
+                        this.Open(now);
+                        return new CircuitStateChange(CircuitState.Closed, CircuitState.Open, exception);
+                    }
                 }
             }
             else if (this.IsProbeInFlight(probe))
@@ -378,6 +386,12 @@ public sealed class CircuitBreaker
             return (this.windowCalls, this.windowFailures);
         }
     }
+
+    // Gets a value that indicates whether a call that ends while the circuit is closed counts in the sampling window.
+    // Only a half-open circuit gives a call a test call number, and a test call that closes the circuit ends as it
+    // closes it. So a test call that ends while the circuit is closed is from a generation that Close ended, and it
+    // started before the counts started again.
+    private static bool IsCallOfTheClosedWindow(int probe) => probe == 0;
 
     private static void ThrowIfOutOfRange(TimeSpan value, string propertyName)
     {

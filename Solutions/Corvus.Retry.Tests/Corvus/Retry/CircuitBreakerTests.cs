@@ -421,6 +421,50 @@ public class CircuitBreakerTests
     }
 
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task ATestCallFromBeforeCloseThatEndsAfterClose_IsNotCountedInTheNewWindow(bool staleFails)
+    {
+        CircuitBreaker breaker = this.NewBreaker();
+        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        Exception opening = await FailAsync(pipeline, 10).ConfigureAwait(false);
+        this.fake.Advance(BreakDuration);
+        TaskCompletionSource<string> staleResult = new();
+        Task<string> stale = pipeline.ExecuteAsync(ct => new ValueTask<string>(staleResult.Task.WaitAsync(ct))).AsTask();
+        Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
+
+        // The circuit closes while the test call is in flight, and the new window gets one call.
+        breaker.Close();
+        await SucceedAsync(pipeline, 1).ConfigureAwait(false);
+        Assert.AreEqual((1, 0), breaker.GetCounts());
+
+        if (staleFails)
+        {
+            InvalidOperationException staleFailure = new("Stale failure");
+            staleResult.SetException(staleFailure);
+            Assert.AreSame(
+                staleFailure,
+                await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => stale.WaitAsync(WaitLimit)).ConfigureAwait(false));
+        }
+        else
+        {
+            staleResult.SetResult("stale");
+            Assert.AreEqual("stale", await stale.WaitAsync(WaitLimit).ConfigureAwait(false));
+        }
+
+        Assert.AreEqual(CircuitState.Closed, breaker.State);
+        Assert.AreEqual((1, 0), breaker.GetCounts());
+        Assert.AreSequenceEqual(
+            new[]
+            {
+                new CircuitStateChange(CircuitState.Closed, CircuitState.Open, opening),
+                new CircuitStateChange(CircuitState.Open, CircuitState.HalfOpen, null),
+                new CircuitStateChange(CircuitState.HalfOpen, CircuitState.Closed, null),
+            },
+            this.Changes);
+    }
+
+    [TestMethod]
     public async Task AnExceptionThatThePolicyRefuses_IsNotAFailure()
     {
         CircuitBreaker breaker = this.NewBreaker(o => o with { Policy = RetryPolicies.Handle<TimeoutException>() });
