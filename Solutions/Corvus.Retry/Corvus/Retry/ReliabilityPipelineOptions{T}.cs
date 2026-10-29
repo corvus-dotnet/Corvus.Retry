@@ -39,6 +39,10 @@ public sealed record ReliabilityPipelineOptions<T> : ReliabilityPipelineOptions
     /// does this after the callback. When no retries remain, the pipeline returns the last result, and does not
     /// dispose it.
     /// </para>
+    /// <para>
+    /// An exception from that disposal stops the call: the caller gets that exception, the next attempt does not
+    /// start, and the fallback does not apply, because the exception is not an outcome of the attempts.
+    /// </para>
     /// </remarks>
     public Func<T, bool>? ShouldRetryResult { get; init; }
 

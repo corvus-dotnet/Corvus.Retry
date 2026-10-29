@@ -6,6 +6,7 @@ namespace Corvus.Retry;
 
 using System;
 using System.Collections.Generic;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Corvus.Retry.Policies;
@@ -169,6 +170,103 @@ public class FallbackTests
         Assert.IsTrue(responses[1].Disposed);
     }
 
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task WhenShouldFallbackResultThrows_TheCallerGetsThatExceptionAndTheResultIsDisposed(bool operationCompletesAsynchronously)
+    {
+        var log = new List<string>();
+        var result = new Response(503, log);
+        var failure = new FormatException("ShouldFallbackResult failed.");
+        var calls = new List<FallbackArgs<Response>>();
+        int actions = 0;
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        {
+            Strategy = new DoNotRetry(),
+            Fallback = RecordingFallback(calls, new Response(200, log)) with
+            {
+                ShouldFallbackResult = _ => throw failure,
+                Action = _ =>
+                {
+                    Interlocked.Increment(ref actions);
+                    return new ValueTask<Response>(new Response(200, log));
+                },
+            },
+        });
+
+        async ValueTask<Response> OperationAsync(CancellationToken cancellationToken)
+        {
+            if (operationCompletesAsynchronously)
+            {
+                await Task.Yield();
+            }
+
+            return result;
+        }
+
+        FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
+            () => pipeline.ExecuteAsync(OperationAsync).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        Assert.AreSame(failure, thrown);
+        Assert.IsTrue(result.Disposed);
+        Assert.IsEmpty(calls);
+        Assert.AreEqual(0, actions);
+    }
+
+    [TestMethod]
+    public async Task WhenShouldFallbackResultThrowsAndTheDisposalOfTheResultThrows_TheCallerGetsThePredicatesException()
+    {
+        var log = new List<string>();
+        var result = new Response(503, log) { DisposeFailure = new InvalidOperationException("Dispose failed.") };
+        var failure = new FormatException("ShouldFallbackResult failed.");
+        var calls = new List<FallbackArgs<Response>>();
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        {
+            Strategy = new DoNotRetry(),
+            Fallback = RecordingFallback(calls, new Response(200, log)) with { ShouldFallbackResult = _ => throw failure },
+        });
+
+        // The predicate's exception is the outcome of the call. The pipeline ignores the exception from the disposal.
+        FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
+            () => pipeline.ExecuteAsync(_ => new ValueTask<Response>(result)).AsTask()).ConfigureAwait(false);
+
+        Assert.AreSame(failure, thrown);
+        Assert.IsTrue(result.Disposed);
+        Assert.IsEmpty(calls);
+    }
+
+    [TestMethod]
+    public async Task WhenTheDisposalOfARejectedResultThrows_TheCallerGetsThatExceptionAndTheFallbackDoesNotRun()
+    {
+        var log = new List<string>();
+        var disposeFailure = new InvalidOperationException("Dispose failed.");
+        var result = new Response(503, log) { DisposeFailure = disposeFailure };
+        var calls = new List<FallbackArgs<Response>>();
+        int actions = 0;
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        {
+            Strategy = new DoNotRetry(),
+            Fallback = RecordingFallback(calls, new Response(200, log)) with
+            {
+                ShouldFallbackResult = r => r.StatusCode >= 500,
+                Action = _ =>
+                {
+                    Interlocked.Increment(ref actions);
+                    return new ValueTask<Response>(new Response(200, log));
+                },
+            },
+        });
+
+        // The pipeline disposes the rejected result before the fallback. An exception from the disposal stops the call.
+        InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            () => pipeline.ExecuteAsync(_ => new ValueTask<Response>(result)).AsTask()).ConfigureAwait(false);
+
+        Assert.AreSame(disposeFailure, thrown);
+        Assert.AreSequenceEqual(new[] { "dispose 503" }, log);
+        Assert.IsEmpty(calls);
+        Assert.AreEqual(0, actions);
+    }
+
     // §6.9
     [TestMethod]
     public async Task TheFallbackReceivesARetryTimeoutExceptionFromTheTotalTimeout()
@@ -176,7 +274,7 @@ public class FallbackTests
         RecordingFakeTimeProvider fake = new();
         TimeSpan totalTimeout = TimeSpan.FromMilliseconds(100);
         var calls = new List<FallbackArgs<string>>();
-        int invocations = 0;
+        var tokens = new List<CancellationToken>();
         var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
         {
             Strategy = new Count(3),
@@ -188,7 +286,11 @@ public class FallbackTests
         Task<string> call = pipeline.ExecuteAsync(
             ct =>
             {
-                Interlocked.Increment(ref invocations);
+                lock (tokens)
+                {
+                    tokens.Add(ct);
+                }
+
                 return NeverCompletesAsync(ct);
             }).AsTask();
 
@@ -196,9 +298,13 @@ public class FallbackTests
         fake.Advance(totalTimeout);
 
         Assert.AreEqual(FallbackValue, await call.WaitAsync(WaitLimit).ConfigureAwait(false));
-        Assert.AreEqual(1, Volatile.Read(ref invocations));
+        CancellationToken token = Assert.ContainsSingle(tokens);
         RetryTimeoutException timeout = Assert.IsInstanceOfType<RetryTimeoutException>(Assert.ContainsSingle(calls).Exception);
+        Assert.AreEqual(typeof(RetryTimeoutException), timeout.GetType());
         Assert.AreEqual(totalTimeout, timeout.Timeout);
+
+        // The inner exception is the cancellation of the attempt, by the token that the operation received.
+        Assert.AreEqual(token, Assert.IsInstanceOfType<OperationCanceledException>(timeout.InnerException).CancellationToken);
     }
 
     [TestMethod]
@@ -207,6 +313,7 @@ public class FallbackTests
         RecordingFakeTimeProvider fake = new();
         TimeSpan attemptTimeout = TimeSpan.FromMilliseconds(50);
         var calls = new List<FallbackArgs<string>>();
+        var tokens = new List<CancellationToken>();
         var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
         {
             Strategy = new DoNotRetry(),
@@ -215,21 +322,33 @@ public class FallbackTests
             Fallback = RecordingFallback(calls),
         });
 
-        Task<string> call = pipeline.ExecuteAsync(NeverCompletesAsync).AsTask();
+        Task<string> call = pipeline.ExecuteAsync(
+            ct =>
+            {
+                lock (tokens)
+                {
+                    tokens.Add(ct);
+                }
+
+                return NeverCompletesAsync(ct);
+            }).AsTask();
 
         Assert.IsFalse(call.IsCompleted);
         fake.Advance(attemptTimeout);
 
         Assert.AreEqual(FallbackValue, await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+        CancellationToken token = Assert.ContainsSingle(tokens);
         RetryTimeoutException timeout = Assert.IsInstanceOfType<RetryTimeoutException>(Assert.ContainsSingle(calls).Exception);
         Assert.AreEqual(attemptTimeout, timeout.Timeout);
+        Assert.AreEqual(token, Assert.IsInstanceOfType<OperationCanceledException>(timeout.InnerException).CancellationToken);
     }
 
     [TestMethod]
     public async Task AnOpenCircuitGivesTheFallbackValue()
     {
         RecordingFakeTimeProvider fake = new();
-        var breaker = new CircuitBreaker(new CircuitBreakerOptions { MinimumThroughput = 2, FailureRatio = 1, TimeProvider = fake });
+        TimeSpan breakDuration = TimeSpan.FromSeconds(30);
+        var breaker = new CircuitBreaker(new CircuitBreakerOptions { MinimumThroughput = 2, FailureRatio = 1, BreakDuration = breakDuration, TimeProvider = fake });
         var opener = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new DoNotRetry(), CircuitBreaker = breaker, TimeProvider = fake });
         for (int i = 0; i < 2; i++)
         {
@@ -257,7 +376,11 @@ public class FallbackTests
 
         Assert.AreEqual(FallbackValue, result);
         Assert.AreEqual(0, invocations);
-        Assert.IsInstanceOfType<BrokenCircuitException>(Assert.ContainsSingle(calls).Exception);
+        Exception received = Assert.ContainsSingle(calls).Exception!;
+        Assert.AreEqual(typeof(BrokenCircuitException), received.GetType());
+
+        // The breaker of the options made the exception: no time has passed, so the whole break remains.
+        Assert.AreEqual(breakDuration, ((BrokenCircuitException)received).RetryAfter);
     }
 
     [TestMethod]
@@ -276,7 +399,10 @@ public class FallbackTests
         string result = await pipeline.ExecuteAsync(_ => new ValueTask<string>("success")).ConfigureAwait(false);
 
         Assert.AreEqual(FallbackValue, result);
-        Assert.IsInstanceOfType<IsolatedCircuitException>(Assert.ContainsSingle(calls).Exception);
+        Exception received = Assert.ContainsSingle(calls).Exception!;
+        Assert.AreEqual(typeof(IsolatedCircuitException), received.GetType());
+        Assert.IsNull(((IsolatedCircuitException)received).RetryAfter);
+        Assert.AreEqual(CircuitState.Isolated, breaker.State);
     }
 
     [TestMethod]
@@ -303,8 +429,9 @@ public class FallbackTests
         Assert.IsFalse(call.IsCompleted);
         await cts.CancelAsync().ConfigureAwait(false);
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
-        Assert.IsTrue(cts.IsCancellationRequested);
+        // Without timeouts, the operation receives the caller's token, and its cancellation propagates.
+        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
         Assert.IsEmpty(calls);
         Assert.AreEqual(0, actions);
     }
@@ -315,6 +442,7 @@ public class FallbackTests
         RecordingFakeTimeProvider fake = new();
         using CancellationTokenSource cts = new();
         var calls = new List<FallbackArgs<string>>();
+        var tokens = new List<CancellationToken>();
         var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
         {
             Strategy = new Count(3),
@@ -323,13 +451,67 @@ public class FallbackTests
             Fallback = RecordingFallback(calls),
         });
 
-        Task<string> call = pipeline.ExecuteAsync(NeverCompletesAsync, cts.Token).AsTask();
+        Task<string> call = pipeline.ExecuteAsync(
+            ct =>
+            {
+                lock (tokens)
+                {
+                    tokens.Add(ct);
+                }
+
+                return NeverCompletesAsync(ct);
+            },
+            cts.Token).AsTask();
 
         Assert.IsFalse(call.IsCompleted);
         await cts.CancelAsync().ConfigureAwait(false);
         fake.Advance(TimeSpan.FromMilliseconds(100));
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        // With a total timeout, the operation receives a token that the caller's token cancels. The operation's
+        // cancellation propagates unchanged, so it carries that token, not the caller's.
+        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(Assert.ContainsSingle(tokens), thrown.CancellationToken);
+        Assert.AreNotEqual(cts.Token, thrown.CancellationToken);
+        Assert.IsEmpty(calls);
+    }
+
+    [TestMethod]
+    public async Task WhenTheCallerCancelsAfterALastAttemptThatCancelledItself_TheFallbackDoesNotApply()
+    {
+        using CancellationTokenSource cts = new();
+        var op = new FlakyOperation(FlakyOperation.AlwaysFails, attempt => new OperationCanceledException($"Attempt {attempt} cancelled itself"));
+        var calls = new List<FallbackArgs<string>>();
+        var stateChangeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseStateChange = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new Count(2),
+            CircuitBreaker = new CircuitBreaker(new CircuitBreakerOptions
+            {
+                // The failure of the second attempt opens the circuit, and the pipeline awaits the callback.
+                MinimumThroughput = 2,
+                FailureRatio = 1,
+                OnStateChanged = change =>
+                {
+                    stateChangeStarted.SetResult();
+                    return new ValueTask(releaseStateChange.Task);
+                },
+            }),
+            Fallback = RecordingFallback(calls),
+        });
+
+        Task<string> call = pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke()), cts.Token).AsTask();
+
+        // The last attempt cancelled itself before the caller cancelled, so the engine makes that cancellation the
+        // outcome of the attempts. The caller cancels while the pipeline awaits the callback.
+        await stateChangeStarted.Task.WaitAsync(WaitLimit).ConfigureAwait(false);
+        await cts.CancelAsync().ConfigureAwait(false);
+        releaseStateChange.SetResult();
+
+        // The fallback never applies once the caller has cancelled. The caller gets the outcome of the attempts.
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreSame(op.LastThrown, thrown);
+        Assert.AreEqual(2, op.Invocations);
         Assert.IsEmpty(calls);
     }
 
@@ -342,7 +524,7 @@ public class FallbackTests
         int invocations = 0;
         var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string> { Fallback = RecordingFallback(calls) });
 
-        await Assert.ThrowsAsync<OperationCanceledException>(
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
             () => pipeline.ExecuteAsync(
                 _ =>
                 {
@@ -351,6 +533,7 @@ public class FallbackTests
                 },
                 cts.Token).AsTask()).ConfigureAwait(false);
 
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
         Assert.AreEqual(0, invocations);
         Assert.IsEmpty(calls);
     }
@@ -389,6 +572,46 @@ public class FallbackTests
 
         Assert.AreSame(op.LastThrown, thrown);
         Assert.AreSame(thrown, Assert.ContainsSingle(policy.Consulted));
+        Assert.IsEmpty(calls);
+    }
+
+    [TestMethod]
+    public async Task TheFallbackPolicyIsAskedAboutTheExceptionsInsideAnAggregateException()
+    {
+        var op = new FlakyOperation(
+            FlakyOperation.AlwaysFails,
+            attempt => new AggregateException(new HttpRequestException($"Attempt {attempt} failed")));
+        var calls = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new Count(2),
+            Fallback = RecordingFallback(calls) with { Policy = RetryPolicies.Handle<HttpRequestException>() },
+        });
+
+        string result = await pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).ConfigureAwait(false);
+
+        // The policy accepts the exception that the operation threw inside the aggregate. The fallback receives the
+        // aggregate itself.
+        Assert.AreEqual(FallbackValue, result);
+        Assert.AreEqual(2, op.Invocations);
+        Assert.AreSame(op.LastThrown, Assert.ContainsSingle(calls).Exception);
+    }
+
+    [TestMethod]
+    public async Task WhenTheFallbackPolicyRefusesOneExceptionInsideAnAggregateException_TheAggregatePropagates()
+    {
+        var aggregate = new AggregateException(new HttpRequestException("Accepted"), new InvalidOperationException("Refused"));
+        var calls = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new DoNotRetry(),
+            Fallback = RecordingFallback(calls) with { Policy = RetryPolicies.Handle<HttpRequestException>() },
+        });
+
+        AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(
+            () => pipeline.ExecuteAsync(_ => throw aggregate).AsTask()).ConfigureAwait(false);
+
+        Assert.AreSame(aggregate, thrown);
         Assert.IsEmpty(calls);
     }
 
@@ -547,6 +770,51 @@ public class FallbackTests
     }
 
     [TestMethod]
+    public async Task ForARejectedResult_OnFallbackAndTheActionReceiveTheCallersTokenAndTheResult()
+    {
+        using CancellationTokenSource cts = new();
+        var log = new List<string>();
+        var rejected = new Response(503, log);
+        var onFallbackCalls = new List<FallbackArgs<Response>>();
+        var actionCalls = new List<FallbackArgs<Response>>();
+        CancellationToken operationToken = default;
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        {
+            Strategy = new DoNotRetry(),
+            AttemptTimeout = TimeSpan.FromHours(1),
+            TotalTimeout = TimeSpan.FromHours(1),
+            Fallback = RecordingFallback(onFallbackCalls, new Response(0, log)) with
+            {
+                ShouldFallbackResult = r => r.StatusCode >= 500,
+                Action = args =>
+                {
+                    actionCalls.Add(args);
+                    return new ValueTask<Response>(new Response(200, log));
+                },
+            },
+        });
+
+        Response result = await pipeline.ExecuteAsync(
+            ct =>
+            {
+                operationToken = ct;
+                return new ValueTask<Response>(rejected);
+            },
+            cts.Token).ConfigureAwait(false);
+
+        Assert.AreEqual(200, result.StatusCode);
+
+        // The operation received a token of the timeouts, but the fallback receives the caller's token.
+        Assert.AreNotEqual(cts.Token, operationToken);
+        foreach (FallbackArgs<Response> args in new[] { Assert.ContainsSingle(onFallbackCalls), Assert.ContainsSingle(actionCalls) })
+        {
+            Assert.AreSame(rejected, args.Result);
+            Assert.IsNull(args.Exception);
+            Assert.AreEqual(cts.Token, args.CancellationToken);
+        }
+    }
+
+    [TestMethod]
     public async Task WhenFallbackIsNull_ThePipelineThrowsTheException()
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
@@ -694,6 +962,53 @@ public class FallbackTests
     }
 
     [TestMethod]
+    public async Task AnExceptionFromTheStateChangeCallbackOnTheChangeFromOpenToHalfOpen_PropagatesAndTheFallbackIsNotCalled()
+    {
+        RecordingFakeTimeProvider fake = new();
+        TimeSpan breakDuration = TimeSpan.FromSeconds(30);
+        var callbackException = new FormatException("OnStateChanged failed.");
+        var calls = new List<FallbackArgs<string>>();
+        int invocations = 0;
+        var breaker = new CircuitBreaker(new CircuitBreakerOptions
+        {
+            MinimumThroughput = 2,
+            FailureRatio = 1,
+            BreakDuration = breakDuration,
+            TimeProvider = fake,
+            OnStateChanged = change => change.To == CircuitState.HalfOpen ? throw callbackException : ValueTask.CompletedTask,
+        });
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new DoNotRetry(),
+            CircuitBreaker = breaker,
+            TimeProvider = fake,
+            Fallback = RecordingFallback(calls),
+        });
+
+        // Two failed calls open the circuit. The fallback gives a value for each.
+        for (int i = 0; i < 2; i++)
+        {
+            Assert.AreEqual(FallbackValue, await pipeline.ExecuteAsync(_ => throw new InvalidOperationException("Failure")).ConfigureAwait(false));
+        }
+
+        Assert.AreEqual(CircuitState.Open, breaker.State);
+        fake.Advance(breakDuration);
+
+        Exception thrown = await Assert.ThrowsAsync<Exception>(
+            () => pipeline.ExecuteAsync(
+                _ =>
+                {
+                    Interlocked.Increment(ref invocations);
+                    return new ValueTask<string>("success");
+                }).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        // The callback's exception stops the call before the attempt, and the fallback does not apply to it.
+        Assert.AreSame(callbackException, thrown);
+        Assert.AreEqual(0, invocations);
+        Assert.HasCount(2, calls);
+    }
+
+    [TestMethod]
     public async Task AnExceptionFromOnHedging_PropagatesAndTheFallbackIsNotCalled()
     {
         var callbackException = new FormatException("OnHedging failed.");
@@ -740,22 +1055,94 @@ public class FallbackTests
     }
 
     [TestMethod]
-    public async Task WithHedging_WhenEveryAttemptFails_TheFallbackReceivesTheLastException()
+    public async Task WithHedging_TheFallbackReceivesTheExceptionOfTheLastAttempt()
     {
         var calls = new List<FallbackArgs<string>>();
-        int invocations = 0;
+        var op = new FlakyOperation(FlakyOperation.AlwaysFails);
         var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
         {
             Hedging = new HedgingOptions { MaxHedgedAttempts = 1, Delay = TimeSpan.Zero },
             Fallback = RecordingFallback(calls),
         });
 
-        string result = await pipeline.ExecuteAsync(
-            _ => throw new InvalidOperationException($"Attempt {Interlocked.Increment(ref invocations)} failed")).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
+        // The first attempt fails synchronously, so the engine starts the second at once. The second fails only after
+        // the engine awaits it, so it is the last attempt to fail.
+        ValueTask<string> OperationAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                return new ValueTask<string>(op.Invoke());
+            }
+            catch (InvalidOperationException ex) when (op.Invocations == 2)
+            {
+                return DeferredValueTask.FromException<string>(ex);
+            }
+        }
+
+        string result = await pipeline.ExecuteAsync(OperationAsync).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
 
         Assert.AreEqual(FallbackValue, result);
-        Assert.AreEqual(2, Volatile.Read(ref invocations));
-        Assert.IsInstanceOfType<InvalidOperationException>(Assert.ContainsSingle(calls).Exception);
+        Assert.HasCount(2, op.Thrown);
+        Assert.AreSame(op.Thrown[1], Assert.ContainsSingle(calls).Exception);
+        Assert.AreNotSame(op.Thrown[0], op.Thrown[1]);
+    }
+
+    [TestMethod]
+    public async Task AFallbackPolicyThatHandlesOnlyInvalidOperationException_LetsARetryTimeoutExceptionPropagate()
+    {
+        RecordingFakeTimeProvider fake = new();
+        TimeSpan attemptTimeout = TimeSpan.FromMilliseconds(50);
+        var calls = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new DoNotRetry(),
+            AttemptTimeout = attemptTimeout,
+            TimeProvider = fake,
+            Fallback = RecordingFallback(calls) with { Policy = RetryPolicies.Handle<InvalidOperationException>() },
+        });
+
+        Task<string> call = pipeline.ExecuteAsync(NeverCompletesAsync).AsTask();
+
+        Assert.IsFalse(call.IsCompleted);
+        fake.Advance(attemptTimeout);
+
+        RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(attemptTimeout, thrown.Timeout);
+        Assert.IsEmpty(calls);
+    }
+
+    [TestMethod]
+    public async Task AFallbackPolicyThatHandlesOnlyInvalidOperationException_LetsABrokenCircuitExceptionPropagate()
+    {
+        var breaker = new CircuitBreaker(new CircuitBreakerOptions { MinimumThroughput = 2, FailureRatio = 1 });
+        var calls = new List<FallbackArgs<string>>();
+        int invocations = 0;
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new DoNotRetry(),
+            CircuitBreaker = breaker,
+            Fallback = RecordingFallback(calls) with { Policy = RetryPolicies.Handle<InvalidOperationException>() },
+        });
+
+        // Two calls fail, the policy of the fallback accepts each failure, and the failures open the circuit.
+        for (int i = 0; i < 2; i++)
+        {
+            Assert.AreEqual(FallbackValue, await pipeline.ExecuteAsync(_ => throw new InvalidOperationException("Failure")).ConfigureAwait(false));
+        }
+
+        Assert.AreEqual(CircuitState.Open, breaker.State);
+
+        BrokenCircuitException thrown = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
+            () => pipeline.ExecuteAsync(
+                _ =>
+                {
+                    Interlocked.Increment(ref invocations);
+                    return new ValueTask<string>("success");
+                }).AsTask()).ConfigureAwait(false);
+
+        Assert.IsNotNull(thrown.RetryAfter);
+        Assert.AreEqual(0, invocations);
+        Assert.HasCount(2, calls);
     }
 
     [TestMethod]
@@ -778,7 +1165,11 @@ public class FallbackTests
         fake.Advance(totalTimeout);
 
         Assert.AreEqual(FallbackValue, await call.WaitAsync(WaitLimit).ConfigureAwait(false));
-        Assert.IsInstanceOfType<RetryTimeoutException>(Assert.ContainsSingle(calls).Exception);
+        RetryTimeoutException timeout = Assert.IsInstanceOfType<RetryTimeoutException>(Assert.ContainsSingle(calls).Exception);
+        Assert.AreEqual(totalTimeout, timeout.Timeout);
+
+        // TODO(review): after defect D1 is fixed (owner A, RetryEngine.cs:314), also assert that the inner exception is
+        // the exception of the last attempt, by reference.
     }
 
     [TestMethod]
@@ -801,7 +1192,92 @@ public class FallbackTests
         fake.Advance(totalTimeout);
 
         Assert.AreEqual(FallbackValue, await call.WaitAsync(WaitLimit).ConfigureAwait(false));
-        Assert.IsInstanceOfType<RetryTimeoutException>(Assert.ContainsSingle(calls).Exception);
+        RetryTimeoutException timeout = Assert.IsInstanceOfType<RetryTimeoutException>(Assert.ContainsSingle(calls).Exception);
+        Assert.AreEqual(totalTimeout, timeout.Timeout);
+
+        // No attempt failed before the total timeout expired, so there is no failure to report.
+        Assert.IsNull(timeout.InnerException);
+    }
+
+    [TestMethod]
+    [DataRow(true, false)]
+    [DataRow(false, false)]
+    [DataRow(true, true)]
+    [DataRow(false, true)]
+    public async Task WithContinueOnCapturedContext_TheGenericPipelineAndItsFallbackContinueOnTheCapturedContextOnlyWhenItIsTrue(
+        bool continueOnCapturedContext,
+        bool aRejectedResultCausesTheFallback)
+    {
+        var context = new ThreadPoolSynchronizationContext();
+        var seen = new Dictionary<string, SynchronizationContext?>();
+        var actionGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int attempts = 0;
+
+        void Record(string name)
+        {
+            lock (seen)
+            {
+                seen.Add(name, SynchronizationContext.Current);
+            }
+        }
+
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new Count(2),
+            ContinueOnCapturedContext = continueOnCapturedContext,
+            ShouldRetryResult = r => r == "rejected",
+            OnRetry = _ =>
+            {
+                Record("OnRetry");
+                return DeferredValueTask.Completed();
+            },
+            Fallback = new FallbackOptions<string>
+            {
+                ShouldFallbackResult = r => r == "rejected",
+                OnFallback = _ =>
+                {
+                    Record("OnFallback");
+                    return DeferredValueTask.Completed();
+                },
+                Action = _ =>
+                {
+                    Record("Action");
+                    return DeferredValueTask.FromResult(FallbackValue, actionGate.Task);
+                },
+            },
+        });
+
+        // Each attempt completes on a thread with no context, after the pipeline awaits it.
+        ValueTask<string> OperationAsync(CancellationToken cancellationToken)
+        {
+            Record($"attempt {Interlocked.Increment(ref attempts)}");
+            return aRejectedResultCausesTheFallback
+                ? DeferredValueTask.FromResult("rejected")
+                : DeferredValueTask.FromException<string>(new InvalidOperationException("Failure"));
+        }
+
+        (Task<string> call, Task<SynchronizationContext?> completedOn) = context.Run(() =>
+        {
+            Task<string> call = pipeline.ExecuteAsync(OperationAsync).AsTask();
+            Task<SynchronizationContext?> completedOn = call.ContinueWith(
+                _ => SynchronizationContext.Current,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return (call, completedOn);
+        });
+
+        // The call cannot complete before the continuation that records its context is registered.
+        actionGate.SetResult();
+
+        Assert.AreEqual(FallbackValue, await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+        SynchronizationContext? expected = continueOnCapturedContext ? context : null;
+        Assert.AreSame(context, seen["attempt 1"]);
+        Assert.AreSame(expected, seen["OnRetry"]);
+        Assert.AreSame(expected, seen["attempt 2"]);
+        Assert.AreSame(expected, seen["OnFallback"]);
+        Assert.AreSame(expected, seen["Action"]);
+        Assert.AreSame(expected, await completedOn.WaitAsync(WaitLimit).ConfigureAwait(false));
     }
 
     private static async Task AssertCallbackExceptionPropagatesAsync(
@@ -846,17 +1322,28 @@ public class FallbackTests
         return "never";
     }
 
-    // A disposable result with a status code. It writes its disposal to the log.
+    // A disposable result with a status code. It writes its disposal to the log. When DisposeFailure is set, Dispose
+    // throws it after it records the disposal.
     private sealed class Response(int statusCode, List<string> log) : IDisposable
     {
         public int StatusCode => statusCode;
 
         public bool Disposed { get; private set; }
 
+        public Exception? DisposeFailure { get; init; }
+
         public void Dispose()
         {
             this.Disposed = true;
-            log.Add($"dispose {statusCode}");
+            lock (log)
+            {
+                log.Add($"dispose {statusCode}");
+            }
+
+            if (this.DisposeFailure is { } failure)
+            {
+                throw failure;
+            }
         }
     }
 }

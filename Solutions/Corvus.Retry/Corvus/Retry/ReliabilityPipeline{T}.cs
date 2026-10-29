@@ -5,6 +5,7 @@
 namespace Corvus.Retry;
 
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -171,6 +172,40 @@ public sealed class ReliabilityPipeline<T>
         }
     }
 
+    // Asks the predicate about a result. An exception from the predicate stops the call. The caller does not get the
+    // result, so the pipeline disposes it, and ignores an exception from the disposal.
+    private static bool ShouldFallBack(Func<T, bool> shouldFallbackResult, T result)
+    {
+        try
+        {
+            return shouldFallbackResult(result);
+        }
+        catch
+        {
+            DisposeQuietly(result);
+            throw;
+        }
+    }
+
+    [SuppressMessage(
+        "Roslynator",
+        "RCS1075:Avoid empty catch clause that catches System.Exception",
+        Justification = "The call already stops with another exception. That exception is more important to the caller.")]
+    private static void DisposeQuietly(T result)
+    {
+        if (result is IDisposable disposable)
+        {
+            try
+            {
+                disposable.Dispose();
+            }
+            catch (Exception)
+            {
+                // The call already has an outcome, so the exception has no receiver.
+            }
+        }
+    }
+
     private async ValueTask<T> WithFallbackAsync(ValueTask<T> core, FallbackOptions<T> fallback, CallOutcome outcome, CancellationToken cancellationToken)
     {
         T result;
@@ -180,15 +215,21 @@ public sealed class ReliabilityPipeline<T>
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // The caller cancelled, so the fallback does not apply.
+            // The caller cancelled, so the fallback does not apply. The engine never makes a cancellation by the caller
+            // the outcome, but the outcome can be a cancellation that the operation caused itself, when the caller
+            // cancels after the attempt, for example while the engine awaits the state change callback of the breaker.
             throw;
         }
         catch (Exception ex) when (ReferenceEquals(ex, outcome.Exception))
         {
             // The filter lets an exception from a callback, the strategy or a policy of the pipeline propagate. It is not
             // an outcome of the attempts, so the fallback does not apply.
-            // The policy is evaluated here, not in a filter, so that an exception from the policy propagates.
-            if (!fallback.Policy.CanRetry(ex))
+            // The policy is evaluated here, not in a filter, so that an exception from the policy propagates. It is asked
+            // about the exceptions that the operation threw, not the AggregateException that wraps them.
+            bool handles = ex is AggregateException aggregate
+                ? fallback.Policy.CanRetryAll(aggregate)
+                : fallback.Policy.CanRetry(ex);
+            if (!handles)
             {
                 throw;
             }
@@ -196,11 +237,12 @@ public sealed class ReliabilityPipeline<T>
             return await this.FallBackAsync(fallback, new FallbackArgs<T>(ex, default, cancellationToken)).ConfigureAwait(this.continueOnCapturedContext);
         }
 
-        if (fallback.ShouldFallbackResult is not { } shouldFallbackResult || !shouldFallbackResult(result))
+        if (fallback.ShouldFallbackResult is not { } shouldFallbackResult || !ShouldFallBack(shouldFallbackResult, result))
         {
             return result;
         }
 
+        // The caller does not get the result, so release it. An exception from the disposal stops the call.
         (result as IDisposable)?.Dispose();
         return await this.FallBackAsync(fallback, new FallbackArgs<T>(null, result, cancellationToken)).ConfigureAwait(this.continueOnCapturedContext);
     }

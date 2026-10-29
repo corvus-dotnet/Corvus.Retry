@@ -6,7 +6,6 @@ namespace Corvus.Retry;
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -63,9 +62,56 @@ public class ReliabilityPipelineTests
         Assert.IsFalse(call.IsCompleted);
         await cts.CancelAsync().ConfigureAwait(false);
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        // The cancellation of the operation propagates unchanged, so it carries the token that the operation received.
+        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
         CancellationToken token = Assert.ContainsSingle(tokens);
         Assert.IsTrue(token.IsCancellationRequested);
+        Assert.AreEqual(token, thrown.CancellationToken);
+
+        // Without timeouts the operation receives the caller's token. With timeouts it receives a token that the
+        // caller's token cancels.
+        Assert.AreEqual(!withTimeouts, token == cts.Token);
+    }
+
+    [TestMethod]
+    public async Task WithTimeouts_TheOperationReceivesATokenThatIsNotTheCallersAndThePipelineNeverCancelsTheCallersToken()
+    {
+        RecordingFakeTimeProvider fake = new();
+        TimeSpan totalTimeout = TimeSpan.FromMilliseconds(100);
+        using var cts = new CancellationTokenSource();
+        var tokens = new List<CancellationToken>();
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+        {
+            Strategy = new Count(3),
+            AttemptTimeout = OneHour,
+            TotalTimeout = totalTimeout,
+            TimeProvider = fake,
+        });
+
+        Task<string> call = pipeline.ExecuteAsync(
+            ct =>
+            {
+                lock (tokens)
+                {
+                    tokens.Add(ct);
+                }
+
+                return NeverCompletesAsync(ct);
+            },
+            cts.Token).AsTask();
+
+        CancellationToken token = Assert.ContainsSingle(tokens);
+        Assert.AreNotEqual(cts.Token, token);
+        Assert.IsFalse(token.IsCancellationRequested);
+
+        await fake.WaitForTimersAsync(2).ConfigureAwait(false);
+        fake.Advance(totalTimeout);
+
+        // The total timeout cancels the operation's token, and not the caller's.
+        RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(totalTimeout, thrown.Timeout);
+        Assert.IsTrue(token.IsCancellationRequested);
+        Assert.IsFalse(cts.IsCancellationRequested);
     }
 
     // REQ-02
@@ -141,6 +187,9 @@ public class ReliabilityPipelineTests
         Assert.AreEqual(totalTimeout, thrown.Timeout);
         fake.Advance(OneHour);
         Assert.AreEqual(1, op.Invocations);
+
+        // TODO(review): defect D1 (owner A, RetryEngine.cs:314) pins the inner exception of this case; owner A adds
+        // that assertion at pipeline level.
     }
 
     // REQ-04
@@ -149,15 +198,29 @@ public class ReliabilityPipelineTests
     {
         RecordingFakeTimeProvider fake = new();
         using var cts = new CancellationTokenSource();
+        var tokens = new List<CancellationToken>();
         var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { AttemptTimeout = OneHour, TotalTimeout = OneHour, TimeProvider = fake });
 
-        Task<string> call = pipeline.ExecuteAsync(NeverCompletesAsync, cts.Token).AsTask();
+        Task<string> call = pipeline.ExecuteAsync(
+            ct =>
+            {
+                lock (tokens)
+                {
+                    tokens.Add(ct);
+                }
+
+                return NeverCompletesAsync(ct);
+            },
+            cts.Token).AsTask();
 
         Assert.IsFalse(call.IsCompleted);
         await cts.CancelAsync().ConfigureAwait(false);
 
+        // The operation's cancellation propagates unchanged. With timeouts, it carries the token of the attempt, which
+        // the caller's token cancelled.
         OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
         Assert.IsNotInstanceOfType<TimeoutException>(thrown);
+        Assert.AreEqual(Assert.ContainsSingle(tokens), thrown.CancellationToken);
     }
 
     // REQ-04
@@ -166,9 +229,33 @@ public class ReliabilityPipelineTests
     {
         RecordingFakeTimeProvider fake = new();
         TimeSpan attemptTimeout = TimeSpan.FromMilliseconds(50);
+        var tokens = new List<CancellationToken>();
         var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new DoNotRetry(), AttemptTimeout = attemptTimeout, TimeProvider = fake });
+        var cancellations = new List<OperationCanceledException>();
 
-        Task<string> call = pipeline.ExecuteAsync(NeverCompletesAsync).AsTask();
+        async ValueTask<string> OperationAsync(CancellationToken cancellationToken)
+        {
+            lock (tokens)
+            {
+                tokens.Add(cancellationToken);
+            }
+
+            try
+            {
+                return await NeverCompletesAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException ex)
+            {
+                lock (cancellations)
+                {
+                    cancellations.Add(ex);
+                }
+
+                throw;
+            }
+        }
+
+        Task<string> call = pipeline.ExecuteAsync(OperationAsync).AsTask();
 
         Assert.IsFalse(call.IsCompleted);
         await fake.WaitForTimersAsync(1).ConfigureAwait(false);
@@ -176,14 +263,17 @@ public class ReliabilityPipelineTests
 
         TimeoutException thrown = await Assert.ThrowsAsync<TimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
         Assert.AreEqual(attemptTimeout, Assert.IsInstanceOfType<RetryTimeoutException>(thrown).Timeout);
-        Assert.IsInstanceOfType<OperationCanceledException>(thrown.InnerException);
+
+        // The inner exception is the cancellation that the operation threw, by the token of the attempt.
+        OperationCanceledException cancellation = Assert.ContainsSingle(cancellations);
+        Assert.AreSame(cancellation, thrown.InnerException);
+        Assert.AreEqual(Assert.ContainsSingle(tokens), cancellation.CancellationToken);
     }
 
     // REQ-05
     [TestMethod]
     public async Task WhenTheCallerCancelsDuringADelayOfOneHour_TheSecondAttemptDoesNotStart()
     {
-        var stopwatch = Stopwatch.StartNew();
         RecordingFakeTimeProvider fake = new();
         using var cts = new CancellationTokenSource();
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
@@ -195,10 +285,41 @@ public class ReliabilityPipelineTests
         Assert.AreSequenceEqual(new[] { OneHour }, fake.Delays);
         await cts.CancelAsync().ConfigureAwait(false);
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        // The call ends without a move of the fake time. Without a total timeout, the delay waits on the caller's token.
+        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
         fake.Advance(OneHour);
         Assert.AreEqual(1, op.Invocations);
-        Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
+    }
+
+    [TestMethod]
+    public async Task WhenTheCallerCancelsDuringADelayWithATotalTimeout_TheExceptionCarriesTheTokenThatTheCallersTokenCancelled()
+    {
+        RecordingFakeTimeProvider fake = new();
+        using var cts = new CancellationTokenSource();
+        var op = new FlakyOperation(FlakyOperation.AlwaysFails);
+        var tokens = new List<CancellationToken>();
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Linear(OneHour, 3), TotalTimeout = OneHour * 10, TimeProvider = fake });
+
+        Task<string> call = pipeline.ExecuteAsync(
+            ct =>
+            {
+                tokens.Add(ct);
+                return new ValueTask<string>(op.Invoke());
+            },
+            cts.Token).AsTask();
+
+        Assert.IsFalse(call.IsCompleted);
+        await cts.CancelAsync().ConfigureAwait(false);
+
+        // The documented promise is an OperationCanceledException when the caller cancels. With a total timeout, the
+        // delay waits on a token that the caller's token cancels, so the exception carries that token: the token that
+        // the operation received.
+        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.IsNotInstanceOfType<TimeoutException>(thrown);
+        Assert.AreEqual(Assert.ContainsSingle(tokens), thrown.CancellationToken);
+        Assert.AreNotEqual(cts.Token, thrown.CancellationToken);
+        Assert.AreEqual(1, op.Invocations);
     }
 
     // REQ-06
@@ -217,7 +338,7 @@ public class ReliabilityPipelineTests
             TimeProvider = fake,
         });
 
-        await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+        OperationCanceledException withResult = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
             () => pipeline.ExecuteAsync(
                 _ =>
                 {
@@ -226,7 +347,7 @@ public class ReliabilityPipelineTests
                 },
                 cancelled).AsTask()).ConfigureAwait(false);
 
-        await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+        OperationCanceledException withoutResult = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
             () => pipeline.ExecuteAsync(
                 _ =>
                 {
@@ -236,6 +357,8 @@ public class ReliabilityPipelineTests
                 cancelled).AsTask()).ConfigureAwait(false);
 
         Assert.AreEqual(0, invocations);
+        Assert.AreEqual(cancelled, withResult.CancellationToken);
+        Assert.AreEqual(cancelled, withoutResult.CancellationToken);
     }
 
     // REQ-08
@@ -280,17 +403,99 @@ public class ReliabilityPipelineTests
             Assert.AreEqual(3, op.Invocations);
         }
 
-        foreach (Task<string> call in calls)
+        for (int i = 0; i < calls.Length; i++)
         {
             if (failures == FlakyOperation.AlwaysFails)
             {
-                Assert.IsTrue(call.IsFaulted);
+                // Each call throws the last exception of its own operation.
+                InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => calls[i]).ConfigureAwait(false);
+                Assert.AreSame(operations[i].LastThrown, thrown);
             }
             else
             {
-                Assert.AreEqual("attempt-3", await call.ConfigureAwait(false));
+                Assert.AreEqual("attempt-3", await calls[i].ConfigureAwait(false));
             }
         }
+    }
+
+    // REQ-08
+    [TestMethod]
+    public async Task TwoCallsThatOverlapOnOnePipelineEachGetTheirOwnAttemptsCallbacksAndFallback()
+    {
+        RecordingFakeTimeProvider fake = new();
+        var opA = new FlakyOperation(FlakyOperation.AlwaysFails, attempt => new InvalidOperationException($"A attempt {attempt} failed"));
+        var opB = new FlakyOperation(FlakyOperation.AlwaysFails, attempt => new InvalidOperationException($"B attempt {attempt} failed"));
+        var firstAttemptOfAInFlight = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var retries = new List<RetryEventArgs>();
+        var fallbacks = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new Count(3),
+            TotalTimeout = OneHour,
+            TimeProvider = fake,
+            OnRetry = args =>
+            {
+                lock (retries)
+                {
+                    retries.Add(args);
+                }
+
+                return ValueTask.CompletedTask;
+            },
+            Fallback = new FallbackOptions<string>
+            {
+                Action = args =>
+                {
+                    lock (fallbacks)
+                    {
+                        fallbacks.Add(args);
+                    }
+
+                    return new ValueTask<string>($"fallback for {args.Exception!.Message}");
+                },
+            },
+        });
+
+        // The first attempt of call A stays in flight until the test releases it. Its other attempts fail synchronously.
+        ValueTask<string> OperationA(CancellationToken cancellationToken)
+        {
+            try
+            {
+                return new ValueTask<string>(opA.Invoke());
+            }
+            catch (InvalidOperationException ex) when (opA.Invocations == 1)
+            {
+                firstAttemptOfAInFlight.SetResult();
+                return DeferredValueTask.FromException<string>(ex, releaseA.Task);
+            }
+        }
+
+        Task<string> callA = pipeline.ExecuteAsync(OperationA).AsTask();
+        await firstAttemptOfAInFlight.Task.WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        // Call B runs from start to end while call A is in flight.
+        string resultB = await pipeline.ExecuteAsync(_ => new ValueTask<string>(opB.Invoke())).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
+        Assert.IsFalse(callA.IsCompleted);
+        Assert.AreEqual(1, opA.Invocations);
+        releaseA.SetResult();
+        string resultA = await callA.WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual("fallback for B attempt 3 failed", resultB);
+        Assert.AreEqual("fallback for A attempt 3 failed", resultA);
+        Assert.AreEqual(3, opA.Invocations);
+        Assert.AreEqual(3, opB.Invocations);
+
+        // Each call has its own total timeout.
+        Assert.AreSequenceEqual(new[] { OneHour, OneHour }, fake.Delays);
+
+        // Each call's callbacks receive that call's own exceptions and attempt numbers.
+        Assert.AreSequenceEqual(
+            new[] { (opB.Thrown[0], 1), (opB.Thrown[1], 2), (opA.Thrown[0], 1), (opA.Thrown[1], 2) },
+            retries.Select(r => (r.LastException!, r.AttemptNumber)).ToArray());
+        Assert.HasCount(2, fallbacks);
+        Assert.AreSame(opB.LastThrown, fallbacks[0].Exception);
+        Assert.AreSame(opA.LastThrown, fallbacks[1].Exception);
     }
 
     // REQ-12
@@ -389,9 +594,8 @@ public class ReliabilityPipelineTests
 
     // REQ-14
     [TestMethod]
-    public async Task ATestOfADelayOfOneHourTakesLessThanOneSecond()
+    public async Task ADelayOfOneHourEndsWhenTheFakeTimeMovesOnOneHour()
     {
-        var stopwatch = Stopwatch.StartNew();
         RecordingFakeTimeProvider fake = new();
         var op = new FlakyOperation(1);
         var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Linear(OneHour, 2), TimeProvider = fake });
@@ -400,10 +604,11 @@ public class ReliabilityPipelineTests
 
         Assert.IsFalse(call.IsCompleted);
         Assert.AreSequenceEqual(new[] { OneHour }, fake.Delays);
-        fake.Advance(OneHour);
+        fake.Advance(OneHour - TimeSpan.FromTicks(1));
+        Assert.AreEqual(1, op.Invocations);
+        fake.Advance(TimeSpan.FromTicks(1));
 
         Assert.AreEqual("attempt-2", await call.WaitAsync(WaitLimit).ConfigureAwait(false));
-        Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
     }
 
     // Spec section 6.2
@@ -414,15 +619,29 @@ public class ReliabilityPipelineTests
         using var cts = new CancellationTokenSource();
         TimeSpan attemptTimeout = TimeSpan.FromMilliseconds(50);
         var policy = new RecordingRetryPolicy(true);
+        var tokens = new List<CancellationToken>();
         var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(3), Policy = policy, AttemptTimeout = attemptTimeout, TimeProvider = fake });
 
-        Task<string> call = pipeline.ExecuteAsync(NeverCompletesAsync, cts.Token).AsTask();
+        Task<string> call = pipeline.ExecuteAsync(
+            ct =>
+            {
+                lock (tokens)
+                {
+                    tokens.Add(ct);
+                }
+
+                return NeverCompletesAsync(ct);
+            },
+            cts.Token).AsTask();
 
         await fake.WaitForTimersAsync(1).ConfigureAwait(false);
         await cts.CancelAsync().ConfigureAwait(false);
         fake.Advance(attemptTimeout);
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        // The operation's cancellation propagates unchanged, with the token of the attempt.
+        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.IsNotInstanceOfType<TimeoutException>(thrown);
+        Assert.AreEqual(Assert.ContainsSingle(tokens), thrown.CancellationToken);
         Assert.IsEmpty(policy.Consulted);
     }
 
@@ -555,41 +774,115 @@ public class ReliabilityPipelineTests
     }
 
     [TestMethod]
-    [DataRow(true)]
-    [DataRow(false)]
-    public async Task ContinueOnCapturedContextControlsWhetherTheContinuationIsPostedToTheContext(bool continueOnCapturedContext)
+    [DataRow(true, true)]
+    [DataRow(false, true)]
+    [DataRow(true, false)]
+    [DataRow(false, false)]
+    public async Task ContinueOnCapturedContextControlsWhetherTheRetryRunsOnTheCapturedContext(bool continueOnCapturedContext, bool withResult)
     {
         var op = new FlakyOperation(1);
-        var context = new CountingSynchronizationContext();
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(2), ContinueOnCapturedContext = continueOnCapturedContext });
+        var context = new ThreadPoolSynchronizationContext();
+        var firstAttemptGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        SynchronizationContext? onRetryContext = null;
+        SynchronizationContext? secondAttemptContext = null;
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+        {
+            Strategy = new Count(2),
+            ContinueOnCapturedContext = continueOnCapturedContext,
+            OnRetry = _ =>
+            {
+                onRetryContext = SynchronizationContext.Current;
+                return DeferredValueTask.Completed();
+            },
+        });
 
-        async ValueTask<string> OperationAsync(CancellationToken cancellationToken)
+        // The first attempt fails on a thread with no context, after the test opens the gate. By then the call has
+        // returned, so the pipeline is awaiting the attempt. The second attempt succeeds.
+        ValueTask<string> WithResultAsync(CancellationToken cancellationToken)
         {
-            await Task.Delay(1, cancellationToken).ConfigureAwait(false);
-            return op.Invoke();
+            string result;
+            try
+            {
+                result = op.Invoke();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return DeferredValueTask.FromException<string>(ex, firstAttemptGate.Task);
+            }
+
+            secondAttemptContext = SynchronizationContext.Current;
+            return new ValueTask<string>(result);
         }
 
-        Task<string> call;
-        SynchronizationContext? original = SynchronizationContext.Current;
-        SynchronizationContext.SetSynchronizationContext(context);
-        try
+        ValueTask WithoutResultAsync(CancellationToken cancellationToken)
         {
-            call = pipeline.ExecuteAsync(OperationAsync).AsTask();
+            try
+            {
+                op.Invoke();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return DeferredValueTask.FromException(ex, firstAttemptGate.Task);
+            }
+
+            secondAttemptContext = SynchronizationContext.Current;
+            return ValueTask.CompletedTask;
         }
-        finally
+
+        Task call = context.Run(() => withResult
+            ? pipeline.ExecuteAsync(WithResultAsync).AsTask()
+            : pipeline.ExecuteAsync(WithoutResultAsync).AsTask());
+        firstAttemptGate.SetResult();
+
+        await call.WaitAsync(WaitLimit).ConfigureAwait(false);
+        Assert.AreEqual(2, op.Invocations);
+        SynchronizationContext? expected = continueOnCapturedContext ? context : null;
+        Assert.AreSame(expected, onRetryContext);
+        Assert.AreSame(expected, secondAttemptContext);
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task ContinueOnCapturedContextControlsWhetherTheRetryOfTheGenericPipelineRunsOnTheCapturedContext(bool continueOnCapturedContext)
+    {
+        var op = new FlakyOperation(1);
+        var context = new ThreadPoolSynchronizationContext();
+        SynchronizationContext? onRetryContext = null;
+        SynchronizationContext? secondAttemptContext = null;
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
         {
-            SynchronizationContext.SetSynchronizationContext(original);
+            Strategy = new Count(2),
+            ContinueOnCapturedContext = continueOnCapturedContext,
+            OnRetry = _ =>
+            {
+                onRetryContext = SynchronizationContext.Current;
+                return DeferredValueTask.Completed();
+            },
+        });
+
+        ValueTask<string> AttemptAsync(CancellationToken cancellationToken)
+        {
+            string result;
+            try
+            {
+                result = op.Invoke();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return DeferredValueTask.FromException<string>(ex);
+            }
+
+            secondAttemptContext = SynchronizationContext.Current;
+            return new ValueTask<string>(result);
         }
+
+        Task<string> call = context.Run(() => pipeline.ExecuteAsync(AttemptAsync).AsTask());
 
         Assert.AreEqual("attempt-2", await call.WaitAsync(WaitLimit).ConfigureAwait(false));
-        if (continueOnCapturedContext)
-        {
-            Assert.IsGreaterThan(0, context.Posts);
-        }
-        else
-        {
-            Assert.AreEqual(0, context.Posts);
-        }
+        SynchronizationContext? expected = continueOnCapturedContext ? context : null;
+        Assert.AreSame(expected, onRetryContext);
+        Assert.AreSame(expected, secondAttemptContext);
     }
 
     [TestMethod]
@@ -667,18 +960,5 @@ public class ReliabilityPipelineTests
     {
         await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
         return "never";
-    }
-
-    private sealed class CountingSynchronizationContext : SynchronizationContext
-    {
-        private int posts;
-
-        public int Posts => Volatile.Read(ref this.posts);
-
-        public override void Post(SendOrPostCallback d, object? state)
-        {
-            Interlocked.Increment(ref this.posts);
-            ThreadPool.QueueUserWorkItem(_ => d(state));
-        }
     }
 }

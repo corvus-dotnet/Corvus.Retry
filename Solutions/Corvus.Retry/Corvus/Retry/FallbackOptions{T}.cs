@@ -46,8 +46,16 @@ public sealed record FallbackOptions<T>
     /// Gets the policy that decides whether an exception from the pipeline gets the fallback value.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The default is <see cref="AnyExceptionPolicy.Default"/>. When the policy refuses an exception, the pipeline
     /// throws that exception.
+    /// </para>
+    /// <para>
+    /// The policy is asked about the exceptions that the operation actually threw. When the exception is an
+    /// <see cref="AggregateException"/>, the policy is asked about each exception inside it, depth first, and the
+    /// fallback applies only when the policy accepts all of them. <see cref="FallbackArgs{T}.Exception"/> is the
+    /// <see cref="AggregateException"/> itself.
+    /// </para>
     /// </remarks>
     public IRetryPolicy Policy { get; init; } = AnyExceptionPolicy.Default;
 
@@ -56,9 +64,16 @@ public sealed record FallbackOptions<T>
     /// <see langword="null"/> if no result gets the fallback value.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The predicate receives the result that the other parts of the pipeline return. Before the pipeline calls
     /// <see cref="OnFallback"/> and <see cref="Action"/>, it disposes a rejected result that implements
-    /// <see cref="IDisposable"/>. An exception from the predicate stops the call.
+    /// <see cref="IDisposable"/>. An exception from that disposal stops the call: the caller gets that exception, and
+    /// the pipeline does not call <see cref="OnFallback"/> or <see cref="Action"/>.
+    /// </para>
+    /// <para>
+    /// An exception from the predicate stops the call: the caller gets that exception. The pipeline disposes the result
+    /// that it does not return, and ignores an exception from that disposal.
+    /// </para>
     /// </remarks>
     public Func<T, bool>? ShouldFallbackResult { get; init; }
 

@@ -34,7 +34,27 @@ public class ReliabilityPipelineOptionsTests
         Assert.IsNull(options.OnRetry);
         Assert.AreSame(TimeProvider.System, options.TimeProvider);
         Assert.IsFalse(options.ContinueOnCapturedContext);
+        Assert.IsNull(options.CircuitBreaker);
+        Assert.IsNull(options.Hedging);
         Assert.IsNull(options.ShouldRetryResult);
+        Assert.IsNull(options.Fallback);
+        Assert.IsNull(options.HedgingActionGenerator);
+    }
+
+    [TestMethod]
+    public void TheDefaultsOfTheNonGenericOptionsAreTheDocumentedValues()
+    {
+        var options = new ReliabilityPipelineOptions();
+
+        Assert.IsNull(options.Strategy);
+        Assert.AreSame(AnyExceptionPolicy.Default, options.Policy);
+        Assert.IsNull(options.AttemptTimeout);
+        Assert.IsNull(options.TotalTimeout);
+        Assert.IsNull(options.OnRetry);
+        Assert.IsNull(options.CircuitBreaker);
+        Assert.IsNull(options.Hedging);
+        Assert.AreSame(TimeProvider.System, options.TimeProvider);
+        Assert.IsFalse(options.ContinueOnCapturedContext);
     }
 
     [TestMethod]
@@ -134,6 +154,7 @@ public class ReliabilityPipelineOptionsTests
         Assert.AreEqual(property, thrown.ParamName);
         Assert.AreEqual(property, thrownOfT.ParamName);
         Assert.AreEqual(timeout, thrown.ActualValue);
+        Assert.AreEqual(timeout, thrownOfT.ActualValue);
     }
 
     // REQ-09

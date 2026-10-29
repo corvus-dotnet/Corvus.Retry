@@ -231,7 +231,7 @@ public class ReliabilityPipelineOfTTests
         var responses = new ResponseSequence(503, 200);
         ReliabilityPipeline<Response> pipeline = CreatePipeline(new Count(3));
 
-        await Assert.ThrowsAsync<OperationCanceledException>(
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
             () => pipeline.ExecuteAsync(
                 ct =>
                 {
@@ -240,6 +240,7 @@ public class ReliabilityPipelineOfTTests
                 },
                 cts.Token).AsTask()).ConfigureAwait(false);
 
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
         Assert.IsTrue(Assert.ContainsSingle(responses.Returned).Disposed);
     }
 
@@ -338,6 +339,96 @@ public class ReliabilityPipelineOfTTests
     }
 
     [TestMethod]
+    public async Task TheCallbackForARejectedResultGetsTheDelayOfTheStrategy()
+    {
+        RecordingFakeTimeProvider fake = new();
+        TimeSpan oneHour = TimeSpan.FromHours(1);
+        var responses = new ResponseSequence(503, 200);
+        var calls = new List<RetryEventArgs>();
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        {
+            Strategy = new Linear(oneHour, 3),
+            ShouldRetryResult = IsServerError,
+            TimeProvider = fake,
+            OnRetry = args =>
+            {
+                lock (calls)
+                {
+                    calls.Add(args);
+                }
+
+                return ValueTask.CompletedTask;
+            },
+        });
+
+        Task<Response> call = pipeline.ExecuteAsync(responses.NextAsync).AsTask();
+
+        Assert.IsFalse(call.IsCompleted);
+        fake.Advance(oneHour);
+
+        Assert.AreEqual(200, (await call.WaitAsync(WaitLimit).ConfigureAwait(false)).StatusCode);
+        RetryEventArgs args = Assert.ContainsSingle(calls);
+        Assert.AreEqual(oneHour, args.DelayBeforeRetry);
+        Assert.AreSame(responses.Returned[0], args.Result);
+        Assert.IsNull(args.LastException);
+    }
+
+    [TestMethod]
+    public async Task WhenTheStrategyIsNull_TheGenericPipelineMakesFourAttemptsWithTwoSecondsBeforeEachRetry()
+    {
+        RecordingFakeTimeProvider fake = new();
+        TimeSpan twoSeconds = TimeSpan.FromSeconds(2);
+        var responses = new ResponseSequence(503, 503, 503, 503);
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response> { ShouldRetryResult = IsServerError, TimeProvider = fake });
+
+        Task<Response> call = pipeline.ExecuteAsync(responses.NextAsync).AsTask();
+
+        for (int timers = 1; timers <= 3; timers++)
+        {
+            await fake.WaitForTimersAsync(timers).ConfigureAwait(false);
+            Assert.IsFalse(call.IsCompleted);
+            fake.Advance(twoSeconds);
+        }
+
+        Response result = await call.WaitAsync(WaitLimit).ConfigureAwait(false);
+        Assert.AreSame(responses.Returned[3], result);
+        Assert.AreEqual(4, responses.Invocations);
+        Assert.AreSequenceEqual(new[] { twoSeconds, twoSeconds, twoSeconds }, fake.Delays);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task WhenTheDisposalOfARejectedResultThrowsBeforeTheRetry_TheCallerGetsThatExceptionAndTheNextAttemptDoesNotStart(bool withFallback)
+    {
+        var disposeFailure = new FormatException("Dispose failed.");
+        var responses = new ResponseSequence(503, 200) { DisposeFailure = disposeFailure };
+        int actions = 0;
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        {
+            Strategy = new Count(3),
+            ShouldRetryResult = IsServerError,
+            Fallback = withFallback
+                ? new FallbackOptions<Response>
+                {
+                    Action = _ =>
+                    {
+                        Interlocked.Increment(ref actions);
+                        return new ValueTask<Response>(new Response(200, 0, []));
+                    },
+                }
+                : null,
+        });
+
+        // The exception from the disposal is not an outcome of the attempts, so the fallback does not apply.
+        FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(() => pipeline.ExecuteAsync(responses.NextAsync).AsTask()).ConfigureAwait(false);
+
+        Assert.AreSame(disposeFailure, thrown);
+        Assert.IsTrue(Assert.ContainsSingle(responses.Returned).Disposed);
+        Assert.AreEqual(0, actions);
+    }
+
+    [TestMethod]
     public void ExecuteAsyncRejectsANullOperation()
     {
         ReliabilityPipeline<Response> pipeline = CreatePipeline(new Count(3));
@@ -360,16 +451,23 @@ public class ReliabilityPipelineOfTTests
     }
 
     // A disposable result with a status code. It writes its disposal to the log of its sequence.
+    // When DisposeFailure is set, Dispose throws it after it records the disposal.
     private sealed class Response(int statusCode, int attempt, List<string> log) : IDisposable
     {
         public int StatusCode => statusCode;
 
         public bool Disposed { get; private set; }
 
+        public Exception? DisposeFailure { get; init; }
+
         public void Dispose()
         {
             this.Disposed = true;
             log.Add($"dispose {attempt}");
+            if (this.DisposeFailure is { } failure)
+            {
+                throw failure;
+            }
         }
     }
 
@@ -382,9 +480,12 @@ public class ReliabilityPipelineOfTTests
 
         public int Invocations => this.Returned.Count;
 
+        // The exception that the Dispose method of each response throws, or null.
+        public Exception? DisposeFailure { get; init; }
+
         public ValueTask<Response> NextAsync(CancellationToken cancellationToken)
         {
-            var response = new Response(statusCodes[this.Returned.Count], this.Returned.Count + 1, this.Log);
+            var response = new Response(statusCodes[this.Returned.Count], this.Returned.Count + 1, this.Log) { DisposeFailure = this.DisposeFailure };
             this.Returned.Add(response);
             return new ValueTask<Response>(response);
         }
