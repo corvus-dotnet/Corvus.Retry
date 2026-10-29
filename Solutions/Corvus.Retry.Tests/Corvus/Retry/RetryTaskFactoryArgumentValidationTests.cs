@@ -16,9 +16,13 @@ using Corvus.Retry.Strategies;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
-/// Every public <c>StartNew</c> overload rejects a null operation, strategy or policy immediately, rather than
-/// starting a task that fails later.
+/// Every public <c>StartNew</c> overload rejects a null operation, scheduler, strategy or policy immediately, rather
+/// than starting a task that fails later.
 /// </summary>
+/// <remarks>
+/// <see cref="RetryTaskFactory{T}"/> for a task type also throws <see cref="NotSupportedException"/>. A null argument
+/// is reported first, so the same cases run for <c>RetryTaskFactory&lt;Task&gt;</c>.
+/// </remarks>
 [TestClass]
 public class RetryTaskFactoryArgumentValidationTests
 {
@@ -26,6 +30,7 @@ public class RetryTaskFactoryArgumentValidationTests
     {
         ["RetryTaskFactory"] = typeof(RetryTaskFactory),
         ["RetryTaskFactory<int>"] = typeof(RetryTaskFactory<int>),
+        ["RetryTaskFactory<Task>"] = typeof(RetryTaskFactory<Task>),
     };
 
     /// <summary>
@@ -62,7 +67,7 @@ public class RetryTaskFactoryArgumentValidationTests
 
     private static bool IsValidatedReference(Type type)
     {
-        return typeof(Delegate).IsAssignableFrom(type) || type == typeof(IRetryStrategy) || type == typeof(IRetryPolicy);
+        return typeof(Delegate).IsAssignableFrom(type) || type == typeof(TaskScheduler) || type == typeof(IRetryStrategy) || type == typeof(IRetryPolicy);
     }
 
     private static object? ValidArgument(Type type)
@@ -73,6 +78,8 @@ public class RetryTaskFactoryArgumentValidationTests
             _ when type == typeof(Action<object?>) => new Action<object?>(_ => { }),
             _ when type == typeof(Func<int>) => new Func<int>(() => 0),
             _ when type == typeof(Func<object?, int>) => new Func<object?, int>(_ => 0),
+            _ when type == typeof(Func<Task>) => new Func<Task>(() => Task.CompletedTask),
+            _ when type == typeof(Func<object?, Task>) => new Func<object?, Task>(_ => Task.CompletedTask),
             _ when type == typeof(object) => null,
             _ when type == typeof(CancellationToken) => CancellationToken.None,
             _ when type == typeof(TaskCreationOptions) => TaskCreationOptions.None,
