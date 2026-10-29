@@ -102,7 +102,7 @@ jobs:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         retries: 6  # final retry should wait 64 seconds
         retry-exempt-status-codes: 400,401,404,422    # GH will raise rate limits with 403 & 429 status codes
-        # find all open PRs that are targetting the default branch (i.e. main/master)
+        # find all open PRs that are targeting the default branch (i.e. main/master)
         # return their titles, so they can parsed later to determine if they are
         # Dependabot PRs and whether we should wait for them to be auto-merged before
         # allowing a release event.

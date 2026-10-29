@@ -354,7 +354,7 @@ public class RetryTaskFactoryTests
     }
 
     [TestMethod]
-    public async Task WhenThePolicyThrows_TheTaskFaultsWithThePolicysException()
+    public async Task WhenThePolicyThrows_TheTaskFaultsWithTheExceptionOfThePolicy()
     {
         InvalidOperationException policyFailure = new("The policy failed");
         FlakyOperation operation = new(FlakyOperation.AlwaysFails);
