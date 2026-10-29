@@ -2,40 +2,39 @@
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
-namespace Corvus.Retry
+namespace Corvus.Retry;
+
+using System;
+using Corvus.Retry.Strategies;
+
+/// <summary>
+/// Event data for a retry event.
+/// </summary>
+/// <remarks>
+/// This is used by the <see cref="IRetryStrategy.Retrying"/> event, and raised by the <see cref="Retriable"/> mechanism.
+/// </remarks>
+public class RetryEventArgs : EventArgs
 {
-    using System;
-    using Corvus.Retry.Strategies;
+    /// <summary>
+    /// Initializes a new instance of the <see cref="RetryEventArgs"/> class.
+    /// </summary>
+    /// <param name="lastException">The last exception that occurred.</param>
+    /// <param name="delayBeforeRetry">The delay before the next retrying.</param>
+    public RetryEventArgs(Exception lastException, TimeSpan delayBeforeRetry)
+    {
+        ArgumentNullException.ThrowIfNull(lastException);
+
+        this.LastException = lastException;
+        this.DelayBeforeRetry = delayBeforeRetry;
+    }
 
     /// <summary>
-    /// Event data for a retry event.
+    /// Gets the delay before the next retry.
     /// </summary>
-    /// <remarks>
-    /// This is used by the <see cref="IRetryStrategy.Retrying"/> event, and raised by the <see cref="Retriable"/> mechanism.
-    /// </remarks>
-    public class RetryEventArgs : EventArgs
-    {
-        /// <summary>
-        /// Initializes a new instance of the <see cref="RetryEventArgs"/> class.
-        /// </summary>
-        /// <param name="lastException">The last exception that occurred.</param>
-        /// <param name="delayBeforeRetry">The delay before the next retrying.</param>
-        public RetryEventArgs(Exception lastException, TimeSpan delayBeforeRetry)
-        {
-            ArgumentNullException.ThrowIfNull(lastException);
+    public TimeSpan DelayBeforeRetry { get; }
 
-            this.LastException = lastException;
-            this.DelayBeforeRetry = delayBeforeRetry;
-        }
-
-        /// <summary>
-        /// Gets the delay before the next retry.
-        /// </summary>
-        public TimeSpan DelayBeforeRetry { get; }
-
-        /// <summary>
-        /// Gets the last exception that occurred.
-        /// </summary>
-        public Exception LastException { get; }
-    }
+    /// <summary>
+    /// Gets the last exception that occurred.
+    /// </summary>
+    public Exception LastException { get; }
 }

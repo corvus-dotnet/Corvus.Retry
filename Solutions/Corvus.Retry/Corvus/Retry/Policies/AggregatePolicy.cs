@@ -2,44 +2,43 @@
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
-namespace Corvus.Retry.Policies
+namespace Corvus.Retry.Policies;
+
+using System;
+using System.Collections.Generic;
+
+/// <summary>
+/// A <see cref="IRetryPolicy"/> which combines multiple policies.
+/// </summary>
+/// <remarks>
+/// This policy can retry if all the aggregated policies can retry. With no policies, nothing objects to a retry,
+/// so it can retry.
+/// </remarks>
+public class AggregatePolicy : IRetryPolicy
 {
-    using System;
-    using System.Collections.Generic;
-
     /// <summary>
-    /// A <see cref="IRetryPolicy"/> which combines multiple policies.
+    /// Gets the collection of policies to be aggregated.
     /// </summary>
-    /// <remarks>
-    /// This policy can retry if all the aggregated policies can retry. With no policies, nothing objects to a retry,
-    /// so it can retry.
-    /// </remarks>
-    public class AggregatePolicy : IRetryPolicy
+    public List<IRetryPolicy> Policies
     {
-        /// <summary>
-        /// Gets the collection of policies to be aggregated.
-        /// </summary>
-        public List<IRetryPolicy> Policies
-        {
-            get => field ??= [];
-        }
+        get => field ??= [];
+    }
 
-        /// <inheritdoc/>
-        public bool CanRetry(Exception exception)
-        {
-            ArgumentNullException.ThrowIfNull(exception);
+    /// <inheritdoc/>
+    public bool CanRetry(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
 
-            // A plain loop rather than LINQ, so that deciding allocates nothing.
-            List<IRetryPolicy> policies = this.Policies;
-            for (int i = 0; i < policies.Count; i++)
+        // A plain loop rather than LINQ, so that deciding allocates nothing.
+        List<IRetryPolicy> policies = this.Policies;
+        for (int i = 0; i < policies.Count; i++)
+        {
+            if (!policies[i].CanRetry(exception))
             {
-                if (!policies[i].CanRetry(exception))
-                {
-                    return false;
-                }
+                return false;
             }
-
-            return true;
         }
+
+        return true;
     }
 }

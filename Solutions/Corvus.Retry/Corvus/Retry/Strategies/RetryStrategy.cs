@@ -2,73 +2,72 @@
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
-namespace Corvus.Retry.Strategies
+namespace Corvus.Retry.Strategies;
+
+using System;
+using System.Collections.Generic;
+
+/// <summary>
+/// A base class for implementers of <see cref="IRetryStrategy"/>.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Implementers override <see cref="PrepareToRetry(System.Exception)"/> and <see cref="CanRetry"/>.
+/// </para>
+/// <para>
+/// They can make use of the standard <see cref="OnRetrying(RetryEventArgs)"/> implementation and the <see cref="AddException(System.Exception)"/> method
+/// to flatten exceptions into the list.
+/// </para>
+/// </remarks>
+public abstract class RetryStrategy : IRetryStrategy
 {
-    using System;
-    using System.Collections.Generic;
+    // Created on the first failure, so that an operation that succeeds at its first try allocates no list.
+    private List<Exception>? exceptions;
+
+    /// <inheritdoc/>
+    public event EventHandler<RetryEventArgs>? Retrying;
+
+    /// <inheritdoc/>
+    public AggregateException Exception
+    {
+        get
+        {
+            return new AggregateException(this.exceptions ?? []);
+        }
+    }
+
+    /// <inheritdoc/>
+    public abstract bool CanRetry
+    {
+        get;
+    }
+
+    /// <inheritdoc/>
+    public abstract TimeSpan PrepareToRetry(Exception lastException);
+
+    /// <inheritdoc/>
+    public void OnRetrying(RetryEventArgs eventArgs)
+    {
+        this.Retrying?.Invoke(this, eventArgs);
+    }
 
     /// <summary>
-    /// A base class for implementers of <see cref="IRetryStrategy"/>.
+    /// Adds the provided exception to the list of exceptions that have occurred.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Implementers override <see cref="PrepareToRetry(System.Exception)"/> and <see cref="CanRetry"/>.
-    /// </para>
-    /// <para>
-    /// They can make use of the standard <see cref="OnRetrying(RetryEventArgs)"/> implementation and the <see cref="AddException(System.Exception)"/> method
-    /// to flatten exceptions into the list.
-    /// </para>
-    /// </remarks>
-    public abstract class RetryStrategy : IRetryStrategy
+    /// <param name="exception">The exception to add.</param>
+    /// <remarks>This will flatten an aggregate exception into the list.</remarks>
+    protected void AddException(Exception exception)
     {
-        // Created on the first failure, so that an operation that succeeds at its first try allocates no list.
-        private List<Exception>? exceptions;
+        ArgumentNullException.ThrowIfNull(exception);
 
-        /// <inheritdoc/>
-        public event EventHandler<RetryEventArgs>? Retrying;
-
-        /// <inheritdoc/>
-        public AggregateException Exception
+        List<Exception> exceptions = this.exceptions ??= [];
+        if (exception is AggregateException aggregateException)
         {
-            get
-            {
-                return new AggregateException(this.exceptions ?? []);
-            }
+            exceptions.AddRange(aggregateException.InnerExceptions);
         }
-
-        /// <inheritdoc/>
-        public abstract bool CanRetry
+        else
         {
-            get;
-        }
-
-        /// <inheritdoc/>
-        public abstract TimeSpan PrepareToRetry(Exception lastException);
-
-        /// <inheritdoc/>
-        public void OnRetrying(RetryEventArgs eventArgs)
-        {
-            this.Retrying?.Invoke(this, eventArgs);
-        }
-
-        /// <summary>
-        /// Adds the provided exception to the list of exceptions that have occurred.
-        /// </summary>
-        /// <param name="exception">The exception to add.</param>
-        /// <remarks>This will flatten an aggregate exception into the list.</remarks>
-        protected void AddException(Exception exception)
-        {
-            ArgumentNullException.ThrowIfNull(exception);
-
-            List<Exception> exceptions = this.exceptions ??= [];
-            if (exception is AggregateException aggregateException)
-            {
-                exceptions.AddRange(aggregateException.InnerExceptions);
-            }
-            else
-            {
-                exceptions.Add(exception);
-            }
+            exceptions.Add(exception);
         }
     }
 }
