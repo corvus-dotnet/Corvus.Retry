@@ -46,8 +46,16 @@ public sealed record FallbackOptions<T>
     /// Gets the policy that decides whether an exception from the pipeline gets the fallback value.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The default is <see cref="AnyExceptionPolicy.Default"/>. When the policy refuses an exception, the pipeline
     /// throws that exception.
+    /// </para>
+    /// <para>
+    /// The policy is asked about the exceptions that the operation actually threw. When the exception is an
+    /// <see cref="AggregateException"/>, the policy is asked about each exception inside it, depth first, and the
+    /// fallback applies only when the policy accepts all of them. <see cref="FallbackArgs{T}.Exception"/> is the
+    /// <see cref="AggregateException"/> itself.
+    /// </para>
     /// </remarks>
     public IRetryPolicy Policy { get; init; } = AnyExceptionPolicy.Default;
 

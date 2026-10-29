@@ -222,8 +222,12 @@ public sealed class ReliabilityPipeline<T>
         {
             // The filter lets an exception from a callback, the strategy or a policy of the pipeline propagate. It is not
             // an outcome of the attempts, so the fallback does not apply.
-            // The policy is evaluated here, not in a filter, so that an exception from the policy propagates.
-            if (!fallback.Policy.CanRetry(ex))
+            // The policy is evaluated here, not in a filter, so that an exception from the policy propagates. It is asked
+            // about the exceptions that the operation threw, not the AggregateException that wraps them.
+            bool handles = ex is AggregateException aggregate
+                ? fallback.Policy.CanRetryAll(aggregate)
+                : fallback.Policy.CanRetry(ex);
+            if (!handles)
             {
                 throw;
             }

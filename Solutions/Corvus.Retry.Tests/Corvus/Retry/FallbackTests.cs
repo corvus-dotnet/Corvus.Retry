@@ -6,6 +6,7 @@ namespace Corvus.Retry;
 
 using System;
 using System.Collections.Generic;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Corvus.Retry.Policies;
@@ -486,6 +487,46 @@ public class FallbackTests
 
         Assert.AreSame(op.LastThrown, thrown);
         Assert.AreSame(thrown, Assert.ContainsSingle(policy.Consulted));
+        Assert.IsEmpty(calls);
+    }
+
+    [TestMethod]
+    public async Task TheFallbackPolicyIsAskedAboutTheExceptionsInsideAnAggregateException()
+    {
+        var op = new FlakyOperation(
+            FlakyOperation.AlwaysFails,
+            attempt => new AggregateException(new HttpRequestException($"Attempt {attempt} failed")));
+        var calls = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new Count(2),
+            Fallback = RecordingFallback(calls) with { Policy = RetryPolicies.Handle<HttpRequestException>() },
+        });
+
+        string result = await pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).ConfigureAwait(false);
+
+        // The policy accepts the exception that the operation threw inside the aggregate. The fallback receives the
+        // aggregate itself.
+        Assert.AreEqual(FallbackValue, result);
+        Assert.AreEqual(2, op.Invocations);
+        Assert.AreSame(op.LastThrown, Assert.ContainsSingle(calls).Exception);
+    }
+
+    [TestMethod]
+    public async Task WhenTheFallbackPolicyRefusesOneExceptionInsideAnAggregateException_TheAggregatePropagates()
+    {
+        var aggregate = new AggregateException(new HttpRequestException("Accepted"), new InvalidOperationException("Refused"));
+        var calls = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new DoNotRetry(),
+            Fallback = RecordingFallback(calls) with { Policy = RetryPolicies.Handle<HttpRequestException>() },
+        });
+
+        AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(
+            () => pipeline.ExecuteAsync(_ => throw aggregate).AsTask()).ConfigureAwait(false);
+
+        Assert.AreSame(aggregate, thrown);
         Assert.IsEmpty(calls);
     }
 

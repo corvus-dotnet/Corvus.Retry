@@ -45,8 +45,16 @@ public record ReliabilityPipelineOptions
     /// Gets the policy that decides whether an exception can be retried.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The default is <see cref="AnyExceptionPolicy.Default"/>. The policy applies only to exceptions, not to results.
     /// A cancellation that the caller caused is never retried.
+    /// </para>
+    /// <para>
+    /// The policy is asked about the exceptions that the operation actually threw. When the operation throws an
+    /// <see cref="AggregateException"/>, the policy is asked about each exception inside it, depth first, and the
+    /// attempt is retried only when the policy accepts all of them. The strategy receives the exception as it was
+    /// thrown.
+    /// </para>
     /// </remarks>
     public IRetryPolicy Policy { get; init; } = AnyExceptionPolicy.Default;
 
