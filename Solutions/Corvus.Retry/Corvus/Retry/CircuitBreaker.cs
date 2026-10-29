@@ -26,12 +26,13 @@ using Corvus.Retry.Policies;
 /// <see cref="CircuitBreakerOptions.FailureRatio"/> or more, the circuit opens. An open circuit rejects each call with a
 /// <see cref="BrokenCircuitException"/>. After <see cref="CircuitBreakerOptions.BreakDuration"/>, the circuit is
 /// half-open: the breaker lets one test call through, and rejects the other calls. If the test call succeeds, the
-/// circuit closes and the counts start again. If it fails, the circuit opens again.
+/// circuit closes and the counts start again. If it fails, the circuit opens again. The outcome of a test call that
+/// started before <see cref="Isolate"/>, <see cref="Close"/> or a later break does not change the state.
 /// </para>
 /// <para>
-/// A failure is an exception that <see cref="CircuitBreakerOptions.Policy"/> accepts, or a result that
-/// <see cref="ReliabilityPipelineOptions{T}.ShouldRetryResult"/> rejects. A cancellation by the caller is not a call and not
-/// a failure. A call that the breaker rejects is not a call.
+/// A failure is an exception that <see cref="CircuitBreakerOptions.Policy"/> accepts, a <see cref="RetryTimeoutException"/>,
+/// or a result that <see cref="ReliabilityPipelineOptions{T}.ShouldRetryResult"/> rejects. A cancellation by the caller is not
+/// a call and not a failure. A call that the breaker rejects is not a call.
 /// </para>
 /// <para>
 /// The breaker changes its state under a lock, and calls <see cref="CircuitBreakerOptions.OnStateChanged"/> after it
@@ -68,7 +69,11 @@ public sealed class CircuitBreaker
     // Changes are made under the lock. The field is volatile, so that TryAcquire can read it without the lock.
     private volatile CircuitState state;
     private TimeSpan breakUntil;
-    private bool probeInFlight;
+
+    // The number of the test call in flight, or 0 if there is none. Each test call gets a new number, so that a test
+    // call from before Isolate, Close or a new break cannot change the state or release a later test call.
+    private int probeInFlight;
+    private int lastProbe;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CircuitBreaker"/> class.
@@ -132,7 +137,7 @@ public sealed class CircuitBreaker
     /// </summary>
     /// <remarks>
     /// If the circuit is not isolated already, this calls <see cref="CircuitBreakerOptions.OnStateChanged"/>, and waits
-    /// until the callback completes.
+    /// until the callback completes. The callback runs with no <see cref="SynchronizationContext"/>.
     /// </remarks>
     public void Isolate()
     {
@@ -143,7 +148,7 @@ public sealed class CircuitBreaker
             {
                 change = new CircuitStateChange(this.state, CircuitState.Isolated, null);
                 this.state = CircuitState.Isolated;
-                this.probeInFlight = false;
+                this.probeInFlight = 0;
             }
         }
 
@@ -155,7 +160,7 @@ public sealed class CircuitBreaker
     /// </summary>
     /// <remarks>
     /// If the circuit is not closed already, this calls <see cref="CircuitBreakerOptions.OnStateChanged"/>, and waits
-    /// until the callback completes.
+    /// until the callback completes. The callback runs with no <see cref="SynchronizationContext"/>.
     /// </remarks>
     public void Close()
     {
@@ -167,7 +172,7 @@ public sealed class CircuitBreaker
             {
                 change = new CircuitStateChange(this.state, CircuitState.Closed, null);
                 this.state = CircuitState.Closed;
-                this.probeInFlight = false;
+                this.probeInFlight = 0;
             }
 
             this.ResetWindow(now);
@@ -180,8 +185,9 @@ public sealed class CircuitBreaker
     /// Asks for permission to make a call.
     /// </summary>
     /// <param name="probe">
-    /// When this method returns <see langword="true"/>, indicates whether the call is the test call of a half-open
-    /// circuit.
+    /// When this method returns <see langword="true"/>, the number of the test call of a half-open circuit, or 0 if the
+    /// call is not the test call. The caller passes it to <see cref="OnSuccess"/>, <see cref="OnFailure"/> or
+    /// <see cref="Abandon"/>.
     /// </param>
     /// <param name="rejection">
     /// When this method returns <see langword="false"/>, the exception to throw for the rejected call.
@@ -193,9 +199,9 @@ public sealed class CircuitBreaker
     /// <see cref="OnFailure"/> or <see cref="Abandon"/>, and passes <paramref name="change"/> to
     /// <see cref="NotifyAsync"/>.
     /// </remarks>
-    internal bool TryAcquire(out bool probe, out BrokenCircuitException? rejection, out CircuitStateChange? change)
+    internal bool TryAcquire(out int probe, out BrokenCircuitException? rejection, out CircuitStateChange? change)
     {
-        probe = false;
+        probe = 0;
         rejection = null;
         change = null;
 
@@ -220,8 +226,7 @@ public sealed class CircuitBreaker
                 case CircuitState.Open when now >= this.breakUntil:
                     // The break has ended. This call is the test call.
                     this.state = CircuitState.HalfOpen;
-                    this.probeInFlight = true;
-                    probe = true;
+                    probe = this.StartProbe();
                     change = new CircuitStateChange(CircuitState.Open, CircuitState.HalfOpen, null);
                     return true;
 
@@ -229,9 +234,8 @@ public sealed class CircuitBreaker
                     retryAfter = this.breakUntil - now;
                     break;
 
-                case CircuitState.HalfOpen when !this.probeInFlight:
-                    this.probeInFlight = true;
-                    probe = true;
+                case CircuitState.HalfOpen when this.probeInFlight == 0:
+                    probe = this.StartProbe();
                     return true;
             }
 
@@ -252,9 +256,9 @@ public sealed class CircuitBreaker
     /// <summary>
     /// Reports that a permitted call succeeded.
     /// </summary>
-    /// <param name="probe">Indicates whether the call was the test call of a half-open circuit.</param>
+    /// <param name="probe">The number of the test call that <see cref="TryAcquire"/> gave, or 0.</param>
     /// <returns>The change of state that the success caused, or <see langword="null"/>.</returns>
-    internal CircuitStateChange? OnSuccess(bool probe)
+    internal CircuitStateChange? OnSuccess(int probe)
     {
         TimeSpan now = this.Now();
         lock (this.sync)
@@ -264,15 +268,16 @@ public sealed class CircuitBreaker
                 this.Slide(now);
                 this.Record(failed: false);
             }
-            else if (this.state == CircuitState.HalfOpen && probe)
+            else if (this.IsProbeInFlight(probe))
             {
                 this.state = CircuitState.Closed;
-                this.probeInFlight = false;
+                this.probeInFlight = 0;
                 this.ResetWindow(now);
                 return new CircuitStateChange(CircuitState.HalfOpen, CircuitState.Closed, null);
             }
 
-            // A call that started before the circuit opened, or that was isolated, does not change the state.
+            // A call that started before the circuit opened or was isolated, or a test call from before that, does not
+            // change the state.
             return null;
         }
     }
@@ -283,16 +288,25 @@ public sealed class CircuitBreaker
     /// <param name="exception">
     /// The exception of the call, or <see langword="null"/> when the call returned a result that is a failure.
     /// </param>
-    /// <param name="probe">Indicates whether the call was the test call of a half-open circuit.</param>
+    /// <param name="probe">The number of the test call that <see cref="TryAcquire"/> gave, or 0.</param>
     /// <returns>The change of state that the failure caused, or <see langword="null"/>.</returns>
     /// <remarks>
-    /// An exception that <see cref="CircuitBreakerOptions.Policy"/> refuses is not a failure, so the call counts as a
-    /// success.
+    /// <para>
+    /// A <see cref="RetryTimeoutException"/> is always a failure, and the breaker does not ask
+    /// <see cref="CircuitBreakerOptions.Policy"/> about it. Another exception that the policy refuses is not a failure, so
+    /// the call counts as a success.
+    /// </para>
+    /// <para>
+    /// If the policy throws, this method throws that exception, and does not count the call. The caller must then call
+    /// <see cref="Abandon"/>, so that the next call can make the test call. This method does not call it, so that the
+    /// caller calls it once for each call.
+    /// </para>
     /// </remarks>
-    internal CircuitStateChange? OnFailure(Exception? exception, bool probe)
+    internal CircuitStateChange? OnFailure(Exception? exception, int probe)
     {
-        // The policy is the caller's code, so do not run it under the lock.
-        if (exception is not null && !this.policy.CanRetry(exception))
+        // The policy is the caller's code, so do not run it under the lock. The engine raises a RetryTimeoutException
+        // when an attempt times out, which is always a failure.
+        if (exception is not null && exception is not RetryTimeoutException && !this.policy.CanRetry(exception))
         {
             return this.OnSuccess(probe);
         }
@@ -310,7 +324,7 @@ public sealed class CircuitBreaker
                     return new CircuitStateChange(CircuitState.Closed, CircuitState.Open, exception);
                 }
             }
-            else if (this.state == CircuitState.HalfOpen && probe)
+            else if (this.IsProbeInFlight(probe))
             {
                 this.Open(now);
                 return new CircuitStateChange(CircuitState.HalfOpen, CircuitState.Open, exception);
@@ -323,15 +337,18 @@ public sealed class CircuitBreaker
     /// <summary>
     /// Reports that a permitted call ended without an outcome (for example, because the caller cancelled it).
     /// </summary>
-    /// <param name="probe">Indicates whether the call was the test call of a half-open circuit.</param>
-    /// <remarks>The call is not counted. If it was the test call, the next call becomes the test call.</remarks>
-    internal void Abandon(bool probe)
+    /// <param name="probe">The number of the test call that <see cref="TryAcquire"/> gave, or 0.</param>
+    /// <remarks>
+    /// The call is not counted. If it is the test call in flight, the next call becomes the test call. Call this method
+    /// once for each call.
+    /// </remarks>
+    internal void Abandon(int probe)
     {
         lock (this.sync)
         {
-            if (this.state == CircuitState.HalfOpen && probe)
+            if (this.IsProbeInFlight(probe))
             {
-                this.probeInFlight = false;
+                this.probeInFlight = 0;
             }
         }
     }
@@ -376,14 +393,9 @@ public sealed class CircuitBreaker
     private void Notify(CircuitStateChange? change)
     {
         // The callback is documented to be quick, so this method can wait for it.
-        ValueTask callback = this.NotifyAsync(change);
-        if (callback.IsCompletedSuccessfully)
+        if (change is CircuitStateChange c && this.onStateChanged is { } callback)
         {
-            callback.GetAwaiter().GetResult();
-        }
-        else
-        {
-            callback.AsTask().GetAwaiter().GetResult();
+            SynchronousCallback.InvokeAndWait(callback, c);
         }
     }
 
@@ -391,7 +403,24 @@ public sealed class CircuitBreaker
     {
         this.state = CircuitState.Open;
         this.breakUntil = now + this.breakDuration;
-        this.probeInFlight = false;
+        this.probeInFlight = 0;
+    }
+
+    // Call this method under the lock.
+    private int StartProbe()
+    {
+        // The number is never 0, which means "not a test call". It can wrap, but a test call that is 2^32 test calls old
+        // is not in flight.
+        int probe = unchecked(this.lastProbe + 1);
+        this.lastProbe = probe == 0 ? 1 : probe;
+        this.probeInFlight = this.lastProbe;
+        return this.lastProbe;
+    }
+
+    // Call this method under the lock.
+    private bool IsProbeInFlight(int probe)
+    {
+        return probe != 0 && probe == this.probeInFlight && this.state == CircuitState.HalfOpen;
     }
 
     private void Record(bool failed)

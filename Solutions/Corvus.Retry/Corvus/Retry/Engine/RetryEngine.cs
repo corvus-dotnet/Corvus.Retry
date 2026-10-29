@@ -5,6 +5,7 @@
 namespace Corvus.Retry;
 
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -51,6 +52,10 @@ internal static class RetryEngine
     /// retry loop and outside the attempt timeout.
     /// </param>
     /// <param name="continueOnCapturedContext">Determines whether to continue on the captured context after each await.</param>
+    /// <param name="outcome">
+    /// Receives the exception that the call throws as the outcome of its attempts, or <see langword="null"/>. The engine
+    /// does not set it for an exception from a callback, the strategy, a policy, or the circuit breaker.
+    /// </param>
     /// <returns>The result of the first attempt that succeeds, or the last result that the operation marks as a failure.</returns>
     /// <exception cref="OperationCanceledException">The caller's token was cancelled.</exception>
     /// <exception cref="RetryTimeoutException">
@@ -69,6 +74,12 @@ internal static class RetryEngine
     /// An attempt that the circuit breaker rejects is a failure for the strategy and the policy, but it is not a call for
     /// the breaker. A cancellation by the caller is not reported to the breaker as a call.
     /// </para>
+    /// <para>
+    /// The engine disposes each <see cref="IDisposable"/> result that it does not return. If the call stops with an
+    /// exception after a result, the engine disposes that result, and ignores an exception from its disposal. When the
+    /// total timeout expires between attempts, the inner exception of the <see cref="RetryTimeoutException"/> is the
+    /// exception of the last attempt, or <see langword="null"/> if the last attempt returned a result.
+    /// </para>
     /// </remarks>
     internal static async ValueTask<T> RunAsync<TOp, T>(
         TOp operation,
@@ -80,7 +91,8 @@ internal static class RetryEngine
         TimeSpan? totalTimeout,
         Func<RetryEventArgs, ValueTask>? onRetry,
         CircuitBreaker? circuitBreaker,
-        bool continueOnCapturedContext)
+        bool continueOnCapturedContext,
+        CallOutcome? outcome = null)
         where TOp : struct, IRetryOperation<T>
     {
         // The total timeout cancels the token that every attempt and every delay uses. The caller's token cancels it too.
@@ -98,10 +110,11 @@ internal static class RetryEngine
         try
         {
             TimeSpan previousDelay = TimeSpan.Zero;
+            Exception? lastFailure = null;
             for (int attempt = 1; ; attempt++)
             {
                 caller.ThrowIfCancellationRequested();
-                ThrowIfTotalTimeoutExpired(totalCts, total);
+                ThrowIfTotalTimeoutExpired(totalCts, total, lastFailure, outcome);
 
                 T result = default!;
                 Exception? failure = null;
@@ -109,7 +122,7 @@ internal static class RetryEngine
 
                 // The circuit breaker is outside the attempt timeout, so a rejected attempt starts no timer.
                 bool acquired = false;
-                bool probe = false;
+                int probe = 0;
                 if (circuitBreaker is not null)
                 {
                     acquired = circuitBreaker.TryAcquire(out probe, out BrokenCircuitException? rejection, out CircuitStateChange? change);
@@ -136,7 +149,7 @@ internal static class RetryEngine
                     if (strategy.GetRetryDelay(new RetryAttempt(attempt, failure, null, previousDelay)) is not TimeSpan rejectedDelay
                         || !policy.CanRetry(failure))
                     {
-                        throw failure;
+                        throw SetOutcome(outcome, failure);
                     }
 
                     delay = RetryDelay.Clamp(rejectedDelay);
@@ -178,10 +191,10 @@ internal static class RetryEngine
                                     failure = new RetryTimeoutException(total, cancellation);
                                     if (acquired)
                                     {
-                                        await circuitBreaker!.NotifyAsync(circuitBreaker.OnFailure(failure, probe)).ConfigureAwait(continueOnCapturedContext);
+                                        await circuitBreaker!.NotifyAsync(ReportFailure(circuitBreaker, failure, probe)).ConfigureAwait(continueOnCapturedContext);
                                     }
 
-                                    throw failure;
+                                    throw SetOutcome(outcome, failure);
 
                                 case CancellationCause.AttemptTimeout:
                                     failure = new RetryTimeoutException(attemptTimeout.GetValueOrDefault(), cancellation);
@@ -195,13 +208,14 @@ internal static class RetryEngine
 
                         if (acquired)
                         {
-                            await circuitBreaker!.NotifyAsync(circuitBreaker.OnFailure(failure, probe)).ConfigureAwait(continueOnCapturedContext);
+                            await circuitBreaker!.NotifyAsync(ReportFailure(circuitBreaker, failure, probe)).ConfigureAwait(continueOnCapturedContext);
                         }
 
                         // The policy is not consulted when the strategy has no retries left.
                         if (strategy.GetRetryDelay(new RetryAttempt(attempt, failure, null, previousDelay)) is not TimeSpan retryDelay
                             || !policy.CanRetry(failure))
                         {
+                            SetOutcome(outcome, failure);
                             if (ReferenceEquals(failure, exception))
                             {
                                 // Rethrow from inside the catch block so that the exception keeps its original stack trace.
@@ -222,46 +236,64 @@ internal static class RetryEngine
 
                     if (failure is null)
                     {
-                        bool resultIsFailure;
-                        if (acquired)
+                        try
                         {
-                            try
+                            bool resultIsFailure;
+                            if (acquired)
+                            {
+                                try
+                                {
+                                    resultIsFailure = operation.IsFailure(result);
+                                }
+                                catch
+                                {
+                                    // The result has no outcome for the breaker, so do not count it.
+                                    circuitBreaker!.Abandon(probe);
+                                    throw;
+                                }
+
+                                CircuitStateChange? change = resultIsFailure ? circuitBreaker!.OnFailure(null, probe) : circuitBreaker!.OnSuccess(probe);
+                                await circuitBreaker.NotifyAsync(change).ConfigureAwait(continueOnCapturedContext);
+                            }
+                            else
                             {
                                 resultIsFailure = operation.IsFailure(result);
                             }
-                            catch
+
+                            // When the strategy has no retries left for a result that is a failure, the caller gets that result.
+                            if (!resultIsFailure
+                                || strategy.GetRetryDelay(new RetryAttempt(attempt, null, result, previousDelay)) is not TimeSpan retryDelay)
                             {
-                                // The result has no outcome for the breaker, so do not count it.
-                                circuitBreaker!.Abandon(probe);
-                                throw;
+                                return result;
                             }
 
-                            CircuitStateChange? change = resultIsFailure ? circuitBreaker!.OnFailure(null, probe) : circuitBreaker!.OnSuccess(probe);
-                            await circuitBreaker.NotifyAsync(change).ConfigureAwait(continueOnCapturedContext);
+                            delay = RetryDelay.Clamp(retryDelay);
                         }
-                        else
+                        catch
                         {
-                            resultIsFailure = operation.IsFailure(result);
+                            // The caller does not get the result, so release it.
+                            DisposeQuietly(result);
+                            throw;
                         }
-
-                        // When the strategy has no retries left for a result that is a failure, the caller gets that result.
-                        if (!resultIsFailure
-                            || strategy.GetRetryDelay(new RetryAttempt(attempt, null, result, previousDelay)) is not TimeSpan retryDelay)
-                        {
-                            return result;
-                        }
-
-                        delay = RetryDelay.Clamp(retryDelay);
                     }
                 }
 
-                // Do not report a retry that will not run.
-                caller.ThrowIfCancellationRequested();
-                ThrowIfTotalTimeoutExpired(totalCts, total);
-
-                if (onRetry is not null)
+                try
                 {
-                    await onRetry(new RetryEventArgs(failure, failure is null ? (object?)result : null, delay, attempt)).ConfigureAwait(continueOnCapturedContext);
+                    // Do not report a retry that will not run.
+                    caller.ThrowIfCancellationRequested();
+                    ThrowIfTotalTimeoutExpired(totalCts, total, failure, outcome);
+
+                    if (onRetry is not null)
+                    {
+                        await onRetry(new RetryEventArgs(failure, failure is null ? (object?)result : null, delay, attempt)).ConfigureAwait(continueOnCapturedContext);
+                    }
+                }
+                catch when (failure is null)
+                {
+                    // The call stops with a result that the caller does not get, so release it.
+                    DisposeQuietly(result);
+                    throw;
                 }
 
                 if (failure is null && result is IDisposable disposable)
@@ -279,11 +311,12 @@ internal static class RetryEngine
                     catch (OperationCanceledException cancellation) when (!caller.IsCancellationRequested && totalCts is not null)
                     {
                         // Only the caller's token and the total timeout can cancel the outer token.
-                        throw new RetryTimeoutException(total, cancellation);
+                        throw SetOutcome(outcome, new RetryTimeoutException(total, cancellation));
                     }
                 }
 
                 previousDelay = delay;
+                lastFailure = failure;
             }
         }
         finally
@@ -305,7 +338,7 @@ internal static class RetryEngine
     /// <param name="timeProvider">The time provider for the delays.</param>
     /// <param name="onRetry">
     /// A callback that the engine calls before each delay, or <see langword="null"/>. If the callback returns a task
-    /// that is not complete, the thread waits for it.
+    /// that is not complete, the thread waits for it. The callback runs with no <see cref="SynchronizationContext"/>.
     /// </param>
     /// <returns>The result of the first attempt that succeeds.</returns>
     /// <exception cref="OperationCanceledException">The caller's token was cancelled.</exception>
@@ -353,15 +386,7 @@ internal static class RetryEngine
 
             if (onRetry is not null)
             {
-                ValueTask callback = onRetry(new RetryEventArgs(failure, null, delay, attempt));
-                if (callback.IsCompletedSuccessfully)
-                {
-                    callback.GetAwaiter().GetResult();
-                }
-                else
-                {
-                    callback.AsTask().GetAwaiter().GetResult();
-                }
+                SynchronousCallback.InvokeAndWait(onRetry, new RetryEventArgs(failure, null, delay, attempt));
             }
 
             RetryDelay.Wait(delay, timeProvider, caller);
@@ -399,11 +424,58 @@ internal static class RetryEngine
         return CancellationCause.None;
     }
 
-    private static void ThrowIfTotalTimeoutExpired(CancellationTokenSource? totalCts, TimeSpan total)
+    // Reports a failed attempt to the breaker. The policy of the breaker is the caller's code. If it throws, the attempt
+    // has no outcome for the breaker, so let another call make the test call.
+    private static CircuitStateChange? ReportFailure(CircuitBreaker circuitBreaker, Exception failure, int probe)
+    {
+        try
+        {
+            return circuitBreaker.OnFailure(failure, probe);
+        }
+        catch
+        {
+            circuitBreaker.Abandon(probe);
+            throw;
+        }
+    }
+
+    // The last failure is the inner exception, so that the caller can see why the attempts did not succeed in time.
+    private static void ThrowIfTotalTimeoutExpired(CancellationTokenSource? totalCts, TimeSpan total, Exception? lastFailure, CallOutcome? outcome)
     {
         if (totalCts is { IsCancellationRequested: true })
         {
-            throw new RetryTimeoutException(total);
+            throw SetOutcome(outcome, new RetryTimeoutException(total, lastFailure));
+        }
+    }
+
+    // Records an exception that the call throws as the outcome of its attempts, so that the fallback can tell it from an
+    // exception that a callback, the strategy or a policy throws.
+    private static Exception SetOutcome(CallOutcome? outcome, Exception exception)
+    {
+        if (outcome is not null)
+        {
+            outcome.Exception = exception;
+        }
+
+        return exception;
+    }
+
+    [SuppressMessage(
+        "Roslynator",
+        "RCS1075:Avoid empty catch clause that catches System.Exception",
+        Justification = "The call already stops with another exception. That exception is more important to the caller.")]
+    private static void DisposeQuietly<T>(T result)
+    {
+        if (result is IDisposable disposable)
+        {
+            try
+            {
+                disposable.Dispose();
+            }
+            catch (Exception)
+            {
+                // The call already has an outcome, so the exception has no receiver.
+            }
         }
     }
 }

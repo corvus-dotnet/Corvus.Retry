@@ -210,6 +210,110 @@ public class ReliabilityPipelineOfTTests
     }
 
     [TestMethod]
+    public async Task AResultIsDisposedWhenShouldRetryResultThrows()
+    {
+        var responses = new ResponseSequence(503, 200);
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        {
+            Strategy = new Count(3),
+            ShouldRetryResult = _ => throw new FormatException("The predicate failed"),
+        });
+
+        await Assert.ThrowsExactlyAsync<FormatException>(() => pipeline.ExecuteAsync(responses.NextAsync).AsTask()).ConfigureAwait(false);
+
+        Assert.IsTrue(Assert.ContainsSingle(responses.Returned).Disposed);
+    }
+
+    [TestMethod]
+    public async Task ARejectedResultIsDisposedWhenTheCallerCancelsBeforeTheRetry()
+    {
+        using var cts = new CancellationTokenSource();
+        var responses = new ResponseSequence(503, 200);
+        ReliabilityPipeline<Response> pipeline = CreatePipeline(new Count(3));
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => pipeline.ExecuteAsync(
+                ct =>
+                {
+                    cts.Cancel();
+                    return responses.NextAsync(ct);
+                },
+                cts.Token).AsTask()).ConfigureAwait(false);
+
+        Assert.IsTrue(Assert.ContainsSingle(responses.Returned).Disposed);
+    }
+
+    [TestMethod]
+    public async Task ARejectedResultIsDisposedWhenTheTotalTimeoutExpiresBeforeTheRetry()
+    {
+        RecordingFakeTimeProvider fake = new();
+        var responses = new ResponseSequence(503, 200);
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        {
+            Strategy = new Count(3),
+            ShouldRetryResult = IsServerError,
+            TotalTimeout = TimeSpan.FromSeconds(1),
+            TimeProvider = fake,
+        });
+
+        await Assert.ThrowsExactlyAsync<RetryTimeoutException>(
+            () => pipeline.ExecuteAsync(
+                ct =>
+                {
+                    fake.Advance(TimeSpan.FromSeconds(2));
+                    return responses.NextAsync(ct);
+                }).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        Assert.IsTrue(Assert.ContainsSingle(responses.Returned).Disposed);
+    }
+
+    [TestMethod]
+    public async Task ARejectedResultIsDisposedWhenTheRetryCallbackThrows()
+    {
+        var responses = new ResponseSequence(503, 200);
+        ReliabilityPipeline<Response> pipeline = CreatePipeline(new Count(3), _ => throw new FormatException("The callback failed"));
+
+        await Assert.ThrowsExactlyAsync<FormatException>(() => pipeline.ExecuteAsync(responses.NextAsync).AsTask()).ConfigureAwait(false);
+
+        Assert.IsTrue(Assert.ContainsSingle(responses.Returned).Disposed);
+    }
+
+    [TestMethod]
+    public async Task ARejectedResultIsDisposedWhenTheStrategyThrows()
+    {
+        var responses = new ResponseSequence(503, 200);
+        ReliabilityPipeline<Response> pipeline = CreatePipeline(RetryStrategies.FromDelegate(_ => throw new FormatException("The strategy failed")));
+
+        await Assert.ThrowsExactlyAsync<FormatException>(() => pipeline.ExecuteAsync(responses.NextAsync).AsTask()).ConfigureAwait(false);
+
+        Assert.IsTrue(Assert.ContainsSingle(responses.Returned).Disposed);
+    }
+
+    [TestMethod]
+    public async Task ARejectedResultIsDisposedWhenTheStateChangeCallbackOfTheBreakerThrows()
+    {
+        var responses = new ResponseSequence(503, 503, 200);
+        var breaker = new CircuitBreaker(new CircuitBreakerOptions
+        {
+            MinimumThroughput = 2,
+            FailureRatio = 1,
+            OnStateChanged = change => change.To == CircuitState.Open ? throw new FormatException("The callback failed") : ValueTask.CompletedTask,
+        });
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        {
+            Strategy = new Count(3),
+            ShouldRetryResult = IsServerError,
+            CircuitBreaker = breaker,
+        });
+
+        await Assert.ThrowsExactlyAsync<FormatException>(() => pipeline.ExecuteAsync(responses.NextAsync).AsTask()).ConfigureAwait(false);
+
+        Assert.HasCount(2, responses.Returned);
+        Assert.IsTrue(responses.Returned.TrueForAll(r => r.Disposed));
+        Assert.AreEqual(CircuitState.Open, breaker.State);
+    }
+
+    [TestMethod]
     public async Task ARejectedResultIsRetriedAfterTheDelayOfTheStrategy()
     {
         RecordingFakeTimeProvider fake = new();

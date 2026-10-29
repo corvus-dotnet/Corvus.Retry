@@ -21,6 +21,13 @@ using Corvus.Retry.Policies;
 /// <see cref="BrokenCircuitException"/>. It never applies when the caller cancels the token.
 /// </para>
 /// <para>
+/// The fallback applies only to the outcome of the attempts. It does not apply to an exception from a callback, a
+/// strategy or a policy of the pipeline, for example <see cref="ReliabilityPipelineOptions{T}.ShouldRetryResult"/>,
+/// <see cref="ReliabilityPipelineOptions.OnRetry"/>, the strategy, the retry policy, the policy or the state change
+/// callback of the circuit breaker, <see cref="HedgingOptions.OnHedging"/>, or
+/// <see cref="ReliabilityPipelineOptions{T}.HedgingActionGenerator"/>. Such an exception stops the call.
+/// </para>
+/// <para>
 /// The options are immutable. The constructor of the pipeline checks them.
 /// </para>
 /// </remarks>

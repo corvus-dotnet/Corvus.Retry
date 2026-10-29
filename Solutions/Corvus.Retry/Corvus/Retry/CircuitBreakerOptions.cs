@@ -5,6 +5,7 @@
 namespace Corvus.Retry;
 
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 using Corvus.Retry.Policies;
@@ -54,8 +55,14 @@ public sealed record CircuitBreakerOptions
     /// Gets the policy that selects the exceptions that are failures.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The default is <see cref="AnyExceptionPolicy.Default"/>. A call that throws an exception that the policy refuses
     /// counts as a call that succeeded.
+    /// </para>
+    /// <para>
+    /// A <see cref="RetryTimeoutException"/> is always a failure. The breaker does not ask the policy about it. If the
+    /// policy throws, the call throws that exception, and the call is not counted.
+    /// </para>
     /// </remarks>
     public IRetryPolicy Policy { get; init; } = AnyExceptionPolicy.Default;
 
@@ -72,6 +79,11 @@ public sealed record CircuitBreakerOptions
     /// A pipeline awaits the callback, and an exception from the callback stops the call. The
     /// <see cref="CircuitBreaker.Isolate"/> and <see cref="CircuitBreaker.Close"/> methods block until the callback
     /// completes, so the callback must be quick.
+    /// </para>
+    /// <para>
+    /// When <see cref="CircuitBreaker.Isolate"/> or <see cref="CircuitBreaker.Close"/> calls it, the callback runs with
+    /// no <see cref="SynchronizationContext"/>. If it awaits, the continuation runs on the thread pool. Do not use a
+    /// callback that must continue on a custom <see cref="TaskScheduler"/>.
     /// </para>
     /// </remarks>
     public Func<CircuitStateChange, ValueTask>? OnStateChanged { get; init; }

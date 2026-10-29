@@ -155,6 +155,56 @@ public class RetryEngineTests
     }
 
     [TestMethod]
+    public async Task WhenTheTotalTimeoutExpiresDuringAFailedAttempt_TheRetryTimeoutExceptionHasThatFailureAsItsInnerException()
+    {
+        RecordingFakeTimeProvider fake = new();
+        TimeSpan totalTimeout = TimeSpan.FromSeconds(1);
+        var failure = new InvalidOperationException("The attempt failed");
+        int invocations = 0;
+
+        Task<string> call = RunAsync<string>(
+            _ =>
+            {
+                invocations++;
+                fake.Advance(totalTimeout * 2);
+                throw failure;
+            },
+            fake,
+            new Count(3),
+            totalTimeout: totalTimeout);
+
+        RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(totalTimeout, thrown.Timeout);
+        Assert.AreSame(failure, thrown.InnerException);
+        Assert.AreEqual(1, invocations);
+    }
+
+    [TestMethod]
+    public async Task WhenTheTotalTimeoutExpiresDuringTheRetryCallback_TheRetryTimeoutExceptionHasTheLastFailureAsItsInnerException()
+    {
+        RecordingFakeTimeProvider fake = new();
+        TimeSpan totalTimeout = TimeSpan.FromSeconds(1);
+        var op = new FlakyOperation(FlakyOperation.AlwaysFails);
+
+        // The strategy has no delay, so the next attempt finds that the total timeout has expired.
+        Task<string> call = RunAsync(
+            _ => new ValueTask<string>(op.Invoke()),
+            fake,
+            new Count(3),
+            totalTimeout: totalTimeout,
+            onRetry: _ =>
+            {
+                fake.Advance(totalTimeout * 2);
+                return ValueTask.CompletedTask;
+            });
+
+        RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(totalTimeout, thrown.Timeout);
+        Assert.AreSame(op.LastThrown, thrown.InnerException);
+        Assert.AreEqual(1, op.Invocations);
+    }
+
+    [TestMethod]
     public async Task WhenTheCallerCancelsDuringADelay_TheCallIsCancelledAtOnceAndNoFurtherAttemptStarts()
     {
         var stopwatch = Stopwatch.StartNew();
@@ -507,6 +557,33 @@ public class RetryEngineTests
         callbackResult.SetResult();
 
         Assert.AreEqual("attempt-2", await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+    }
+
+    [TestMethod]
+    public async Task WhenTheCallbackOfTheSynchronousRetryAwaits_ACallFromASingleThreadedSynchronizationContextCompletesAndRestoresTheContext()
+    {
+        var op = new FlakyOperation(1);
+        SynchronizationContext? contextInCallback = null;
+
+        // The thread of the context waits for the callback, so a continuation that is posted to the context never runs.
+        Task<(string Result, bool ContextIsCurrent)> call = BlockedThreadSynchronizationContext.RunOnBlockedThread(
+            () => RetryEngine.Run<RetryOperations.FuncOperation<string>, string>(
+                new(op.Invoke),
+                CancellationToken.None,
+                new Count(3),
+                AnyExceptionPolicy.Default,
+                new RecordingFakeTimeProvider(),
+                async _ =>
+                {
+                    contextInCallback = SynchronizationContext.Current;
+                    await Task.Yield();
+                }));
+
+        (string result, bool contextIsCurrent) = await call.WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual("attempt-2", result);
+        Assert.IsNull(contextInCallback);
+        Assert.IsTrue(contextIsCurrent);
     }
 
     [TestMethod]

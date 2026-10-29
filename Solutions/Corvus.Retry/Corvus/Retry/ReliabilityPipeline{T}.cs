@@ -107,7 +107,9 @@ public sealed class ReliabilityPipeline<T>
     /// </para>
     /// <para>
     /// When <see cref="ReliabilityPipelineOptions{T}.Fallback"/> is set, the fallback receives that exception or that result.
-    /// It does not receive a cancellation that the caller caused. An exception from the fallback stops the call.
+    /// It does not receive a cancellation that the caller caused. It does not receive an exception from a callback, the
+    /// strategy or a policy of the pipeline: such an exception stops the call. An exception from the fallback stops the
+    /// call.
     /// </para>
     /// <para>
     /// The operation returns a <see cref="ValueTask{TResult}"/>. For a method that returns a <see cref="Task{TResult}"/>,
@@ -118,7 +120,9 @@ public sealed class ReliabilityPipeline<T>
     {
         ArgumentNullException.ThrowIfNull(operation);
 
-        // Hedging replaces the retry part. The fallback stays outside it.
+        // Hedging replaces the retry part. The fallback stays outside it. The fallback handles only an exception that the
+        // engine marks as the outcome of the attempts, so only a call with a fallback needs the marker.
+        CallOutcome? outcome = this.fallback is null ? null : new CallOutcome();
         ValueTask<T> core = this.hedging is not null
             ? HedgingEngine.RunAsync(
                 operation,
@@ -130,7 +134,8 @@ public sealed class ReliabilityPipeline<T>
                 this.attemptTimeout,
                 this.totalTimeout,
                 this.circuitBreaker,
-                this.continueOnCapturedContext)
+                this.continueOnCapturedContext,
+                outcome)
             : RetryEngine.RunAsync<RetryOperations.ResultCheckedOperation<T>, T>(
                 new(operation, this.shouldRetryResult),
                 cancellationToken,
@@ -141,10 +146,11 @@ public sealed class ReliabilityPipeline<T>
                 this.totalTimeout,
                 this.onRetry,
                 this.circuitBreaker,
-                this.continueOnCapturedContext);
+                this.continueOnCapturedContext,
+                outcome);
 
         // Without a fallback, the call has no extra state machine.
-        return this.fallback is null ? core : this.WithFallbackAsync(core, this.fallback, cancellationToken);
+        return this.fallback is null ? core : this.WithFallbackAsync(core, this.fallback, outcome!, cancellationToken);
     }
 
     private static void ValidateFallback(FallbackOptions<T>? fallback)
@@ -165,7 +171,7 @@ public sealed class ReliabilityPipeline<T>
         }
     }
 
-    private async ValueTask<T> WithFallbackAsync(ValueTask<T> core, FallbackOptions<T> fallback, CancellationToken cancellationToken)
+    private async ValueTask<T> WithFallbackAsync(ValueTask<T> core, FallbackOptions<T> fallback, CallOutcome outcome, CancellationToken cancellationToken)
     {
         T result;
         try
@@ -177,8 +183,10 @@ public sealed class ReliabilityPipeline<T>
             // The caller cancelled, so the fallback does not apply.
             throw;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ReferenceEquals(ex, outcome.Exception))
         {
+            // The filter lets an exception from a callback, the strategy or a policy of the pipeline propagate. It is not
+            // an outcome of the attempts, so the fallback does not apply.
             // The policy is evaluated here, not in a filter, so that an exception from the policy propagates.
             if (!fallback.Policy.CanRetry(ex))
             {

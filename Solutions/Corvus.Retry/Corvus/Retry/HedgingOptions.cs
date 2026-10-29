@@ -52,6 +52,15 @@ public sealed record HedgingOptions
     /// next attempt only after a failure. Any other value must be greater than zero and not greater than about 49.7
     /// days.
     /// </para>
+    /// <para>
+    /// No attempt starts after an outcome wins. Thus, with <see cref="TimeSpan.Zero"/>, a first attempt that completes
+    /// synchronously and wins stops the other attempts from starting.
+    /// </para>
+    /// <para>
+    /// The first attempt runs on the caller's thread until its first await. Each later attempt starts on the thread
+    /// pool, with no <see cref="SynchronizationContext"/>. Thus an attempt that blocks the thread does not stop the
+    /// next attempt from starting.
+    /// </para>
     /// </remarks>
     public TimeSpan Delay { get; init; } = TimeSpan.FromSeconds(2);
 
@@ -71,7 +80,8 @@ public sealed record HedgingOptions
     /// <remarks>
     /// The callback receives the number of the attempt that is about to start, and the exception that caused it. The
     /// exception is <see langword="null"/> when the delay expired or when a result was a failure. An exception from the
-    /// callback stops the call.
+    /// callback stops the call. The callback can run for an attempt that does not start, when another attempt wins while
+    /// the callback runs.
     /// </remarks>
     public Func<HedgingEventArgs, ValueTask>? OnHedging { get; init; }
 }

@@ -10,7 +10,9 @@ using System;
 /// The exception that is thrown when a time limit for an operation expires.
 /// </summary>
 /// <remarks>
-/// The inner exception is usually the <see cref="OperationCanceledException"/> that the expired time limit caused.
+/// The inner exception is the <see cref="OperationCanceledException"/> that the expired time limit caused. When the
+/// total timeout expires between attempts, it is the exception of the last attempt. It can also be
+/// <see langword="null"/>.
 /// </remarks>
 public sealed class RetryTimeoutException : TimeoutException
 {
@@ -27,7 +29,10 @@ public sealed class RetryTimeoutException : TimeoutException
     /// Initializes a new instance of the <see cref="RetryTimeoutException"/> class.
     /// </summary>
     /// <param name="timeout">The time limit that expired.</param>
-    /// <param name="innerException">The exception that the expired time limit caused, or <see langword="null"/>.</param>
+    /// <param name="innerException">
+    /// The <see cref="OperationCanceledException"/> that the expired time limit caused, the exception of the last attempt
+    /// when the total timeout expired between attempts, or <see langword="null"/>.
+    /// </param>
     public RetryTimeoutException(TimeSpan timeout, Exception? innerException)
         : this($"The operation did not complete within {timeout}.", timeout, innerException)
     {

@@ -592,6 +592,231 @@ public class FallbackTests
         Assert.AreEqual("Fallback", thrown.ParamName);
     }
 
+    [TestMethod]
+    public async Task AnExceptionFromOnRetry_PropagatesAndTheFallbackIsNotCalled()
+    {
+        var callbackException = new FormatException("OnRetry failed.");
+        var calls = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new Count(3),
+            OnRetry = _ => throw callbackException,
+            Fallback = RecordingFallback(calls),
+        });
+
+        await AssertCallbackExceptionPropagatesAsync(
+            pipeline, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
+    }
+
+    [TestMethod]
+    public async Task AnExceptionFromShouldRetryResult_PropagatesAndTheFallbackIsNotCalled()
+    {
+        var callbackException = new FormatException("ShouldRetryResult failed.");
+        var calls = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new Count(3),
+            ShouldRetryResult = _ => throw callbackException,
+            Fallback = RecordingFallback(calls),
+        });
+
+        await AssertCallbackExceptionPropagatesAsync(
+            pipeline, _ => new ValueTask<string>("success"), callbackException, calls).ConfigureAwait(false);
+    }
+
+    [TestMethod]
+    public async Task AnExceptionFromTheStrategy_PropagatesAndTheFallbackIsNotCalled()
+    {
+        var callbackException = new FormatException("The strategy failed.");
+        var calls = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = RetryStrategies.FromDelegate(_ => throw callbackException),
+            Fallback = RecordingFallback(calls),
+        });
+
+        await AssertCallbackExceptionPropagatesAsync(
+            pipeline, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
+    }
+
+    [TestMethod]
+    public async Task AnExceptionFromTheRetryPolicy_PropagatesAndTheFallbackIsNotCalled()
+    {
+        var callbackException = new FormatException("The retry policy failed.");
+        var calls = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new Count(3),
+            Policy = RetryPolicies.FromPredicate(_ => throw callbackException),
+            Fallback = RecordingFallback(calls),
+        });
+
+        await AssertCallbackExceptionPropagatesAsync(
+            pipeline, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
+    }
+
+    [TestMethod]
+    public async Task AnExceptionFromThePolicyOfTheCircuitBreaker_PropagatesAndTheFallbackIsNotCalled()
+    {
+        var callbackException = new FormatException("The breaker policy failed.");
+        var calls = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new DoNotRetry(),
+            CircuitBreaker = new CircuitBreaker(new CircuitBreakerOptions { Policy = RetryPolicies.FromPredicate(_ => throw callbackException) }),
+            Fallback = RecordingFallback(calls),
+        });
+
+        await AssertCallbackExceptionPropagatesAsync(
+            pipeline, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
+    }
+
+    [TestMethod]
+    public async Task AnExceptionFromTheStateChangeCallbackOfTheCircuitBreaker_PropagatesAndTheFallbackIsNotCalled()
+    {
+        var callbackException = new FormatException("OnStateChanged failed.");
+        var calls = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            // The second failed attempt opens the circuit.
+            Strategy = new Count(2),
+            CircuitBreaker = new CircuitBreaker(new CircuitBreakerOptions
+            {
+                MinimumThroughput = 2,
+                FailureRatio = 1,
+                OnStateChanged = change => change.To == CircuitState.Open ? throw callbackException : ValueTask.CompletedTask,
+            }),
+            Fallback = RecordingFallback(calls),
+        });
+
+        await AssertCallbackExceptionPropagatesAsync(
+            pipeline, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
+    }
+
+    [TestMethod]
+    public async Task AnExceptionFromOnHedging_PropagatesAndTheFallbackIsNotCalled()
+    {
+        var callbackException = new FormatException("OnHedging failed.");
+        var calls = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Hedging = new HedgingOptions { MaxHedgedAttempts = 1, Delay = TimeSpan.Zero, OnHedging = _ => throw callbackException },
+            Fallback = RecordingFallback(calls),
+        });
+
+        await AssertCallbackExceptionPropagatesAsync(
+            pipeline, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
+    }
+
+    [TestMethod]
+    public async Task AnExceptionFromTheHedgingPolicy_PropagatesAndTheFallbackIsNotCalled()
+    {
+        var callbackException = new FormatException("The hedging policy failed.");
+        var calls = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Hedging = new HedgingOptions { MaxHedgedAttempts = 1, Delay = TimeSpan.Zero, Policy = RetryPolicies.FromPredicate(_ => throw callbackException) },
+            Fallback = RecordingFallback(calls),
+        });
+
+        await AssertCallbackExceptionPropagatesAsync(
+            pipeline, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
+    }
+
+    [TestMethod]
+    public async Task AnExceptionFromTheHedgingActionGenerator_PropagatesAndTheFallbackIsNotCalled()
+    {
+        var callbackException = new FormatException("HedgingActionGenerator failed.");
+        var calls = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Hedging = new HedgingOptions { MaxHedgedAttempts = 1, Delay = TimeSpan.Zero },
+            HedgingActionGenerator = attempt => attempt == 1 ? null : throw callbackException,
+            Fallback = RecordingFallback(calls),
+        });
+
+        await AssertCallbackExceptionPropagatesAsync(
+            pipeline, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
+    }
+
+    [TestMethod]
+    public async Task WithHedging_WhenEveryAttemptFails_TheFallbackReceivesTheLastException()
+    {
+        var calls = new List<FallbackArgs<string>>();
+        int invocations = 0;
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Hedging = new HedgingOptions { MaxHedgedAttempts = 1, Delay = TimeSpan.Zero },
+            Fallback = RecordingFallback(calls),
+        });
+
+        string result = await pipeline.ExecuteAsync(
+            _ => throw new InvalidOperationException($"Attempt {Interlocked.Increment(ref invocations)} failed")).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual(FallbackValue, result);
+        Assert.AreEqual(2, Volatile.Read(ref invocations));
+        Assert.IsInstanceOfType<InvalidOperationException>(Assert.ContainsSingle(calls).Exception);
+    }
+
+    [TestMethod]
+    public async Task WhenTheTotalTimeoutExpiresDuringTheRetryDelay_TheFallbackReceivesTheRetryTimeoutException()
+    {
+        RecordingFakeTimeProvider fake = new();
+        TimeSpan totalTimeout = TimeSpan.FromSeconds(1);
+        var calls = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = RetryStrategies.FromDelegate(_ => TimeSpan.FromSeconds(10)),
+            TotalTimeout = totalTimeout,
+            TimeProvider = fake,
+            Fallback = RecordingFallback(calls),
+        });
+
+        Task<string> call = pipeline.ExecuteAsync(_ => throw new InvalidOperationException("Failure")).AsTask();
+
+        Assert.IsFalse(call.IsCompleted);
+        fake.Advance(totalTimeout);
+
+        Assert.AreEqual(FallbackValue, await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.IsInstanceOfType<RetryTimeoutException>(Assert.ContainsSingle(calls).Exception);
+    }
+
+    [TestMethod]
+    public async Task WithHedging_TheFallbackReceivesARetryTimeoutExceptionFromTheTotalTimeout()
+    {
+        RecordingFakeTimeProvider fake = new();
+        TimeSpan totalTimeout = TimeSpan.FromSeconds(1);
+        var calls = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Hedging = new HedgingOptions { MaxHedgedAttempts = 1, Delay = TimeSpan.FromSeconds(10) },
+            TotalTimeout = totalTimeout,
+            TimeProvider = fake,
+            Fallback = RecordingFallback(calls),
+        });
+
+        Task<string> call = pipeline.ExecuteAsync(NeverCompletesAsync).AsTask();
+
+        Assert.IsFalse(call.IsCompleted);
+        fake.Advance(totalTimeout);
+
+        Assert.AreEqual(FallbackValue, await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.IsInstanceOfType<RetryTimeoutException>(Assert.ContainsSingle(calls).Exception);
+    }
+
+    private static async Task AssertCallbackExceptionPropagatesAsync(
+        ReliabilityPipeline<string> pipeline,
+        Func<CancellationToken, ValueTask<string>> operation,
+        Exception callbackException,
+        List<FallbackArgs<string>> calls)
+    {
+        Exception thrown = await Assert.ThrowsAsync<Exception>(
+            () => pipeline.ExecuteAsync(operation).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        Assert.AreSame(callbackException, thrown);
+        Assert.IsEmpty(calls);
+    }
+
     private static FallbackOptions<string> RecordingFallback(List<FallbackArgs<string>> calls)
     {
         return RecordingFallback(calls, FallbackValue);

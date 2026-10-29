@@ -29,8 +29,12 @@ using System.Threading.Tasks;
 /// and one for the attempt, and the last to release it disposes it.
 /// </para>
 /// <para>
+/// The first attempt runs on the caller's thread until its first await. Each later attempt starts on the thread pool,
+/// so an attempt that blocks the thread does not stop the engine from starting the next attempt.
+/// </para>
+/// <para>
 /// Hedging allocates: a task and a cancellation source for each attempt, a timer for each delay, and the state of the
-/// call.
+/// call. Each attempt after the first also allocates the tasks that start it on the thread pool.
 /// </para>
 /// </remarks>
 internal static class HedgingEngine
@@ -83,6 +87,10 @@ internal static class HedgingEngine
     /// <param name="totalTimeout">The time limit for all the attempts, or <see langword="null"/> for no limit.</param>
     /// <param name="circuitBreaker">The circuit breaker that permits each attempt and counts its outcome, or <see langword="null"/>.</param>
     /// <param name="continueOnCapturedContext">Determines whether to continue on the captured context after each await.</param>
+    /// <param name="outcome">
+    /// Receives the exception that the call throws as the outcome of its attempts, or <see langword="null"/>. The engine
+    /// does not set it for an exception from a callback, the result predicate, a policy, or the circuit breaker.
+    /// </param>
     /// <returns>
     /// The result of the first attempt whose outcome is not a failure, or the last result if every attempt failed and
     /// the last outcome was a result.
@@ -104,7 +112,8 @@ internal static class HedgingEngine
         TimeSpan? attemptTimeout,
         TimeSpan? totalTimeout,
         CircuitBreaker? circuitBreaker,
-        bool continueOnCapturedContext)
+        bool continueOnCapturedContext,
+        CallOutcome? outcome = null)
     {
         // The total timeout cancels the token that every attempt uses. The caller's token cancels it too.
         CancellationTokenSource? totalCts = null;
@@ -130,11 +139,13 @@ internal static class HedgingEngine
             attemptTimeout,
             circuitBreaker,
             timeProvider,
-            continueOnCapturedContext);
+            continueOnCapturedContext,
+            outcome);
         Func<HedgingEventArgs, ValueTask>? onHedging = hedging.OnHedging;
         TimeSpan delay = hedging.Delay;
 
-        // A zero delay starts all the attempts at once, and an infinite delay starts an attempt only after a failure.
+        // A zero delay starts the attempts one after the other until an outcome wins, and an infinite delay starts an
+        // attempt only after a failure.
         bool useDelay = delay > TimeSpan.Zero;
         bool restartDelay = false;
         ITimer? delayTimer = null;
@@ -153,27 +164,19 @@ internal static class HedgingEngine
         {
             call.StartNext();
             restartDelay = useDelay;
-            if (delay == TimeSpan.Zero)
-            {
-                while (call.CanStartNext)
-                {
-                    await BeforeHedgedAttemptAsync(null).ConfigureAwait(continueOnCapturedContext);
-                    call.StartNext();
-                }
-            }
 
             while (true)
             {
-                // Read the outcomes in the sequence in which the attempts started.
+                // An outcome that wins comes first. Read the other outcomes in the sequence in which the attempts started.
                 HedgedAttempt<T>? completed = call.TakeCompleted();
                 if (completed is null)
                 {
-                    if (delaySignal is { Task.IsCompleted: true })
+                    if (call.CanStartNext && (delay == TimeSpan.Zero || delaySignal is { Task.IsCompleted: true }))
                     {
-                        // The delay expired before an outcome won.
+                        // The delay expired, or is zero, before an outcome won.
                         StopDelay();
                         await BeforeHedgedAttemptAsync(null).ConfigureAwait(continueOnCapturedContext);
-                        call.StartNext();
+                        StartNextUnlessAnAttemptWon();
                         restartDelay = true;
                         continue;
                     }
@@ -182,7 +185,7 @@ internal static class HedgingEngine
                     {
                         // Only the caller's token and the total timeout can cancel the outer token.
                         caller.ThrowIfCancellationRequested();
-                        throw new RetryTimeoutException(total);
+                        throw SetOutcome(outcome, new RetryTimeoutException(total));
                     }
 
                     // Make the timer and the cancellation signal only when the engine must wait, so that a call whose attempts
@@ -223,7 +226,7 @@ internal static class HedgingEngine
                                 (completed.Result as IDisposable)?.Dispose();
                             }
 
-                            call.StartNext();
+                            StartNextUnlessAnAttemptWon();
                             restartDelay = true;
                         }
                         else
@@ -241,14 +244,14 @@ internal static class HedgingEngine
                         if (!hedging.Policy.CanRetry(failure))
                         {
                             // An exception that the policy refuses is not a failure, so it wins.
-                            ExceptionDispatchInfo.Throw(failure);
+                            ExceptionDispatchInfo.Throw(SetOutcome(outcome, failure));
                         }
 
                         if (call.CanStartNext)
                         {
                             StopDelay();
                             await BeforeHedgedAttemptAsync(failure).ConfigureAwait(continueOnCapturedContext);
-                            call.StartNext();
+                            StartNextUnlessAnAttemptWon();
                             restartDelay = true;
                         }
                         else
@@ -261,7 +264,13 @@ internal static class HedgingEngine
 
                     default:
                         // A cancellation by the caller, the total timeout, or an exception from a callback stops the call.
-                        // Rethrow the exception with its original stack trace.
+                        // Rethrow the exception with its original stack trace. An exception from a callback is not an
+                        // outcome of the attempts.
+                        if (completed.Outcome != AttemptOutcome.Stopped)
+                        {
+                            SetOutcome(outcome, completed.Exception!);
+                        }
+
                         ExceptionDispatchInfo.Throw(completed.Exception!);
                         break;
                 }
@@ -275,7 +284,7 @@ internal static class HedgingEngine
                         return lastResult;
                     }
 
-                    ExceptionDispatchInfo.Throw(lastException!);
+                    ExceptionDispatchInfo.Throw(SetOutcome(outcome, lastException!));
                 }
             }
         }
@@ -299,10 +308,20 @@ internal static class HedgingEngine
         async ValueTask BeforeHedgedAttemptAsync(Exception? exception)
         {
             // Do not report an attempt that will not run.
-            ThrowIfStopped(caller, totalCts, total);
+            ThrowIfStopped(caller, totalCts, total, outcome);
             if (onHedging is not null)
             {
                 await onHedging(new HedgingEventArgs(call.NextAttemptNumber, exception)).ConfigureAwait(continueOnCapturedContext);
+            }
+        }
+
+        void StartNextUnlessAnAttemptWon()
+        {
+            // An attempt can win while an outcome is read or while the callback runs. The engine reads that outcome
+            // next, so do not start another attempt.
+            if (!call.HasCompletedWinner)
+            {
+                call.StartNext();
             }
         }
 
@@ -335,13 +354,25 @@ internal static class HedgingEngine
         }
     }
 
-    private static void ThrowIfStopped(CancellationToken caller, CancellationTokenSource? totalCts, TimeSpan total)
+    private static void ThrowIfStopped(CancellationToken caller, CancellationTokenSource? totalCts, TimeSpan total, CallOutcome? outcome)
     {
         caller.ThrowIfCancellationRequested();
         if (totalCts is { IsCancellationRequested: true })
         {
-            throw new RetryTimeoutException(total);
+            throw SetOutcome(outcome, new RetryTimeoutException(total));
         }
+    }
+
+    // Records an exception that the call throws as the outcome of its attempts, so that the fallback can tell it from an
+    // exception that a callback, the result predicate or a policy throws.
+    private static Exception SetOutcome(CallOutcome? outcome, Exception exception)
+    {
+        if (outcome is not null)
+        {
+            outcome.Exception = exception;
+        }
+
+        return exception;
     }
 
     [SuppressMessage(
@@ -387,7 +418,8 @@ internal static class HedgingEngine
             TimeSpan? attemptTimeout,
             CircuitBreaker? circuitBreaker,
             TimeProvider timeProvider,
-            bool continueOnCapturedContext)
+            bool continueOnCapturedContext,
+            CallOutcome? outcome)
         {
             this.primary = primary;
             this.generator = generator;
@@ -400,6 +432,7 @@ internal static class HedgingEngine
             this.CircuitBreaker = circuitBreaker;
             this.TimeProvider = timeProvider;
             this.ContinueOnCapturedContext = continueOnCapturedContext;
+            this.CallOutcome = outcome;
             this.attempts = new HedgedAttempt<T>?[maxAttempts];
             this.pending = new List<HedgedAttempt<T>>(maxAttempts);
         }
@@ -422,16 +455,24 @@ internal static class HedgingEngine
 
         public bool ContinueOnCapturedContext { get; }
 
+        public CallOutcome? CallOutcome { get; }
+
         public bool CanStartNext => this.started < this.attempts.Length;
 
         public int NextAttemptNumber => this.started + 1;
 
         public bool HasPendingAttempts => this.pending.Count > 0;
 
+        /// <summary>
+        /// Gets a value indicating whether an attempt that the engine has not read has an outcome that wins or stops the
+        /// call.
+        /// </summary>
+        public bool HasCompletedWinner => this.IndexOfCompletedWinner() >= 0;
+
         public void StartNext()
         {
             // Do not start an attempt that cannot run.
-            ThrowIfStopped(this.Caller, this.TotalCts, this.Total);
+            ThrowIfStopped(this.Caller, this.TotalCts, this.Total, this.CallOutcome);
 
             int number = this.started + 1;
             Func<CancellationToken, ValueTask<T>> operation = this.generator?.Invoke(number) ?? this.primary;
@@ -440,22 +481,32 @@ internal static class HedgingEngine
             HedgedAttempt<T> attempt = new(this);
             this.attempts[this.started++] = attempt;
             this.pending.Add(attempt);
-            attempt.Start(operation);
+
+            // The first attempt runs on the caller's thread until its first await. Each later attempt starts on the
+            // thread pool, so that an attempt that blocks before its first await cannot delay the next attempt.
+            attempt.Start(operation, inline: number == 1);
         }
 
+        /// <summary>
+        /// Removes and returns a completed attempt. An attempt whose outcome wins or stops the call comes first. The other
+        /// attempts come in the sequence in which they started.
+        /// </summary>
+        /// <returns>A completed attempt, or <see langword="null"/> if no attempt has completed.</returns>
         public HedgedAttempt<T>? TakeCompleted()
         {
-            for (int i = 0; i < this.pending.Count; i++)
+            int index = this.IndexOfCompletedWinner();
+            if (index < 0)
             {
-                HedgedAttempt<T> attempt = this.pending[i];
-                if (attempt.Task.IsCompleted)
+                index = this.pending.FindIndex(static attempt => attempt.Task.IsCompleted);
+                if (index < 0)
                 {
-                    this.pending.RemoveAt(i);
-                    return attempt;
+                    return null;
                 }
             }
 
-            return null;
+            HedgedAttempt<T> completed = this.pending[index];
+            this.pending.RemoveAt(index);
+            return completed;
         }
 
         public Task[] GetTasksToWaitFor(Task? delay, Task? cancellation)
@@ -494,6 +545,17 @@ internal static class HedgingEngine
                 attempt?.Release();
             }
         }
+
+        private int IndexOfCompletedWinner()
+        {
+            // The attempt records its outcome before its task completes, so the outcome of a completed task is final.
+            return this.pending.FindIndex(
+                static attempt => attempt.Task.IsCompleted
+                    && attempt.Outcome is AttemptOutcome.Succeeded
+                        or AttemptOutcome.Cancelled
+                        or AttemptOutcome.TotalTimeout
+                        or AttemptOutcome.Stopped);
+        }
     }
 
     /// <summary>
@@ -509,6 +571,7 @@ internal static class HedgingEngine
         private readonly HedgedCall<T> call;
         private readonly CancellationTokenSource cts;
         private readonly CancellationTokenRegistration registration;
+        private Func<CancellationToken, ValueTask<T>>? operation;
         private Task? task;
         private bool hasResult;
 
@@ -537,9 +600,25 @@ internal static class HedgingEngine
 
         public Exception? Exception { get; private set; }
 
-        public void Start(Func<CancellationToken, ValueTask<T>> operation)
+        /// <summary>
+        /// Starts the attempt.
+        /// </summary>
+        /// <param name="operation">The operation of the attempt.</param>
+        /// <param name="inline">
+        /// <see langword="true"/> to run the operation on the current thread until its first await;
+        /// <see langword="false"/> to start it on the thread pool.
+        /// </param>
+        public void Start(Func<CancellationToken, ValueTask<T>> operation, bool inline)
         {
-            this.task = this.RunAsync(operation);
+            this.operation = operation;
+            this.task = inline
+                ? this.RunAsync()
+                : Task.Factory.StartNew(
+                    static s => ((HedgedAttempt<T>)s!).RunAsync(),
+                    this,
+                    CancellationToken.None,
+                    TaskCreationOptions.DenyChildAttach,
+                    TaskScheduler.Default).Unwrap();
         }
 
         /// <summary>
@@ -576,15 +655,23 @@ internal static class HedgingEngine
             }
         }
 
-        private async Task RunAsync(Func<CancellationToken, ValueTask<T>> operation)
+        private async Task RunAsync()
         {
+            Func<CancellationToken, ValueTask<T>> operation = this.operation!;
             HedgedCall<T> call = this.call;
             CircuitBreaker? breaker = call.CircuitBreaker;
             bool acquired = false;
-            bool probe = false;
+            int probe = 0;
             bool reported = false;
             try
             {
+                if (Volatile.Read(ref this.state) == Abandoned)
+                {
+                    // The call ended before the thread pool started the attempt, so do not run the operation.
+                    this.Outcome = AttemptOutcome.Cancelled;
+                    return;
+                }
+
                 // The circuit breaker is outside the attempt timeout.
                 if (breaker is not null)
                 {
@@ -669,6 +756,9 @@ internal static class HedgingEngine
             catch (Exception exception)
             {
                 // An exception from a callback, from the result predicate, or from the circuit breaker stops the call.
+                // The caller does not get the result, so release it.
+                this.DisposeResult();
+                this.hasResult = false;
                 this.Outcome = AttemptOutcome.Stopped;
                 this.Exception = exception;
             }

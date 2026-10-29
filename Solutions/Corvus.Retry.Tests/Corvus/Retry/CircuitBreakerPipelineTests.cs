@@ -229,7 +229,7 @@ public class CircuitBreakerPipelineTests
         CircuitBreaker breaker = this.NewBreaker(minimumThroughput: 2, failureRatio: 1);
         for (int i = 0; i < 2; i++)
         {
-            Assert.IsTrue(breaker.TryAcquire(out bool probe, out _, out _));
+            Assert.IsTrue(breaker.TryAcquire(out int probe, out _, out _));
             _ = breaker.OnFailure(new InvalidOperationException(), probe);
         }
 
