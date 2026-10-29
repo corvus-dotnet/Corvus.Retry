@@ -72,14 +72,6 @@ public class RetriableTests
 
         Assert.AreEqual(3, op.Invocations);
         Assert.AreSame(op.Thrown[2], thrown);
-
-        // Every failure, including the final one, is available from the strategy.
-        IReadOnlyList<Exception> recorded = strategy.Exception.InnerExceptions;
-        Assert.HasCount(3, recorded);
-        for (int i = 0; i < 3; i++)
-        {
-            Assert.AreSame(op.Thrown[i], recorded[i]);
-        }
     }
 
     [TestMethod]
@@ -175,19 +167,15 @@ public class RetriableTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
-    public async Task WhenTheOperationSucceedsFirstTime_NeitherThePolicyNorTheRetryingEventIsInvoked(RetryShape shape)
+    public async Task WhenTheOperationSucceedsFirstTime_ThePolicyIsNotConsulted(RetryShape shape)
     {
         var op = new FlakyOperation(0);
         var policy = new RecordingRetryPolicy(true);
-        var strategy = new Count(5);
-        int events = 0;
-        strategy.Retrying += (_, _) => Interlocked.Increment(ref events);
 
-        await RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, strategy, policy).ConfigureAwait(false);
+        await RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, new Count(5), policy).ConfigureAwait(false);
 
         Assert.AreEqual(1, op.Invocations);
         Assert.IsEmpty(policy.Consulted);
-        Assert.AreEqual(0, events);
     }
 
     [TestMethod]
@@ -256,63 +244,19 @@ public class RetriableTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
-    public async Task TheRetryingEventIsRaisedBeforeEachRetryWithThatFailureAndTheDelay(RetryShape shape)
-    {
-        var op = new FlakyOperation(2);
-        var strategy = new Count(4);
-        var raised = new List<(object? Sender, RetryEventArgs Args, int InvocationsSoFar)>();
-        strategy.Retrying += (sender, e) => raised.Add((sender, e, op.Invocations));
-
-        await RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, strategy, new AnyExceptionPolicy()).ConfigureAwait(false);
-
-        Assert.HasCount(2, raised);
-        for (int i = 0; i < 2; i++)
-        {
-            Assert.AreSame(strategy, raised[i].Sender);
-            Assert.AreSame(op.Thrown[i], raised[i].Args.LastException);
-            Assert.AreEqual(TimeSpan.Zero, raised[i].Args.DelayBeforeRetry);
-
-            // Raised after failure i + 1 and before the next try.
-            Assert.AreEqual(i + 1, raised[i].InvocationsSoFar);
-        }
-    }
-
-    [TestMethod]
-    [DataRow(RetryShape.Action)]
-    [DataRow(RetryShape.Function)]
-    [DataRow(RetryShape.AsyncAction)]
-    [DataRow(RetryShape.AsyncFunction)]
-    public async Task TheRetryingEventIsNotRaisedForTheFinalFailure(RetryShape shape)
-    {
-        var op = new FlakyOperation(FlakyOperation.AlwaysFails);
-        var strategy = new Count(2);
-        int events = 0;
-        strategy.Retrying += (_, _) => Interlocked.Increment(ref events);
-
-        await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-            () => RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, strategy, new AnyExceptionPolicy())).ConfigureAwait(false);
-
-        Assert.AreEqual(2, op.Invocations);
-        Assert.AreEqual(1, events);
-    }
-
-    [TestMethod]
-    [DataRow(RetryShape.Action)]
-    [DataRow(RetryShape.Function)]
-    [DataRow(RetryShape.AsyncAction)]
-    [DataRow(RetryShape.AsyncFunction)]
-    public async Task WhenAStrategyInstanceIsReused_ItsRemainingTriesCarryOver(RetryShape shape)
+    public async Task WhenAStrategyInstanceIsReused_EachCallGetsAllItsTries(RetryShape shape)
     {
         var strategy = new Count(3);
         var first = new FlakyOperation(2);
         await RetriableDriver.RetryAsync(shape, first.Invoke, CancellationToken.None, strategy, new AnyExceptionPolicy()).ConfigureAwait(false);
 
-        // The first call used two of the three tries, so the second call gets no retry at all.
+        // The strategy holds no state for a call, so the tries of the first call do not reduce those of the second.
         var second = new FlakyOperation(FlakyOperation.AlwaysFails);
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(
             () => RetriableDriver.RetryAsync(shape, second.Invoke, CancellationToken.None, strategy, new AnyExceptionPolicy())).ConfigureAwait(false);
 
-        Assert.AreEqual(1, second.Invocations);
+        Assert.AreEqual(3, first.Invocations);
+        Assert.AreEqual(3, second.Invocations);
     }
 
     [TestMethod]

@@ -5,6 +5,7 @@
 namespace Corvus.Retry;
 
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Corvus.Retry.Policies;
@@ -14,7 +15,7 @@ using Corvus.Retry.Strategies;
 /// A task factory for retriable tasks. Use this through the <see cref="RetryTask.Factory"/>.
 /// </summary>
 /// <remarks>
-/// This is analagous to the <see cref="TaskFactory"/>, but provides tasks with built-in retry semantics.
+/// This is analogous to the <see cref="TaskFactory"/>, but provides tasks with built-in retry semantics.
 /// <para>
 /// There are three different ways of retrying tasks in this library.
 /// <list type="number">
@@ -26,6 +27,12 @@ using Corvus.Retry.Strategies;
 /// </remarks>
 public class RetryTaskFactory
 {
+    /// <summary>
+    /// The strategy that the overloads without a strategy parameter use: up to 5 tries, without delay.
+    /// </summary>
+    /// <remarks>Strategies hold no state for a call, so one instance serves every call.</remarks>
+    internal static readonly IRetryStrategy DefaultStrategy = new Count();
+
     // An action has no result, so the task returned for it carries none.
     private static readonly Func<Task, object?> NoResult = _ => null;
 
@@ -38,7 +45,7 @@ public class RetryTaskFactory
     {
         ArgumentNullException.ThrowIfNull(action);
 
-        return this.StartNew(action, new Count(), AnyExceptionPolicy.Default);
+        return this.StartNew(action, DefaultStrategy, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -51,7 +58,7 @@ public class RetryTaskFactory
     {
         ArgumentNullException.ThrowIfNull(action);
 
-        return this.StartNew(action, cancellationToken, new Count(), AnyExceptionPolicy.Default);
+        return this.StartNew(action, cancellationToken, DefaultStrategy, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -64,7 +71,7 @@ public class RetryTaskFactory
     {
         ArgumentNullException.ThrowIfNull(action);
 
-        return this.StartNew(action, taskCreationOptions, new Count(), AnyExceptionPolicy.Default);
+        return this.StartNew(action, taskCreationOptions, DefaultStrategy, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -77,7 +84,7 @@ public class RetryTaskFactory
     {
         ArgumentNullException.ThrowIfNull(action);
 
-        return this.StartNew(action, state, new Count(), AnyExceptionPolicy.Default);
+        return this.StartNew(action, state, DefaultStrategy, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -91,7 +98,7 @@ public class RetryTaskFactory
     {
         ArgumentNullException.ThrowIfNull(action);
 
-        return this.StartNew(action, state, taskCreationOptions, new Count(), AnyExceptionPolicy.Default);
+        return this.StartNew(action, state, taskCreationOptions, DefaultStrategy, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -107,7 +114,7 @@ public class RetryTaskFactory
     {
         ArgumentNullException.ThrowIfNull(action);
 
-        return this.StartNew(action, state, cancellationToken, taskCreationOptions, scheduler, new Count(), AnyExceptionPolicy.Default);
+        return this.StartNew(action, state, cancellationToken, taskCreationOptions, scheduler, DefaultStrategy, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -122,7 +129,7 @@ public class RetryTaskFactory
     {
         ArgumentNullException.ThrowIfNull(action);
 
-        return this.StartNew(action, cancellationToken, taskCreationOptions, scheduler, new Count(), AnyExceptionPolicy.Default);
+        return this.StartNew(action, cancellationToken, taskCreationOptions, scheduler, DefaultStrategy, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -136,7 +143,7 @@ public class RetryTaskFactory
         ArgumentNullException.ThrowIfNull(action);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return this.StartNew(action, new Count(), policy);
+        return this.StartNew(action, DefaultStrategy, policy);
     }
 
     /// <summary>
@@ -151,7 +158,7 @@ public class RetryTaskFactory
         ArgumentNullException.ThrowIfNull(action);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return this.StartNew(action, cancellationToken, new Count(), policy);
+        return this.StartNew(action, cancellationToken, DefaultStrategy, policy);
     }
 
     /// <summary>
@@ -166,7 +173,7 @@ public class RetryTaskFactory
         ArgumentNullException.ThrowIfNull(action);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return this.StartNew(action, taskCreationOptions, new Count(), policy);
+        return this.StartNew(action, taskCreationOptions, DefaultStrategy, policy);
     }
 
     /// <summary>
@@ -181,7 +188,7 @@ public class RetryTaskFactory
         ArgumentNullException.ThrowIfNull(action);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return this.StartNew(action, state, new Count(), policy);
+        return this.StartNew(action, state, DefaultStrategy, policy);
     }
 
     /// <summary>
@@ -197,7 +204,7 @@ public class RetryTaskFactory
         ArgumentNullException.ThrowIfNull(action);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return this.StartNew(action, state, taskCreationOptions, new Count(), policy);
+        return this.StartNew(action, state, taskCreationOptions, DefaultStrategy, policy);
     }
 
     /// <summary>
@@ -215,7 +222,7 @@ public class RetryTaskFactory
         ArgumentNullException.ThrowIfNull(action);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return this.StartNew(action, state, cancellationToken, taskCreationOptions, scheduler, new Count(), policy);
+        return this.StartNew(action, state, cancellationToken, taskCreationOptions, scheduler, DefaultStrategy, policy);
     }
 
     /// <summary>
@@ -232,7 +239,7 @@ public class RetryTaskFactory
         ArgumentNullException.ThrowIfNull(action);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return this.StartNew(action, cancellationToken, taskCreationOptions, scheduler, new Count(), policy);
+        return this.StartNew(action, cancellationToken, taskCreationOptions, scheduler, DefaultStrategy, policy);
     }
 
     /// <summary>
@@ -500,8 +507,8 @@ public class RetryTaskFactory
     /// <param name="strategy">The retry strategy.</param>
     /// <param name="policy">The retry policy.</param>
     /// <returns>
-    /// A task that completes with the result of the first successful try; faults with the exceptions recorded by the
-    /// strategy (or, if it recorded none, the last try's exception) when the operation will not be retried; or is
+    /// A task that completes with the result of the first successful try; faults with the exceptions of every failed
+    /// try when the operation will not be retried; or is
     /// cancelled, with <paramref name="cancellationToken"/>, when cancellation stops the operation.
     /// </returns>
     /// <remarks>
@@ -542,13 +549,15 @@ public class RetryTaskFactory
     /// <typeparam name="TResult">The type of the result of the operation.</typeparam>
     /// <remarks>
     /// <para>
-    /// This holds everything the continuations need, so that each continuation can be a static delegate.
+    /// This holds everything the continuations need, so that each continuation can be a static delegate. It also
+    /// holds the state of the call (the attempt number, the last delay and the failures), so that the strategy holds
+    /// none.
     /// </para>
     /// <para>
     /// Retry decisions run on the thread pool; a delay is a
     /// <see cref="Task.Delay(TimeSpan, TimeProvider, CancellationToken)"/> on <see cref="TimeProvider"/> with a
     /// continuation; no thread is blocked. Only one try runs at a time, and each step starts after the previous one
-    /// has ended, so the strategy is never used concurrently.
+    /// has ended, so the state of the call is never used concurrently.
     /// </para>
     /// </remarks>
     private sealed class RetryOperation<TResult> : TaskCompletionSource<TResult>
@@ -564,6 +573,13 @@ public class RetryTaskFactory
         private readonly IRetryStrategy strategy;
         private readonly IRetryPolicy policy;
         private readonly TimeProvider timeProvider = RetryDefaults.TimeProvider;
+
+        // The state of this call. The strategy holds none, so one strategy can serve many calls at the same time.
+        private int attemptNumber = 1;
+        private TimeSpan previousDelay;
+
+        // Created on the first failure, so that an operation that succeeds at its first try allocates no list.
+        private List<Exception>? failures;
 
         public RetryOperation(Func<Task> createTask, Func<Task, TResult> getResult, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy, IRetryPolicy policy)
             : base(taskCreationOptions & TaskCreationOptions.AttachedToParent)
@@ -598,7 +614,7 @@ public class RetryTaskFactory
                     // A try acknowledged cancellation, or the token was cancelled before it could start.
                     this.TrySetCanceled(this.cancellationToken);
                 }
-                else if (task.Exception is AggregateException exception)
+                else if (task.Exception is { } exception)
                 {
                     this.RetryOrFail(exception);
                 }
@@ -620,27 +636,29 @@ public class RetryTaskFactory
 
         private void RetryOrFail(AggregateException exception)
         {
-            TimeSpan delay = this.strategy.PrepareToRetry(exception);
+            this.Record(exception);
 
-            if (!(this.strategy.CanRetry && this.policy.CanRetryAll(exception)))
+            TimeSpan? retryDelay = this.strategy.GetRetryDelay(new RetryAttempt(this.attemptNumber, exception, null, this.previousDelay));
+
+            if (retryDelay is null || !this.policy.CanRetryAll(exception))
             {
-                // Report every failure the strategy recorded. If it recorded none (for example DoNotRetry), report
-                // the task's own exception, so that the failure is not lost.
-                AggregateException recorded = this.strategy.Exception;
-                this.TrySetException(recorded != null && recorded.InnerExceptions.Count > 0 ? recorded : exception);
+                // Report the failures of every try, not only the last one.
+                this.TrySetException(new AggregateException(this.failures!));
                 return;
             }
 
-            // Check before raising Retrying for a retry that will not run.
+            // Check before starting a delay for a retry that will not run.
             if (this.cancellationToken.IsCancellationRequested)
             {
                 this.TrySetCanceled(this.cancellationToken);
                 return;
             }
 
-            this.strategy.OnRetrying(new RetryEventArgs(exception, delay));
+            TimeSpan delay = RetryDelay.Clamp(retryDelay.Value);
+            this.attemptNumber++;
+            this.previousDelay = delay;
 
-            if (delay <= TimeSpan.Zero)
+            if (delay == TimeSpan.Zero)
             {
                 this.StartNextTry();
                 return;
@@ -654,6 +672,28 @@ public class RetryTaskFactory
                 CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
+        }
+
+        /// <summary>
+        /// Records the failure of a try.
+        /// </summary>
+        /// <param name="exception">The exception of the try's task.</param>
+        /// <remarks>
+        /// The inner exceptions are recorded, so that the task's own <see cref="AggregateException"/> does not wrap
+        /// each failure. An <see cref="AggregateException"/> with no inner exceptions is recorded as itself, so that
+        /// the failure is not lost.
+        /// </remarks>
+        private void Record(AggregateException exception)
+        {
+            List<Exception> failures = this.failures ??= [];
+            if (exception.InnerExceptions.Count == 0)
+            {
+                failures.Add(exception);
+            }
+            else
+            {
+                failures.AddRange(exception.InnerExceptions);
+            }
         }
 
         private void AfterDelay(Task delay)

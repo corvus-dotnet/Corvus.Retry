@@ -5,6 +5,8 @@
 namespace Corvus.Retry.Strategies;
 
 using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
@@ -14,38 +16,40 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 public class DoNotRetryTests
 {
     [TestMethod]
-    public void CanRetryIsAlwaysFalse()
+    [DataRow(1)]
+    [DataRow(2)]
+    [DataRow(100)]
+    public void ItRefusesARetryAfterAnyAttempt(int attemptNumber)
+    {
+        Assert.IsNull(new DoNotRetry().GetRetryDelay(new RetryAttempt(attemptNumber, new InvalidOperationException(), null, TimeSpan.Zero)));
+    }
+
+    [TestMethod]
+    public void ItRefusesARetryCausedByAResult()
+    {
+        Assert.IsNull(new DoNotRetry().GetRetryDelay(new RetryAttempt(1, null, "result", TimeSpan.Zero)));
+    }
+
+    [TestMethod]
+    public void TheSameInstanceGivesTheSameAnswersForTwoIndependentSequences()
     {
         var strategy = new DoNotRetry();
 
-        Assert.IsFalse(strategy.CanRetry);
+        List<TimeSpan?> first = StrategyDriver.FailTimes(strategy, 2);
+        List<TimeSpan?> second = StrategyDriver.FailTimes(strategy, 2);
 
-        strategy.PrepareToRetry(new InvalidOperationException());
-
-        Assert.IsFalse(strategy.CanRetry);
+        Assert.AreSequenceEqual(new TimeSpan?[] { null, null }, first);
+        Assert.AreSequenceEqual(first, second);
     }
 
     [TestMethod]
-    public void PrepareToRetryReturnsZero()
+    public async Task WhenThreadsDriveOneInstanceConcurrently_EachSeesTheDocumentedSequence()
     {
-        Assert.AreEqual(TimeSpan.Zero, new DoNotRetry().PrepareToRetry(new InvalidOperationException()));
-    }
+        List<List<TimeSpan?>> sequences = await StrategyDriver.FailTimesConcurrentlyAsync(new DoNotRetry(), 2).ConfigureAwait(false);
 
-    [TestMethod]
-    public void ItDoesNotRecordExceptions()
-    {
-        var strategy = new DoNotRetry();
-
-        strategy.PrepareToRetry(new InvalidOperationException());
-
-        Assert.IsEmpty(strategy.Exception.InnerExceptions);
-    }
-
-    [TestMethod]
-    public void WhenTheLastExceptionIsNull_PrepareToRetryThrows()
-    {
-        ArgumentNullException ex = Assert.ThrowsExactly<ArgumentNullException>(() => new DoNotRetry().PrepareToRetry(null!));
-
-        Assert.AreEqual("lastException", ex.ParamName);
+        foreach (List<TimeSpan?> sequence in sequences)
+        {
+            Assert.AreSequenceEqual(new TimeSpan?[] { null, null }, sequence);
+        }
     }
 }

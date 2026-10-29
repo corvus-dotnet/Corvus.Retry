@@ -12,7 +12,7 @@ using Corvus.Retry.Policies;
 using Corvus.Retry.Strategies;
 
 /// <summary>
-/// Methods to provde retry semantics for synchronous and asynchronous operations.
+/// Methods to provide retry semantics for synchronous and asynchronous operations.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -36,7 +36,7 @@ public static class Retriable
     {
         ArgumentNullException.ThrowIfNull(func);
 
-        return Retry(func, CancellationToken.None, new Count(10), AnyExceptionPolicy.Default);
+        return Retry(func, CancellationToken.None, RetryStrategies.Default, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -64,7 +64,7 @@ public static class Retriable
     {
         ArgumentNullException.ThrowIfNull(asyncFunc);
 
-        return RetryAsync(asyncFunc, CancellationToken.None, new Count(10), AnyExceptionPolicy.Default, continueOnCapturedContext);
+        return RetryAsync(asyncFunc, CancellationToken.None, RetryStrategies.Default, AnyExceptionPolicy.Default, continueOnCapturedContext);
     }
 
     /// <summary>
@@ -75,7 +75,7 @@ public static class Retriable
     {
         ArgumentNullException.ThrowIfNull(func);
 
-        Retry(func, CancellationToken.None, new Count(10), AnyExceptionPolicy.Default);
+        Retry(func, CancellationToken.None, RetryStrategies.Default, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -87,7 +87,7 @@ public static class Retriable
     {
         ArgumentNullException.ThrowIfNull(func);
 
-        Retry(func, cancellationToken, new Count(10), AnyExceptionPolicy.Default);
+        Retry(func, cancellationToken, RetryStrategies.Default, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -114,7 +114,7 @@ public static class Retriable
     {
         ArgumentNullException.ThrowIfNull(asyncFunc);
 
-        return RetryAsync(asyncFunc, cancellationToken, new Count(10), AnyExceptionPolicy.Default);
+        return RetryAsync(asyncFunc, cancellationToken, RetryStrategies.Default, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -127,7 +127,7 @@ public static class Retriable
     {
         ArgumentNullException.ThrowIfNull(asyncFunc);
 
-        return RetryAsync(asyncFunc, CancellationToken.None, new Count(10), AnyExceptionPolicy.Default, continueOnCapturedContext);
+        return RetryAsync(asyncFunc, CancellationToken.None, RetryStrategies.Default, AnyExceptionPolicy.Default, continueOnCapturedContext);
     }
 
     /// <summary>
@@ -145,7 +145,8 @@ public static class Retriable
         ArgumentNullException.ThrowIfNull(strategy);
         ArgumentNullException.ThrowIfNull(policy);
 
-        while (true)
+        TimeSpan previousDelay = TimeSpan.Zero;
+        for (int attempt = 1; ; attempt++)
         {
             try
             {
@@ -153,19 +154,13 @@ public static class Retriable
             }
             catch (Exception exception)
             {
-                TimeSpan delay = strategy.PrepareToRetry(exception);
-
-                if (!WillRetry(exception, cancellationToken, strategy, policy))
+                if (GetRetryDelay(exception, attempt, previousDelay, cancellationToken, strategy, policy) is not TimeSpan delay)
                 {
                     throw;
                 }
 
-                strategy.OnRetrying(new RetryEventArgs(exception, delay));
-
-                if (delay != TimeSpan.Zero)
-                {
-                    RetryDelay.Wait(delay, RetryDefaults.TimeProvider, CancellationToken.None);
-                }
+                RetryDelay.Wait(delay, RetryDefaults.TimeProvider, CancellationToken.None);
+                previousDelay = delay;
             }
         }
     }
@@ -201,7 +196,7 @@ public static class Retriable
     {
         ArgumentNullException.ThrowIfNull(asyncFunc);
 
-        return RetryAsync(asyncFunc, cancellationToken, new Count(10), AnyExceptionPolicy.Default, false);
+        return RetryAsync(asyncFunc, cancellationToken, RetryStrategies.Default, AnyExceptionPolicy.Default, false);
     }
 
     /// <summary>
@@ -237,7 +232,8 @@ public static class Retriable
         ArgumentNullException.ThrowIfNull(strategy);
         ArgumentNullException.ThrowIfNull(policy);
 
-        while (true)
+        TimeSpan previousDelay = TimeSpan.Zero;
+        for (int attempt = 1; ; attempt++)
         {
             try
             {
@@ -246,19 +242,13 @@ public static class Retriable
             }
             catch (Exception exception)
             {
-                TimeSpan delay = strategy.PrepareToRetry(exception);
-
-                if (!WillRetry(exception, cancellationToken, strategy, policy))
+                if (GetRetryDelay(exception, attempt, previousDelay, cancellationToken, strategy, policy) is not TimeSpan delay)
                 {
                     throw;
                 }
 
-                strategy.OnRetrying(new RetryEventArgs(exception, delay));
-
-                if (delay != TimeSpan.Zero)
-                {
-                    RetryDelay.Wait(delay, RetryDefaults.TimeProvider, CancellationToken.None);
-                }
+                RetryDelay.Wait(delay, RetryDefaults.TimeProvider, CancellationToken.None);
+                previousDelay = delay;
             }
         }
     }
@@ -304,7 +294,8 @@ public static class Retriable
     // a value, because the adapter would allocate a closure and a delegate on every call.
     private static async Task RetryCoreAsync(Func<Task> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext)
     {
-        while (true)
+        TimeSpan previousDelay = TimeSpan.Zero;
+        for (int attempt = 1; ; attempt++)
         {
             TimeSpan delay;
 
@@ -315,28 +306,29 @@ public static class Retriable
             }
             catch (Exception exception)
             {
-                delay = strategy.PrepareToRetry(exception);
-
-                if (!WillRetry(exception, cancellationToken, strategy, policy))
+                if (GetRetryDelay(exception, attempt, previousDelay, cancellationToken, strategy, policy) is not TimeSpan retryDelay)
                 {
                     // Rethrow from inside the catch block so that the exception keeps its original stack trace.
                     throw;
                 }
 
-                strategy.OnRetrying(new RetryEventArgs(exception, delay));
+                delay = retryDelay;
             }
 
             if (delay != TimeSpan.Zero)
             {
                 await RetryDelay.WaitAsync(delay, RetryDefaults.TimeProvider, CancellationToken.None).ConfigureAwait(continueOnCapturedContext);
             }
+
+            previousDelay = delay;
         }
     }
 
     // The arguments are validated by the public overloads, so that a null argument throws before a task is created.
     private static async Task<T> RetryCoreAsync<T>(Func<Task<T>> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext)
     {
-        while (true)
+        TimeSpan previousDelay = TimeSpan.Zero;
+        for (int attempt = 1; ; attempt++)
         {
             TimeSpan delay;
 
@@ -346,26 +338,40 @@ public static class Retriable
             }
             catch (Exception exception)
             {
-                delay = strategy.PrepareToRetry(exception);
-
-                if (!WillRetry(exception, cancellationToken, strategy, policy))
+                if (GetRetryDelay(exception, attempt, previousDelay, cancellationToken, strategy, policy) is not TimeSpan retryDelay)
                 {
                     // Rethrow from inside the catch block so that the exception keeps its original stack trace.
                     throw;
                 }
 
-                strategy.OnRetrying(new RetryEventArgs(exception, delay));
+                delay = retryDelay;
             }
 
             if (delay != TimeSpan.Zero)
             {
                 await RetryDelay.WaitAsync(delay, RetryDefaults.TimeProvider, CancellationToken.None).ConfigureAwait(continueOnCapturedContext);
             }
+
+            previousDelay = delay;
         }
     }
 
-    private static bool WillRetry(Exception exception, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy)
+    /// <summary>
+    /// Decides whether to retry after a failed attempt.
+    /// </summary>
+    /// <returns>
+    /// The delay before the next attempt, limited to the range a timer supports; or <see langword="null"/> if the
+    /// strategy or the policy refuses the retry, or cancellation was requested.
+    /// </returns>
+    private static TimeSpan? GetRetryDelay(Exception exception, int attempt, TimeSpan previousDelay, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy)
     {
-        return strategy.CanRetry && !cancellationToken.IsCancellationRequested && policy.CanRetry(exception);
+        TimeSpan? delay = strategy.GetRetryDelay(new RetryAttempt(attempt, exception, null, previousDelay));
+
+        if (delay is null || cancellationToken.IsCancellationRequested || !policy.CanRetry(exception))
+        {
+            return null;
+        }
+
+        return RetryDelay.Clamp(delay.Value);
     }
 }

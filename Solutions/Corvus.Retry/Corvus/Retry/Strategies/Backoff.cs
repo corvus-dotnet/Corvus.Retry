@@ -10,14 +10,17 @@ using System;
 /// Provides a <see cref="IRetryStrategy"/> which increases the delay between retries on each occurrence.
 /// </summary>
 /// <remarks>
-/// <para>The delay is actually by a slightly randomized amount within +/-20% of a specific delta . You can cap the minimum and maximum values using <see cref="MinBackoff"/> and <see cref="MaxBackoff"/>.</para>
+/// <para>
+/// The delay after failed attempt n is <c>min(MinBackoff + (2^n - 1) * r, MaxBackoff)</c>, where r is a random whole
+/// number of milliseconds within +/-20% of <see cref="DeltaBackoff"/>. You can set the bounds with
+/// <see cref="MinBackoff"/> and <see cref="MaxBackoff"/>.
+/// </para>
 /// <para>Compare this with <see cref="Incremental"/>, which provides a simply incrementing delay, and is therefore prone to contended resource race conditions.</para>
+/// <para>This holds no state for a call, so one instance can be shared.</para>
 /// </remarks>
-public class Backoff : RetryStrategy
+public class Backoff : IRetryStrategy
 {
     private readonly int maxTries;
-
-    private int tryCount;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Backoff"/> class.
@@ -37,20 +40,12 @@ public class Backoff : RetryStrategy
     public Backoff(int maxTries, TimeSpan deltaBackoff)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxTries);
+        ArgumentOutOfRangeException.ThrowIfLessThan(deltaBackoff, TimeSpan.Zero);
 
         this.maxTries = maxTries;
         this.DeltaBackoff = deltaBackoff;
         this.MinBackoff = this.DefaultMinBackoff;
         this.MaxBackoff = this.DefaultMaxBackoff;
-    }
-
-    /// <inheritdoc/>
-    public override bool CanRetry
-    {
-        get
-        {
-            return this.tryCount < this.maxTries;
-        }
     }
 
     /// <summary>
@@ -77,41 +72,32 @@ public class Backoff : RetryStrategy
     public TimeSpan DeltaBackoff { get; }
 
     /// <summary>
-    /// Gets or sets the minimum delay.
+    /// Gets the minimum delay.
     /// </summary>
-    public TimeSpan MinBackoff { get; set; }
+    /// <remarks>Set this with an object initializer. It cannot change after the strategy is created.</remarks>
+    public TimeSpan MinBackoff { get; init; }
 
     /// <summary>
-    /// Gets or sets the maximum delay.
+    /// Gets the maximum delay.
     /// </summary>
-    public TimeSpan MaxBackoff { get; set; }
+    /// <remarks>Set this with an object initializer. It cannot change after the strategy is created.</remarks>
+    public TimeSpan MaxBackoff { get; init; }
 
     /// <inheritdoc/>
-    public override TimeSpan PrepareToRetry(Exception lastException)
+    public TimeSpan? GetRetryDelay(in RetryAttempt attempt)
     {
-        ArgumentNullException.ThrowIfNull(lastException);
-
-        this.AddException(lastException);
-
-        this.tryCount += 1;
-
-        if (this.CanRetry)
+        if (attempt.AttemptNumber >= this.maxTries)
         {
-            int increment = (int)((Math.Pow(2, this.tryCount) - 1) * NextRandom((int)(this.DeltaBackoff.TotalMilliseconds * 0.8), (int)(this.DeltaBackoff.TotalMilliseconds * 1.2)));
-            int delay = (int)Math.Min(this.MinBackoff.TotalMilliseconds + increment, this.MaxBackoff.TotalMilliseconds);
-
-            return TimeSpan.FromMilliseconds(delay);
+            return null;
         }
 
-        return TimeSpan.Zero;
-    }
+        int jitter = Random.Shared.Next((int)(this.DeltaBackoff.TotalMilliseconds * 0.8), (int)(this.DeltaBackoff.TotalMilliseconds * 1.2));
 
-    /// <summary>
-    /// Returns a random integer in the range [<paramref name="minValue"/>, <paramref name="maxValue"/>), from a
-    /// generator shared by every <see cref="Backoff"/> rather than a new one for each retry.
-    /// </summary>
-    private static int NextRandom(int minValue, int maxValue)
-    {
-        return Random.Shared.Next(minValue, maxValue);
+        // Calculate in milliseconds as a double, and limit the value before it becomes a TimeSpan, so that a long
+        // sequence cannot overflow. A zero jitter is checked first, because an infinite power of 2 times 0 is not a number.
+        double increment = jitter == 0 ? 0 : (Math.Pow(2, attempt.AttemptNumber) - 1) * jitter;
+        double delay = Math.Min(this.MinBackoff.TotalMilliseconds + increment, this.MaxBackoff.TotalMilliseconds);
+
+        return RetryDelay.Clamp(TimeSpan.FromMilliseconds(Math.Truncate(Math.Min(delay, RetryDelay.MaxSupported.TotalMilliseconds))));
     }
 }

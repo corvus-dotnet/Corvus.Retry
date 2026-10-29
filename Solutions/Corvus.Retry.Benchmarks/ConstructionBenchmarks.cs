@@ -11,8 +11,8 @@ using Corvus.Retry.Policies;
 using Corvus.Retry.Strategies;
 
 /// <summary>
-/// The cost of every public constructor. Callers typically create a new strategy for each operation they retry,
-/// so strategy construction is part of the cost of every retry.
+/// The cost of every public constructor. Strategies hold no state for a call, so a caller can create one and share
+/// it; a caller that creates a new strategy for each operation pays this cost on every call.
 /// </summary>
 [MemoryDiagnoser]
 [CategoriesColumn]
@@ -68,7 +68,11 @@ public class ConstructionBenchmarks
 
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("Other")]
-    public RetryEventArgs RetryEventArgs() => new(Failure, TimeSpan.FromSeconds(1));
+    public RetryEventArgs RetryEventArgs() => new(Failure, null, TimeSpan.FromSeconds(1), 1);
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public RetryTimeoutException RetryTimeoutException() => new(TimeSpan.FromSeconds(1));
 
     [Benchmark]
     [BenchmarkCategory("Other")]

@@ -20,7 +20,7 @@ public interface IRetryPolicy
     /// Determines if the operation can be retried given the exception that was
     /// raised when the operation failed.
     /// </summary>
-    /// <param name="exception">The operation that was last raised when the exceptoin failed.</param>
+    /// <param name="exception">The operation that was last raised when the exception failed.</param>
     /// <returns>True if the operation can be retried, otherwise false.</returns>
     bool CanRetry(Exception exception);
 }

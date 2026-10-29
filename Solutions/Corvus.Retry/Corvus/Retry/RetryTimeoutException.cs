@@ -1,0 +1,52 @@
+// <copyright file="RetryTimeoutException.cs" company="Endjin Limited">
+// Copyright (c) Endjin Limited. All rights reserved.
+// </copyright>
+
+namespace Corvus.Retry;
+
+using System;
+
+/// <summary>
+/// The exception that is thrown when a time limit for an operation expires.
+/// </summary>
+/// <remarks>
+/// The inner exception is usually the <see cref="OperationCanceledException"/> that the expired time limit caused.
+/// </remarks>
+public sealed class RetryTimeoutException : TimeoutException
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="RetryTimeoutException"/> class.
+    /// </summary>
+    /// <param name="timeout">The time limit that expired.</param>
+    public RetryTimeoutException(TimeSpan timeout)
+        : this(timeout, null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="RetryTimeoutException"/> class.
+    /// </summary>
+    /// <param name="timeout">The time limit that expired.</param>
+    /// <param name="innerException">The exception that the expired time limit caused, or <see langword="null"/>.</param>
+    public RetryTimeoutException(TimeSpan timeout, Exception? innerException)
+        : this($"The operation did not complete within {timeout}.", timeout, innerException)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="RetryTimeoutException"/> class.
+    /// </summary>
+    /// <param name="message">The message that describes the error.</param>
+    /// <param name="timeout">The time limit that expired.</param>
+    /// <param name="innerException">The exception that the expired time limit caused, or <see langword="null"/>.</param>
+    public RetryTimeoutException(string message, TimeSpan timeout, Exception? innerException)
+        : base(message, innerException)
+    {
+        this.Timeout = timeout;
+    }
+
+    /// <summary>
+    /// Gets the time limit that expired.
+    /// </summary>
+    public TimeSpan Timeout { get; }
+}

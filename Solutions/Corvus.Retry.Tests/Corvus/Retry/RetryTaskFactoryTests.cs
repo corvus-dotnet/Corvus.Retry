@@ -164,15 +164,32 @@ public class RetryTaskFactoryTests
     {
         FlakyOperation operation = new(0);
         RecordingRetryPolicy policy = new(true);
-        Count strategy = new(5);
-        int retryingEvents = 0;
-        strategy.Retrying += (_, _) => Interlocked.Increment(ref retryingEvents);
 
-        await this.factory.StartNew(() => operation.Invoke(), strategy, policy).WaitAsync(Timeout).ConfigureAwait(false);
+        await this.factory.StartNew(() => operation.Invoke(), new Count(5), policy).WaitAsync(Timeout).ConfigureAwait(false);
 
         Assert.AreEqual(1, operation.Invocations);
         Assert.IsEmpty(policy.Consulted);
-        Assert.AreEqual(0, retryingEvents);
+    }
+
+    [TestMethod]
+    public async Task WhenTasksShareOneStrategyInstance_EachTaskGetsAllItsTries()
+    {
+        // The strategy holds no state for a call, so tasks that run at the same time do not share their tries.
+        Count strategy = new(3);
+        FlakyOperation[] operations = [new(FlakyOperation.AlwaysFails), new(FlakyOperation.AlwaysFails), new(FlakyOperation.AlwaysFails), new(2)];
+
+        Task[] tasks = Array.ConvertAll(operations, operation => this.factory.StartNew(() => operation.Invoke(), strategy, new AnyExceptionPolicy()));
+        await Task.WhenAny(Task.WhenAll(tasks), Task.Delay(Timeout)).ConfigureAwait(false);
+
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.AreEqual(TaskStatus.Faulted, tasks[i].Status);
+            Assert.AreEqual(3, operations[i].Invocations);
+            AssertSameExceptions(operations[i].Thrown, Assert.IsInstanceOfType<AggregateException>(tasks[i].Exception!.InnerException).InnerExceptions);
+        }
+
+        Assert.AreEqual(TaskStatus.RanToCompletion, tasks[3].Status);
+        Assert.AreEqual(3, operations[3].Invocations);
     }
 
     [TestMethod]
@@ -193,36 +210,6 @@ public class RetryTaskFactoryTests
         gate.Set();
         await task.WaitAsync(Timeout).ConfigureAwait(false);
         Assert.AreEqual(1, completed);
-    }
-
-    [TestMethod]
-    public async Task TheRetryingEventIsRaisedBeforeEachRetry()
-    {
-        FlakyOperation operation = new(2);
-        Count strategy = new(4);
-        List<(object? Sender, RetryEventArgs Args, int InvocationsSoFar)> events = new();
-        strategy.Retrying += (sender, args) =>
-        {
-            lock (events)
-            {
-                events.Add((sender, args, operation.Invocations));
-            }
-        };
-
-        await this.factory.StartNew(() => operation.Invoke(), strategy).WaitAsync(Timeout).ConfigureAwait(false);
-
-        Assert.HasCount(2, events);
-        for (int i = 0; i < events.Count; i++)
-        {
-            (object? sender, RetryEventArgs args, int invocationsSoFar) = events[i];
-            Assert.AreSame(strategy, sender);
-            Assert.AreEqual(i + 1, invocationsSoFar, "The event should be raised after a failure and before the next try.");
-            Assert.AreEqual(TimeSpan.Zero, args.DelayBeforeRetry);
-
-            // Unlike Retriable, which reports the raw exception, RetryTask reports the failed task's AggregateException.
-            AggregateException lastException = Assert.IsInstanceOfType<AggregateException>(args.LastException);
-            Assert.AreSame(operation.Thrown[i], Assert.ContainsSingle(lastException.InnerExceptions));
-        }
     }
 
     [TestMethod]
@@ -285,19 +272,15 @@ public class RetryTaskFactoryTests
                 cancellation.Cancel();
                 return new InvalidOperationException($"Attempt {attempt} failed");
             });
-        Count strategy = new(5);
-        int retryingRaised = 0;
-        strategy.Retrying += (_, _) => Interlocked.Increment(ref retryingRaised);
 
-        Task task = this.StartNew(overload, defaults, operation, strategy, new AnyExceptionPolicy(), cancellation.Token);
+        Task task = this.StartNew(overload, defaults, operation, new Count(5), new AnyExceptionPolicy(), cancellation.Token);
 
         // The operation would have been retried, but cancellation stopped it, so the task is cancelled with the
-        // caller's token, and Retrying is not raised for a retry that will not run.
+        // caller's token.
         TaskCanceledException thrown = await Assert.ThrowsExactlyAsync<TaskCanceledException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
         Assert.IsTrue(task.IsCanceled);
         Assert.AreEqual(cancellation.Token, thrown.CancellationToken);
         Assert.AreEqual(1, operation.Invocations);
-        Assert.AreEqual(0, Volatile.Read(ref retryingRaised));
     }
 
     [TestMethod]

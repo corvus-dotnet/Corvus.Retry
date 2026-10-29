@@ -9,15 +9,15 @@ using System;
 /// <summary>
 /// Provides a <see cref="IRetryStrategy"/> which retries a specific number of times without delay.
 /// </summary>
-public class Count : RetryStrategy
+/// <remarks>This holds no state for a call, so one instance can be shared.</remarks>
+public class Count : IRetryStrategy
 {
     private readonly int maxTries;
-    private int tryCount;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Count"/> class.
     /// </summary>
-    /// <remarks>The will retry up to 5 times.</remarks>
+    /// <remarks>This tries the operation up to 5 times.</remarks>
     public Count()
         : this(5)
     {
@@ -35,23 +35,9 @@ public class Count : RetryStrategy
     }
 
     /// <inheritdoc/>
-    public override bool CanRetry
+    /// <remarks>This returns <see cref="TimeSpan.Zero"/> until the operation has been tried the maximum number of times.</remarks>
+    public TimeSpan? GetRetryDelay(in RetryAttempt attempt)
     {
-        get
-        {
-            return this.tryCount < this.maxTries;
-        }
-    }
-
-    /// <inheritdoc/>
-    public override TimeSpan PrepareToRetry(Exception lastException)
-    {
-        ArgumentNullException.ThrowIfNull(lastException);
-
-        this.AddException(lastException);
-
-        this.tryCount++;
-
-        return TimeSpan.Zero;
+        return attempt.AttemptNumber < this.maxTries ? TimeSpan.Zero : null;
     }
 }

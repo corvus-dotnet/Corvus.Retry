@@ -10,14 +10,19 @@ using System;
 /// Provides a <see cref="IRetryStrategy"/> which retries a specific number of times with a precisely incrementing delay.
 /// </summary>
 /// <remarks>
+/// <para>
+/// The delay after failed attempt n is <c>initialDelay + (n - 1) * step</c>. This holds no state for a call, so one
+/// instance can be shared.
+/// </para>
+/// <para>
 /// Compare this with <see cref="Backoff"/>, which introduces a random element to the delay to help break contended resources scenarios.
+/// </para>
 /// </remarks>
-public class Incremental : RetryStrategy
+public class Incremental : IRetryStrategy
 {
     private readonly int maxTries;
     private readonly TimeSpan step;
     private readonly TimeSpan initialDelay;
-    private int tryCount;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Incremental"/> class.
@@ -32,42 +37,31 @@ public class Incremental : RetryStrategy
     /// Initializes a new instance of the <see cref="Incremental"/> class.
     /// </summary>
     /// <param name="maxTries">The maximum number of times the method will be tried.</param>
-    /// <param name="intialDelay">The initial delay.</param>
+    /// <param name="initialDelay">The initial delay.</param>
     /// <param name="step">The increment step per retry.</param>
-    public Incremental(int maxTries, TimeSpan intialDelay, TimeSpan step)
+    public Incremental(int maxTries, TimeSpan initialDelay, TimeSpan step)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxTries);
+        ArgumentOutOfRangeException.ThrowIfLessThan(initialDelay, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThan(step, TimeSpan.Zero);
 
         this.maxTries = maxTries;
-        this.initialDelay = intialDelay;
+        this.initialDelay = initialDelay;
         this.step = step;
     }
 
     /// <inheritdoc/>
-    public override bool CanRetry
+    public TimeSpan? GetRetryDelay(in RetryAttempt attempt)
     {
-        get
+        if (attempt.AttemptNumber >= this.maxTries)
         {
-            return this.tryCount < this.maxTries;
-        }
-    }
-
-    /// <inheritdoc/>
-    public override TimeSpan PrepareToRetry(Exception lastException)
-    {
-        ArgumentNullException.ThrowIfNull(lastException);
-
-        this.AddException(lastException);
-
-        this.tryCount++;
-
-        if (this.CanRetry)
-        {
-            double delay = ((this.tryCount - 1) * this.step.TotalMilliseconds) + this.initialDelay.TotalMilliseconds;
-
-            return TimeSpan.FromMilliseconds(delay);
+            return null;
         }
 
-        return TimeSpan.Zero;
+        // Calculate in milliseconds as a double, and limit the value before it becomes a TimeSpan, so that a long
+        // sequence cannot overflow.
+        double delay = ((attempt.AttemptNumber - 1) * this.step.TotalMilliseconds) + this.initialDelay.TotalMilliseconds;
+
+        return TimeSpan.FromMilliseconds(Math.Min(delay, RetryDelay.MaxSupported.TotalMilliseconds));
     }
 }

@@ -314,9 +314,10 @@ await RunExampleAsync(async () =>
 //
 // We've seen this retry strategy in the `IRetryPolicy` examples earlier.
 //
-// This simply specifies the maximum number of times the method can be tried. `Retriable` operations default to a
-// `new Count(10)` strategy; this means the method can be tried a maximum of ten times: once for the initial execution
-// and nine retries.
+// This simply specifies the maximum number of times the method can be tried. `Retriable` operations default to
+// `RetryStrategies.Default`, a shared `Count(10)` strategy; this means the method can be tried a maximum of ten times:
+// once for the initial execution and nine retries. A strategy holds no state for a call, so one instance can be shared
+// by many calls.
 //
 // ##### Example
 //
@@ -378,7 +379,7 @@ await RunExampleAsync(async () =>
 //
 // This tries a specified number of times, with an arithmetically increasing delay between each retry.
 //
-// For example, `new Incremental(maxTries: 5, intialDelay: TimeSpan.FromSeconds(1), step: TimeSpan.FromSeconds(1))`
+// For example, `new Incremental(maxTries: 5, initialDelay: TimeSpan.FromSeconds(1), step: TimeSpan.FromSeconds(1))`
 // will try up to 5 times. The initial try will be immediate, the delay between the initial try and the first retry
 // will be one second. Each time it will increase the delay by 1s. So the first retry will be after 1s (wall clock time
 // 1s), the second after another 2s (wall clock time 3s), the third after another 3s (wall clock time 6s).
@@ -394,7 +395,7 @@ await RunExampleAsync(async () =>
 {
     MockHttpService mockHttpService = new();
     Clock clock = new();
-    Incremental incrementalStrategy = new(maxTries: 5, intialDelay: TimeSpan.FromSeconds(1), step: TimeSpan.FromSeconds(1));
+    Incremental incrementalStrategy = new(maxTries: 5, initialDelay: TimeSpan.FromSeconds(1), step: TimeSpan.FromSeconds(1));
     await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(clock), CancellationToken.None, strategy: incrementalStrategy, policy: new RetryOnTooManyRequestsPolicy());
 });
 
@@ -423,7 +424,7 @@ await RunExampleAsync(async () =>
 
 // ##### Example - using `MinBackoff` and `MaxBackoff`
 //
-// `MinBackoff` and `MaxBackoff` are available as settable properties on a `Backoff` object. If we use the same example
+// You set `MinBackoff` and `MaxBackoff` with an object initializer when you create a `Backoff`. If we use the same example
 // as above but set the `MaxBackoff` to 5 seconds, we will see that once the number of retries reaches a number such
 // that delay > 5 seconds, the delay between each retry will be restricted to 5 seconds.
 Console.WriteLine();
@@ -432,8 +433,7 @@ await RunExampleAsync(async () =>
 {
     MockHttpService mockHttpService = new();
     Clock clock = new();
-    Backoff backoffStrategy = new(maxTries: 5, deltaBackoff: TimeSpan.FromSeconds(1));
-    backoffStrategy.MaxBackoff = TimeSpan.FromSeconds(5);
+    Backoff backoffStrategy = new(maxTries: 5, deltaBackoff: TimeSpan.FromSeconds(1)) { MaxBackoff = TimeSpan.FromSeconds(5) };
     await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(clock), CancellationToken.None, strategy: backoffStrategy, policy: new RetryOnTooManyRequestsPolicy());
 });
 
@@ -445,46 +445,35 @@ await RunExampleAsync(async () =>
 {
     MockHttpService mockHttpService = new();
     Clock clock = new();
-    Backoff backoffStrategy = new(maxTries: 4, deltaBackoff: TimeSpan.FromSeconds(1));
-    backoffStrategy.MinBackoff = TimeSpan.FromSeconds(2);
+    Backoff backoffStrategy = new(maxTries: 4, deltaBackoff: TimeSpan.FromSeconds(1)) { MinBackoff = TimeSpan.FromSeconds(2) };
     await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(clock), CancellationToken.None, strategy: backoffStrategy, policy: new RetryOnTooManyRequestsPolicy());
 });
 
 // #### Implementing a custom strategy
 //
-// It is slightly more complex to implement a custom retry strategy than it was to implement a retry policy. Although
-// you can directly implement the `IRetryStrategy` interface, it is usually simpler to derive from the abstract
-// `RetryStrategy` class.
+// To implement a custom retry strategy, implement the `IRetryStrategy` interface. It has one method:
+// `TimeSpan? GetRetryDelay(in RetryAttempt attempt)`.
 //
-// In that case, you need to override the `TimeSpan PrepareToRetry(Exception lastException)` method. You can examine
-// the exception and use your internal state to determine two things:
+// The `RetryAttempt` describes the attempt that failed:
 //
-// 1) Should we record this exception, or filter it out? Typically, we will want to record the exception, and, if so,
-//    we call `this.AddException(lastException)`. You could also choose to create a new exception (with the original as
-//    an inner exception) which decorates it with more information, and record that.
+// - `AttemptNumber` is the number of the attempt that failed. The first attempt is 1.
+// - `Exception` is the exception that the attempt threw.
+// - `PreviousDelay` is the delay before the attempt that failed (zero for the first attempt).
 //
-// 2) For how long should we delay before retrying? We return a `TimeSpan` from the method to determine this.
+// The method returns the delay before the next attempt, or `null` to stop retrying.
+//
+// A strategy must not hold state for a call. `Retriable` and `RetryTask` keep the attempt number and the previous
+// delay for each call, and give them to the strategy. So one strategy instance can be shared, and many calls can use
+// it at the same time.
 //
 // So, for example, `Count` implements the method like this:
 //
-//     public override TimeSpan PrepareToRetry(Exception lastException)
+//     public TimeSpan? GetRetryDelay(in RetryAttempt attempt)
 //     {
-//       if (lastException is null)
-//       {
-//         throw new ArgumentNullException(nameof(lastException));
-//       }
-//
-//       this.AddException(lastException);
-//       this.tryCount++;
-//       return TimeSpan.Zero;
+//         return attempt.AttemptNumber < this.maxTries ? TimeSpan.Zero : null;
 //     }
 //
-// It updates its internal state to keep a count of the number of retries, adds the exception to the list of
-// exceptions we have seen, and tells the strategy not to delay before retrying.
-//
-// We also override the `bool CanRetry { get; }` property to determine whether this strategy still allows us to retry.
-//
-// The `Count` strategy, for example, simply uses its internal state to determine whether to continue.
+// It compares the attempt number with the maximum number of tries, and tells the caller not to delay before retrying.
 //
 // ##### Example
 //
@@ -502,36 +491,22 @@ await RunExampleAsync(async () =>
     await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(clock), CancellationToken.None, strategy: randomDelayStrategy, policy: new RetryOnTooManyRequestsPolicy());
 });
 
-// ##### Example - wrapping the caught exception in a new exception with additional information
+// ##### Example - choosing the delay from the exception
 //
-// As mentioned, when overriding the `PrepareToRetry()` method, you could choose to wrap the detected exception in a
-// new exception to record additional information.
+// The strategy also receives the exception of the attempt that failed, so it can choose a different delay for a
+// different failure. It must not keep the exception: the strategy does not hold state for a call.
 //
-// For example, you could wrap the detected exception in an exception with a property that records the `tryCount`
-// value. I.e. "Which try caused this particular exception to be thrown?". You could do something similar to record
-// how long we've been retrying when the exception was thrown, or anything else you'd like to record.
-//
-// `RandomDelayWithWrappedExceptions` (defined at the end of this file) does this with `MyWrapperException`. After the
-// retry gives up, we print the exceptions the strategy recorded.
+// `DelayByStatusCode` (defined at the end of this file) waits longer after a "429 - Too Many Requests" failure than
+// after other failures. `RunExampleAsync` prints the last exception when the retry gives up.
 Console.WriteLine();
-Console.WriteLine("## Custom strategy - RandomDelayWithWrappedExceptions");
+Console.WriteLine("## Custom strategy - DelayByStatusCode");
+await RunExampleAsync(async () =>
 {
-    RandomDelayWithWrappedExceptions randomDelayStrategy = new(maxTries: 4, lowerLimit: 1, upperLimit: 5);
-    await RunExampleAsync(async () =>
-    {
-        MockHttpService mockHttpService = new();
-        Clock clock = new();
-        await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(clock), CancellationToken.None, strategy: randomDelayStrategy, policy: new RetryOnTooManyRequestsPolicy());
-    });
-
-    foreach (Exception recorded in randomDelayStrategy.Exception.InnerExceptions)
-    {
-        if (recorded is MyWrapperException wrapped)
-        {
-            Console.WriteLine($"Try {wrapped.TryCount}: {wrapped.InnerException?.Message}");
-        }
-    }
-}
+    MockHttpService mockHttpService = new();
+    Clock clock = new();
+    DelayByStatusCode strategy = new(maxTries: 3);
+    await Retriable.RetryAsync(() => mockHttpService.MakeLotsOfRequestsAsync(clock), CancellationToken.None, strategy: strategy, policy: new RetryOnTooManyRequestsPolicy());
+});
 
 // Runs an example and prints the exception that the retry operation rethrows when it gives up.
 static async Task RunExampleAsync(Func<Task> example)
@@ -653,8 +628,8 @@ public class Clock
 }
 
 // A custom strategy that waits for a random number of seconds between lowerLimit (inclusive) and upperLimit
-// (exclusive) before each retry.
-public class RandomDelay : RetryStrategy
+// (exclusive) before each retry. It holds no state for a call, so one instance can be shared.
+public class RandomDelay : IRetryStrategy
 {
     private readonly int maxTries;
     private readonly int lowerLimit;
@@ -667,69 +642,45 @@ public class RandomDelay : RetryStrategy
 
     public RandomDelay(int maxTries, int lowerLimit, int upperLimit)
     {
-        if (maxTries <= 0)
-        {
-            throw new ArgumentException("Max tries must be > 0", nameof(maxTries));
-        }
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxTries);
 
         this.maxTries = maxTries;
         this.lowerLimit = lowerLimit;
         this.upperLimit = upperLimit;
     }
 
-    public override bool CanRetry => this.TryCount < this.maxTries;
-
-    protected int TryCount { get; private set; }
-
-    public override TimeSpan PrepareToRetry(Exception lastException)
+    public TimeSpan? GetRetryDelay(in RetryAttempt attempt)
     {
-        if (lastException is null)
+        if (attempt.AttemptNumber >= this.maxTries)
         {
-            throw new ArgumentNullException(nameof(lastException));
+            return null;
         }
 
-        this.RecordException(lastException);
-
-        this.TryCount += 1;
-
-        if (this.CanRetry)
-        {
-            return TimeSpan.FromSeconds(Random.Shared.Next(this.lowerLimit, this.upperLimit));
-        }
-
-        return TimeSpan.Zero;
-    }
-
-    // Records the exception. Override this to decorate the exception with more information.
-    protected virtual void RecordException(Exception lastException)
-    {
-        this.AddException(lastException);
+        return TimeSpan.FromSeconds(Random.Shared.Next(this.lowerLimit, this.upperLimit));
     }
 }
 
-// The same random delay strategy, but it wraps each exception in a MyWrapperException that records the try which
-// caused it.
-public class RandomDelayWithWrappedExceptions : RandomDelay
+// A custom strategy that waits 3 seconds after a "429 - Too Many Requests" failure, and 1 second after other failures.
+public class DelayByStatusCode : IRetryStrategy
 {
-    public RandomDelayWithWrappedExceptions(int maxTries, int lowerLimit, int upperLimit)
-        : base(maxTries, lowerLimit, upperLimit)
+    private readonly int maxTries;
+
+    public DelayByStatusCode(int maxTries)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxTries);
+
+        this.maxTries = maxTries;
     }
 
-    protected override void RecordException(Exception lastException)
+    public TimeSpan? GetRetryDelay(in RetryAttempt attempt)
     {
-        this.AddException(new MyWrapperException(lastException, this.TryCount + 1));
-    }
-}
+        if (attempt.AttemptNumber >= this.maxTries)
+        {
+            return null;
+        }
 
-// Wraps an exception and records the try which caused it.
-public class MyWrapperException : Exception
-{
-    public MyWrapperException(Exception innerException, int tryCount)
-        : base($"Try {tryCount} failed: {innerException.Message}", innerException)
-    {
-        this.TryCount = tryCount;
+        return attempt.Exception is MockHttpServiceException { StatusCode: "429" }
+            ? TimeSpan.FromSeconds(3)
+            : TimeSpan.FromSeconds(1);
     }
-
-    public int TryCount { get; }
 }

@@ -6,6 +6,7 @@ namespace Corvus.Retry.Strategies;
 
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
@@ -18,49 +19,63 @@ public class LinearTests
     public void ItDelaysByThePeriodicityBeforeEveryRetry()
     {
         TimeSpan periodicity = TimeSpan.FromMilliseconds(250);
-        var strategy = new Linear(periodicity, 4);
 
-        // Only the delays before actual retries are asserted. After the final failure Linear still returns the
-        // periodicity, but no caller sleeps on it because CanRetry is false by then.
-        var delays = new List<TimeSpan>();
-        for (int i = 0; i < 3; i++)
-        {
-            delays.Add(strategy.PrepareToRetry(new InvalidOperationException()));
-        }
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(new Linear(periodicity, 4), 3);
 
-        Assert.AreSequenceEqual(new[] { periodicity, periodicity, periodicity }, delays);
+        Assert.AreSequenceEqual(new TimeSpan?[] { periodicity, periodicity, periodicity }, delays);
     }
 
     [TestMethod]
-    public void CanRetryBecomesFalseAfterMaxTriesFailures()
+    public void ItRefusesARetryAfterMaxTriesFailedAttempts()
     {
-        var strategy = new Linear(TimeSpan.FromSeconds(1), 3);
+        TimeSpan periodicity = TimeSpan.FromSeconds(1);
 
-        Assert.IsTrue(strategy.CanRetry);
-        strategy.PrepareToRetry(new InvalidOperationException());
-        strategy.PrepareToRetry(new InvalidOperationException());
-        Assert.IsTrue(strategy.CanRetry);
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(new Linear(periodicity, 3), 3);
 
-        strategy.PrepareToRetry(new InvalidOperationException());
-        Assert.IsFalse(strategy.CanRetry);
+        Assert.AreSequenceEqual(new TimeSpan?[] { periodicity, periodicity, null }, delays);
     }
 
     [TestMethod]
-    public void ItRecordsEveryFailureInOrder()
+    public void AZeroPeriodicityRetriesWithoutDelay()
     {
-        var strategy = new Linear(TimeSpan.FromSeconds(1), 3);
-        Exception[] failures = [new InvalidOperationException("1"), new TimeoutException("2"), new InvalidOperationException("3")];
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(new Linear(TimeSpan.Zero, 2), 2);
 
-        foreach (Exception failure in failures)
-        {
-            strategy.PrepareToRetry(failure);
-        }
+        Assert.AreSequenceEqual(new TimeSpan?[] { TimeSpan.Zero, null }, delays);
+    }
 
-        IReadOnlyList<Exception> recorded = strategy.Exception.InnerExceptions;
-        Assert.HasCount(3, recorded);
-        for (int i = 0; i < failures.Length; i++)
+    [TestMethod]
+    public void APeriodicityLongerThanATimerSupportsIsLimitedToTheLongestSupportedDelay()
+    {
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(new Linear(TimeSpan.MaxValue, 2), 1);
+
+        Assert.AreEqual(RetryDelay.MaxSupported, delays[0]);
+    }
+
+    [TestMethod]
+    public void TheSameInstanceGivesTheSameAnswersForTwoIndependentSequences()
+    {
+        TimeSpan periodicity = TimeSpan.FromSeconds(1);
+        var strategy = new Linear(periodicity, 3);
+
+        List<TimeSpan?> first = StrategyDriver.FailTimes(strategy, 3);
+        List<TimeSpan?> second = StrategyDriver.FailTimes(strategy, 3);
+
+        Assert.AreSequenceEqual(new TimeSpan?[] { periodicity, periodicity, null }, first);
+        Assert.AreSequenceEqual(first, second);
+    }
+
+    [TestMethod]
+    public async Task WhenThreadsDriveOneInstanceConcurrently_EachSeesTheDocumentedSequence()
+    {
+        TimeSpan periodicity = TimeSpan.FromSeconds(1);
+        var strategy = new Linear(periodicity, 3);
+        TimeSpan?[] expected = [periodicity, periodicity, null];
+
+        List<List<TimeSpan?>> sequences = await StrategyDriver.FailTimesConcurrentlyAsync(strategy, 3).ConfigureAwait(false);
+
+        foreach (List<TimeSpan?> sequence in sequences)
         {
-            Assert.AreSame(failures[i], recorded[i]);
+            Assert.AreSequenceEqual(expected, sequence);
         }
     }
 
@@ -75,10 +90,10 @@ public class LinearTests
     }
 
     [TestMethod]
-    public void WhenTheLastExceptionIsNull_PrepareToRetryThrows()
+    public void WhenThePeriodicityIsNegative_TheConstructorThrows()
     {
-        ArgumentNullException ex = Assert.ThrowsExactly<ArgumentNullException>(() => new Linear(TimeSpan.FromSeconds(1), 3).PrepareToRetry(null!));
+        ArgumentOutOfRangeException ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new Linear(TimeSpan.FromMilliseconds(-1), 3));
 
-        Assert.AreEqual("lastException", ex.ParamName);
+        Assert.AreEqual("periodicity", ex.ParamName);
     }
 }

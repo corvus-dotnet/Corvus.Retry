@@ -13,8 +13,14 @@ using System.Threading.Tasks;
 /// </summary>
 internal static class RetryDelay
 {
-    // The longest delay that a timer supports. Task.Delay throws for a longer delay, so longer delays are shortened.
-    private static readonly TimeSpan MaxDelay = TimeSpan.FromMilliseconds(0xFFFFFFFE);
+    /// <summary>
+    /// The longest delay that a timer supports: 0xFFFFFFFE milliseconds, about 49.7 days.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Task.Delay(TimeSpan, TimeProvider, CancellationToken)"/> and a timed
+    /// <see cref="CancellationTokenSource"/> throw for a longer time, so every delay is limited to this value.
+    /// </remarks>
+    internal static readonly TimeSpan MaxSupported = TimeSpan.FromMilliseconds(0xFFFFFFFE);
 
     /// <summary>
     /// Returns a task that completes when the delay has elapsed.
@@ -31,7 +37,7 @@ internal static class RetryDelay
             return Task.CompletedTask;
         }
 
-        return Task.Delay(Shorten(delay), timeProvider, cancellationToken);
+        return Task.Delay(Clamp(delay), timeProvider, cancellationToken);
     }
 
     /// <summary>
@@ -53,7 +59,7 @@ internal static class RetryDelay
             return;
         }
 
-        delay = Shorten(delay);
+        delay = Clamp(delay);
 
         if (!cancellationToken.CanBeCanceled && ReferenceEquals(timeProvider, TimeProvider.System))
         {
@@ -66,5 +72,21 @@ internal static class RetryDelay
         gate.Wait(Timeout.Infinite, cancellationToken);
     }
 
-    private static TimeSpan Shorten(TimeSpan delay) => delay > MaxDelay ? MaxDelay : delay;
+    /// <summary>
+    /// Limits a delay to the range that a timer supports.
+    /// </summary>
+    /// <param name="delay">The delay.</param>
+    /// <returns>
+    /// <see cref="TimeSpan.Zero"/> for a negative delay, <see cref="MaxSupported"/> for a longer delay, and otherwise
+    /// <paramref name="delay"/>.
+    /// </returns>
+    internal static TimeSpan Clamp(TimeSpan delay)
+    {
+        if (delay < TimeSpan.Zero)
+        {
+            return TimeSpan.Zero;
+        }
+
+        return delay > MaxSupported ? MaxSupported : delay;
+    }
 }

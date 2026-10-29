@@ -9,11 +9,14 @@ using System;
 /// <summary>
 /// Provides a <see cref="IRetryStrategy"/> which retries a specific number of times with a specific delay.
 /// </summary>
-public class Linear : RetryStrategy
+/// <remarks>
+/// The delay before every retry is the same: the periodicity. This holds no state for a call, so one instance can be
+/// shared.
+/// </remarks>
+public class Linear : IRetryStrategy
 {
     private readonly TimeSpan periodicity;
     private readonly int maxTries;
-    private int tryCount;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Linear"/> class.
@@ -22,30 +25,17 @@ public class Linear : RetryStrategy
     /// <param name="maxTries">The maximum number of times the method will be tried.</param>
     public Linear(TimeSpan periodicity, int maxTries)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(periodicity, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxTries);
 
-        this.periodicity = periodicity;
+        this.periodicity = RetryDelay.Clamp(periodicity);
         this.maxTries = maxTries;
     }
 
     /// <inheritdoc/>
-    public override bool CanRetry
+    /// <remarks>This returns the periodicity until the operation has been tried the maximum number of times.</remarks>
+    public TimeSpan? GetRetryDelay(in RetryAttempt attempt)
     {
-        get
-        {
-            return this.tryCount < this.maxTries;
-        }
-    }
-
-    /// <inheritdoc/>
-    public override TimeSpan PrepareToRetry(Exception lastException)
-    {
-        ArgumentNullException.ThrowIfNull(lastException);
-
-        this.AddException(lastException);
-
-        this.tryCount++;
-
-        return this.periodicity;
+        return attempt.AttemptNumber < this.maxTries ? this.periodicity : null;
     }
 }

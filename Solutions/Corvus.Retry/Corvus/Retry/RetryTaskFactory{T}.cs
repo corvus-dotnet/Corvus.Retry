@@ -5,7 +5,6 @@
 namespace Corvus.Retry;
 
 using System;
-using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Corvus.Retry.Policies;
@@ -37,7 +36,7 @@ public class RetryTaskFactory<T>
     {
         ArgumentNullException.ThrowIfNull(function);
 
-        return this.StartNew(function, new Count(), AnyExceptionPolicy.Default);
+        return this.StartNew(function, RetryTaskFactory.DefaultStrategy, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -50,7 +49,7 @@ public class RetryTaskFactory<T>
     {
         ArgumentNullException.ThrowIfNull(function);
 
-        return this.StartNew(function, cancellationToken, new Count(), AnyExceptionPolicy.Default);
+        return this.StartNew(function, cancellationToken, RetryTaskFactory.DefaultStrategy, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -63,7 +62,7 @@ public class RetryTaskFactory<T>
     {
         ArgumentNullException.ThrowIfNull(function);
 
-        return this.StartNew(function, taskCreationOptions, new Count(), AnyExceptionPolicy.Default);
+        return this.StartNew(function, taskCreationOptions, RetryTaskFactory.DefaultStrategy, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -76,7 +75,7 @@ public class RetryTaskFactory<T>
     {
         ArgumentNullException.ThrowIfNull(function);
 
-        return this.StartNew(function, state, new Count(), AnyExceptionPolicy.Default);
+        return this.StartNew(function, state, RetryTaskFactory.DefaultStrategy, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -90,7 +89,7 @@ public class RetryTaskFactory<T>
     {
         ArgumentNullException.ThrowIfNull(function);
 
-        return this.StartNew(function, state, taskCreationOptions, new Count(), AnyExceptionPolicy.Default);
+        return this.StartNew(function, state, taskCreationOptions, RetryTaskFactory.DefaultStrategy, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -106,7 +105,7 @@ public class RetryTaskFactory<T>
     {
         ArgumentNullException.ThrowIfNull(function);
 
-        return this.StartNew(function, state, cancellationToken, taskCreationOptions, scheduler, new Count(), AnyExceptionPolicy.Default);
+        return this.StartNew(function, state, cancellationToken, taskCreationOptions, scheduler, RetryTaskFactory.DefaultStrategy, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -121,7 +120,7 @@ public class RetryTaskFactory<T>
     {
         ArgumentNullException.ThrowIfNull(function);
 
-        return this.StartNew(function, cancellationToken, taskCreationOptions, scheduler, new Count(), AnyExceptionPolicy.Default);
+        return this.StartNew(function, cancellationToken, taskCreationOptions, scheduler, RetryTaskFactory.DefaultStrategy, AnyExceptionPolicy.Default);
     }
 
     /// <summary>
@@ -245,7 +244,7 @@ public class RetryTaskFactory<T>
         ArgumentNullException.ThrowIfNull(function);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return this.StartNew(function, new Count(), policy);
+        return this.StartNew(function, RetryTaskFactory.DefaultStrategy, policy);
     }
 
     /// <summary>
@@ -260,7 +259,7 @@ public class RetryTaskFactory<T>
         ArgumentNullException.ThrowIfNull(function);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return this.StartNew(function, cancellationToken, new Count(), policy);
+        return this.StartNew(function, cancellationToken, RetryTaskFactory.DefaultStrategy, policy);
     }
 
     /// <summary>
@@ -275,7 +274,7 @@ public class RetryTaskFactory<T>
         ArgumentNullException.ThrowIfNull(function);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return this.StartNew(function, taskCreationOptions, new Count(), policy);
+        return this.StartNew(function, taskCreationOptions, RetryTaskFactory.DefaultStrategy, policy);
     }
 
     /// <summary>
@@ -290,7 +289,7 @@ public class RetryTaskFactory<T>
         ArgumentNullException.ThrowIfNull(function);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return this.StartNew(function, state, new Count(), policy);
+        return this.StartNew(function, state, RetryTaskFactory.DefaultStrategy, policy);
     }
 
     /// <summary>
@@ -306,7 +305,7 @@ public class RetryTaskFactory<T>
         ArgumentNullException.ThrowIfNull(function);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return this.StartNew(function, state, taskCreationOptions, new Count(), policy);
+        return this.StartNew(function, state, taskCreationOptions, RetryTaskFactory.DefaultStrategy, policy);
     }
 
     /// <summary>
@@ -324,7 +323,7 @@ public class RetryTaskFactory<T>
         ArgumentNullException.ThrowIfNull(function);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return this.StartNew(function, state, cancellationToken, taskCreationOptions, scheduler, new Count(), policy);
+        return this.StartNew(function, state, cancellationToken, taskCreationOptions, scheduler, RetryTaskFactory.DefaultStrategy, policy);
     }
 
     /// <summary>
@@ -341,7 +340,7 @@ public class RetryTaskFactory<T>
         ArgumentNullException.ThrowIfNull(function);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return this.StartNew(function, cancellationToken, taskCreationOptions, scheduler, new Count(), policy);
+        return this.StartNew(function, cancellationToken, taskCreationOptions, scheduler, RetryTaskFactory.DefaultStrategy, policy);
     }
 
     /// <summary>

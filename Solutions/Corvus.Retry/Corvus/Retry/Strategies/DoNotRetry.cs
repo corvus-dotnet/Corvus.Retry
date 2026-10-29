@@ -9,19 +9,12 @@ using System;
 /// <summary>
 /// Provides a <see cref="IRetryStrategy"/> which will always stop retrying immediately.
 /// </summary>
-public class DoNotRetry : RetryStrategy
+public class DoNotRetry : IRetryStrategy
 {
     /// <inheritdoc/>
-    public override bool CanRetry
+    /// <remarks>This always returns <see langword="null"/>.</remarks>
+    public TimeSpan? GetRetryDelay(in RetryAttempt attempt)
     {
-        get { return false; }
-    }
-
-    /// <inheritdoc/>
-    public override TimeSpan PrepareToRetry(Exception lastException)
-    {
-        ArgumentNullException.ThrowIfNull(lastException);
-
-        return TimeSpan.Zero;
+        return null;
     }
 }

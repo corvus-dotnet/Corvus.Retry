@@ -6,11 +6,15 @@ namespace Corvus.Retry.Strategies;
 
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
 /// The <see cref="Incremental"/> strategy increases the delay by a fixed step before each retry.
 /// </summary>
+/// <remarks>
+/// The delay after failed attempt n is <c>initialDelay + (n - 1) * step</c>.
+/// </remarks>
 [TestClass]
 public class IncrementalTests
 {
@@ -20,53 +24,72 @@ public class IncrementalTests
         // The README example: 5 tries, starting at 1 second, increasing by 1 second each time.
         var strategy = new Incremental(5, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
 
-        List<TimeSpan> delays = StrategyDriver.FailTimes(strategy, 4);
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 5);
 
-        Assert.AreSequenceEqual(Seconds(1, 2, 3, 4), delays);
-        Assert.IsTrue(strategy.CanRetry);
+        Assert.AreSequenceEqual(Seconds(1, 2, 3, 4, null), delays);
     }
 
     [TestMethod]
     public void WhenConstructedWithoutArguments_ItAllowsFiveTriesStartingAtOneSecondInTwoSecondSteps()
     {
-        var strategy = new Incremental();
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(new Incremental(), 5);
 
-        List<TimeSpan> delays = StrategyDriver.FailTimes(strategy, 4);
-        Assert.AreSequenceEqual(Seconds(1, 3, 5, 7), delays);
-        Assert.IsTrue(strategy.CanRetry);
-
-        strategy.PrepareToRetry(new InvalidOperationException());
-        Assert.IsFalse(strategy.CanRetry);
+        Assert.AreSequenceEqual(Seconds(1, 3, 5, 7, null), delays);
     }
 
     [TestMethod]
-    public void WhenNoRetriesRemain_TheDelayIsZero()
+    public void WhenNoRetriesRemain_ItRefusesARetry()
     {
         var strategy = new Incremental(2, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
-        strategy.PrepareToRetry(new InvalidOperationException());
 
-        TimeSpan finalDelay = strategy.PrepareToRetry(new InvalidOperationException());
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 2);
 
-        Assert.AreEqual(TimeSpan.Zero, finalDelay);
-        Assert.IsFalse(strategy.CanRetry);
+        Assert.AreSequenceEqual(Seconds(1, null), delays);
     }
 
     [TestMethod]
-    public void ItRecordsEveryFailureInOrder()
+    public void TheParametersCanBeNamed()
     {
-        var strategy = new Incremental(3, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
-        Exception[] failures = [new InvalidOperationException("1"), new TimeoutException("2"), new InvalidOperationException("3")];
+        var strategy = new Incremental(maxTries: 3, initialDelay: TimeSpan.FromSeconds(2), step: TimeSpan.FromSeconds(3));
 
-        foreach (Exception failure in failures)
-        {
-            strategy.PrepareToRetry(failure);
-        }
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 3);
 
-        IReadOnlyList<Exception> recorded = strategy.Exception.InnerExceptions;
-        Assert.HasCount(3, recorded);
-        for (int i = 0; i < failures.Length; i++)
+        Assert.AreSequenceEqual(Seconds(2, 5, null), delays);
+    }
+
+    [TestMethod]
+    public void ADelayLongerThanATimerSupportsIsLimitedToTheLongestSupportedDelay()
+    {
+        var strategy = new Incremental(int.MaxValue, TimeSpan.FromDays(40), TimeSpan.FromDays(40));
+
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 2);
+
+        Assert.AreSequenceEqual(new TimeSpan?[] { TimeSpan.FromDays(40), RetryDelay.MaxSupported }, delays);
+    }
+
+    [TestMethod]
+    public void TheSameInstanceGivesTheSameAnswersForTwoIndependentSequences()
+    {
+        var strategy = new Incremental(4, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+
+        List<TimeSpan?> first = StrategyDriver.FailTimes(strategy, 4);
+        List<TimeSpan?> second = StrategyDriver.FailTimes(strategy, 4);
+
+        Assert.AreSequenceEqual(Seconds(1, 2, 3, null), first);
+        Assert.AreSequenceEqual(first, second);
+    }
+
+    [TestMethod]
+    public async Task WhenThreadsDriveOneInstanceConcurrently_EachSeesTheDocumentedSequence()
+    {
+        var strategy = new Incremental(4, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+        TimeSpan?[] expected = Seconds(1, 2, 3, null);
+
+        List<List<TimeSpan?>> sequences = await StrategyDriver.FailTimesConcurrentlyAsync(strategy, 4).ConfigureAwait(false);
+
+        foreach (List<TimeSpan?> sequence in sequences)
         {
-            Assert.AreSame(failures[i], recorded[i]);
+            Assert.AreSequenceEqual(expected, sequence);
         }
     }
 
@@ -81,15 +104,23 @@ public class IncrementalTests
     }
 
     [TestMethod]
-    public void WhenTheLastExceptionIsNull_PrepareToRetryThrows()
+    public void WhenTheInitialDelayIsNegative_TheConstructorThrows()
     {
-        ArgumentNullException ex = Assert.ThrowsExactly<ArgumentNullException>(() => new Incremental().PrepareToRetry(null!));
+        ArgumentOutOfRangeException ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new Incremental(3, TimeSpan.FromSeconds(-1), TimeSpan.FromSeconds(1)));
 
-        Assert.AreEqual("lastException", ex.ParamName);
+        Assert.AreEqual("initialDelay", ex.ParamName);
     }
 
-    private static TimeSpan[] Seconds(params int[] seconds)
+    [TestMethod]
+    public void WhenTheStepIsNegative_TheConstructorThrows()
     {
-        return Array.ConvertAll(seconds, s => TimeSpan.FromSeconds(s));
+        ArgumentOutOfRangeException ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new Incremental(3, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(-1)));
+
+        Assert.AreEqual("step", ex.ParamName);
+    }
+
+    private static TimeSpan?[] Seconds(params int?[] seconds)
+    {
+        return Array.ConvertAll(seconds, s => s is int value ? TimeSpan.FromSeconds(value) : (TimeSpan?)null);
     }
 }

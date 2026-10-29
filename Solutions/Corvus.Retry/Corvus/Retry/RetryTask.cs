@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 using Corvus.Retry.Policies;
 
 /// <summary>
-/// Provides a Retriable Task factory analagous to <see cref="Task.Factory"/>.
+/// Provides a Retriable Task factory analogous to <see cref="Task.Factory"/>.
 /// </summary>
 /// <remarks>
 /// <para>

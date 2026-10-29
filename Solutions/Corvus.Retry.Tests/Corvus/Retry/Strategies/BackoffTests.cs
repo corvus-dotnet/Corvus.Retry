@@ -6,13 +6,14 @@ namespace Corvus.Retry.Strategies;
 
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
 /// The <see cref="Backoff"/> strategy increases the delay exponentially, with jitter, between bounds.
 /// </summary>
 /// <remarks>
-/// Before retry n (n = failures so far) the delay is
+/// After failed attempt n the delay is
 /// <c>min(MinBackoff + (2^n - 1) * r, MaxBackoff)</c>, where r is a random whole number of milliseconds
 /// in <c>[0.8 * DeltaBackoff, 1.2 * DeltaBackoff)</c>. The bounds below are therefore deterministic.
 /// </remarks>
@@ -21,28 +22,22 @@ public class BackoffTests
 {
     private const int Iterations = 20;
 
+    // With MinBackoff 1000ms and DeltaBackoff 1000ms, r lies in [800, 1200).
+    private const int MinMs = 1000;
+    private const int LowJitterMs = 800;
+    private const int HighJitterMs = 1200;
+
     [TestMethod]
     public void EachRetryDelayLiesWithinTheDocumentedJitterBand()
     {
-        // With MinBackoff 1000ms and DeltaBackoff 1000ms, r lies in [800, 1200), giving
         // n=1: [1800, 2200], n=2: [3400, 4600], n=3: [6600, 9400] ms. Integer arithmetic keeps the bounds exact.
-        const int MinMs = 1000;
-        const int LowJitterMs = 800;
-        const int HighJitterMs = 1200;
-
         for (int iteration = 0; iteration < Iterations; iteration++)
         {
             var strategy = new Backoff(4, TimeSpan.FromMilliseconds(1000));
 
-            List<TimeSpan> delays = StrategyDriver.FailTimes(strategy, 3);
+            List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 3);
 
-            for (int n = 1; n <= 3; n++)
-            {
-                int factor = (1 << n) - 1;
-                TimeSpan lower = TimeSpan.FromMilliseconds(MinMs + (factor * LowJitterMs));
-                TimeSpan upper = TimeSpan.FromMilliseconds(MinMs + (factor * HighJitterMs));
-                Assert.IsInRange(lower, upper, delays[n - 1]);
-            }
+            AssertWithinJitterBand(delays);
         }
     }
 
@@ -54,11 +49,11 @@ public class BackoffTests
         {
             var strategy = new Backoff(5, TimeSpan.FromSeconds(1));
 
-            List<TimeSpan> delays = StrategyDriver.FailTimes(strategy, 4);
+            List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 4);
 
             for (int i = 1; i < delays.Count; i++)
             {
-                Assert.IsGreaterThan(delays[i - 1], delays[i]);
+                Assert.IsGreaterThan(delays[i - 1]!.Value, delays[i]!.Value);
             }
         }
     }
@@ -68,9 +63,9 @@ public class BackoffTests
     {
         var strategy = new Backoff(4, TimeSpan.Zero);
 
-        List<TimeSpan> delays = StrategyDriver.FailTimes(strategy, 3);
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 3);
 
-        Assert.AreSequenceEqual(new[] { strategy.MinBackoff, strategy.MinBackoff, strategy.MinBackoff }, delays);
+        Assert.AreSequenceEqual(new TimeSpan?[] { strategy.MinBackoff, strategy.MinBackoff, strategy.MinBackoff }, delays);
         Assert.AreEqual(TimeSpan.FromSeconds(1), strategy.MinBackoff);
     }
 
@@ -80,15 +75,15 @@ public class BackoffTests
         TimeSpan max = TimeSpan.FromSeconds(2);
         var strategy = new Backoff(5, TimeSpan.FromSeconds(1)) { MaxBackoff = max };
 
-        List<TimeSpan> delays = StrategyDriver.FailTimes(strategy, 4);
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 4);
 
-        foreach (TimeSpan delay in delays)
+        foreach (TimeSpan? delay in delays)
         {
-            Assert.IsLessThanOrEqualTo(max, delay);
+            Assert.IsLessThanOrEqualTo(max, delay!.Value);
         }
 
         // From the second retry onwards the uncapped delay is at least 1s + 3 * 0.8s, so the cap applies.
-        Assert.AreSequenceEqual(new[] { max, max, max }, delays.GetRange(1, 3));
+        Assert.AreSequenceEqual(new TimeSpan?[] { max, max, max }, delays.GetRange(1, 3));
     }
 
     [TestMethod]
@@ -97,9 +92,9 @@ public class BackoffTests
         TimeSpan min = TimeSpan.FromSeconds(5);
         var strategy = new Backoff(3, TimeSpan.Zero) { MinBackoff = min };
 
-        List<TimeSpan> delays = StrategyDriver.FailTimes(strategy, 2);
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 2);
 
-        Assert.AreSequenceEqual(new[] { min, min }, delays);
+        Assert.AreSequenceEqual(new TimeSpan?[] { min, min }, delays);
     }
 
     [TestMethod]
@@ -113,41 +108,63 @@ public class BackoffTests
         Assert.AreEqual(strategy.DefaultMinBackoff, strategy.MinBackoff);
         Assert.AreEqual(strategy.DefaultMaxBackoff, strategy.MaxBackoff);
 
-        StrategyDriver.FailTimes(strategy, 4);
-        Assert.IsTrue(strategy.CanRetry);
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 5);
 
-        StrategyDriver.FailTimes(strategy, 1);
-        Assert.IsFalse(strategy.CanRetry);
-    }
-
-    [TestMethod]
-    public void WhenNoRetriesRemain_TheDelayIsZero()
-    {
-        var strategy = new Backoff(2, TimeSpan.FromSeconds(1));
-        strategy.PrepareToRetry(new InvalidOperationException());
-
-        TimeSpan finalDelay = strategy.PrepareToRetry(new InvalidOperationException());
-
-        Assert.AreEqual(TimeSpan.Zero, finalDelay);
-        Assert.IsFalse(strategy.CanRetry);
-    }
-
-    [TestMethod]
-    public void ItRecordsEveryFailureInOrder()
-    {
-        var strategy = new Backoff(3, TimeSpan.FromSeconds(1));
-        Exception[] failures = [new InvalidOperationException("1"), new TimeoutException("2"), new InvalidOperationException("3")];
-
-        foreach (Exception failure in failures)
+        for (int i = 0; i < 4; i++)
         {
-            strategy.PrepareToRetry(failure);
+            Assert.IsNotNull(delays[i]);
         }
 
-        IReadOnlyList<Exception> recorded = strategy.Exception.InnerExceptions;
-        Assert.HasCount(3, recorded);
-        for (int i = 0; i < failures.Length; i++)
+        Assert.IsNull(delays[4]);
+    }
+
+    [TestMethod]
+    public void WhenNoRetriesRemain_ItRefusesARetry()
+    {
+        var strategy = new Backoff(2, TimeSpan.FromSeconds(1));
+
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 2);
+
+        Assert.IsNotNull(delays[0]);
+        Assert.IsNull(delays[1]);
+    }
+
+    [TestMethod]
+    public void ADelayLongerThanATimerSupportsIsLimitedToTheLongestSupportedDelay()
+    {
+        var strategy = new Backoff(int.MaxValue, TimeSpan.FromDays(1)) { MaxBackoff = TimeSpan.MaxValue };
+
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 100);
+
+        Assert.AreEqual(RetryDelay.MaxSupported, delays[99]);
+    }
+
+    [TestMethod]
+    public void TheSameInstanceGivesTheSameAnswersForTwoIndependentSequences()
+    {
+        // The delays are random, so each sequence is checked against the documented band rather than the other.
+        var strategy = new Backoff(4, TimeSpan.FromMilliseconds(1000));
+
+        List<TimeSpan?> first = StrategyDriver.FailTimes(strategy, 4);
+        List<TimeSpan?> second = StrategyDriver.FailTimes(strategy, 4);
+
+        AssertWithinJitterBand(first);
+        AssertWithinJitterBand(second);
+        Assert.IsNull(first[3]);
+        Assert.IsNull(second[3]);
+    }
+
+    [TestMethod]
+    public async Task WhenThreadsDriveOneInstanceConcurrently_EachSeesTheDocumentedSequence()
+    {
+        var strategy = new Backoff(4, TimeSpan.FromMilliseconds(1000));
+
+        List<List<TimeSpan?>> sequences = await StrategyDriver.FailTimesConcurrentlyAsync(strategy, 4).ConfigureAwait(false);
+
+        foreach (List<TimeSpan?> sequence in sequences)
         {
-            Assert.AreSame(failures[i], recorded[i]);
+            AssertWithinJitterBand(sequence);
+            Assert.IsNull(sequence[3]);
         }
     }
 
@@ -162,10 +179,22 @@ public class BackoffTests
     }
 
     [TestMethod]
-    public void WhenTheLastExceptionIsNull_PrepareToRetryThrows()
+    public void WhenTheDeltaIsNegative_TheConstructorThrows()
     {
-        ArgumentNullException ex = Assert.ThrowsExactly<ArgumentNullException>(() => new Backoff().PrepareToRetry(null!));
+        ArgumentOutOfRangeException ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new Backoff(3, TimeSpan.FromSeconds(-1)));
 
-        Assert.AreEqual("lastException", ex.ParamName);
+        Assert.AreEqual("deltaBackoff", ex.ParamName);
+    }
+
+    // Checks the first three delays of a sequence from a Backoff with MinBackoff 1000ms and DeltaBackoff 1000ms.
+    private static void AssertWithinJitterBand(List<TimeSpan?> delays)
+    {
+        for (int n = 1; n <= 3; n++)
+        {
+            int factor = (1 << n) - 1;
+            TimeSpan lower = TimeSpan.FromMilliseconds(MinMs + (factor * LowJitterMs));
+            TimeSpan upper = TimeSpan.FromMilliseconds(MinMs + (factor * HighJitterMs));
+            Assert.IsInRange(lower, upper, delays[n - 1]!.Value);
+        }
     }
 }

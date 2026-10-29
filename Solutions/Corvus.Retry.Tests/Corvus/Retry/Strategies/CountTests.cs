@@ -6,6 +6,7 @@ namespace Corvus.Retry.Strategies;
 
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
@@ -17,62 +18,65 @@ public class CountTests
     [TestMethod]
     public void WhenConstructedWithoutArguments_ItAllowsFiveTries()
     {
-        var strategy = new Count();
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(new Count(), 5);
 
-        StrategyDriver.FailTimes(strategy, 4);
-        Assert.IsTrue(strategy.CanRetry);
-
-        StrategyDriver.FailTimes(strategy, 1);
-        Assert.IsFalse(strategy.CanRetry);
+        Assert.AreSequenceEqual(new TimeSpan?[] { TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero, null }, delays);
     }
 
     [TestMethod]
     [DataRow(1)]
     [DataRow(3)]
     [DataRow(10)]
-    public void WhenConstructedWithMaxTries_CanRetryBecomesFalseAfterThatManyFailures(int maxTries)
+    public void WhenConstructedWithMaxTries_ItRefusesARetryAfterThatManyFailedAttempts(int maxTries)
     {
         var strategy = new Count(maxTries);
 
-        StrategyDriver.FailTimes(strategy, maxTries - 1);
-        Assert.IsTrue(strategy.CanRetry);
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, maxTries);
 
-        StrategyDriver.FailTimes(strategy, 1);
-        Assert.IsFalse(strategy.CanRetry);
+        Assert.IsNull(delays[maxTries - 1]);
+        for (int i = 0; i < maxTries - 1; i++)
+        {
+            Assert.AreEqual(TimeSpan.Zero, delays[i]);
+        }
     }
 
     [TestMethod]
-    public void BeforeAnyFailure_CanRetryIsTrue()
+    public void WhenMaxTriesIsOne_TheFirstFailedAttemptIsNotRetried()
     {
-        Assert.IsTrue(new Count(1).CanRetry);
+        Assert.IsNull(new Count(1).GetRetryDelay(new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero)));
     }
 
     [TestMethod]
     public void ItNeverDelaysBetweenRetries()
     {
-        var strategy = new Count(3);
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(new Count(4), 3);
 
-        IReadOnlyList<TimeSpan> delays = StrategyDriver.FailTimes(strategy, 3);
-
-        Assert.AreSequenceEqual(new[] { TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero }, delays);
+        Assert.AreSequenceEqual(new TimeSpan?[] { TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero }, delays);
     }
 
     [TestMethod]
-    public void ItRecordsEveryFailureInOrder()
+    public void TheSameInstanceGivesTheSameAnswersForTwoIndependentSequences()
     {
         var strategy = new Count(3);
-        Exception[] failures = [new InvalidOperationException("1"), new TimeoutException("2"), new InvalidOperationException("3")];
 
-        foreach (Exception failure in failures)
-        {
-            strategy.PrepareToRetry(failure);
-        }
+        List<TimeSpan?> first = StrategyDriver.FailTimes(strategy, 3);
+        List<TimeSpan?> second = StrategyDriver.FailTimes(strategy, 3);
 
-        IReadOnlyList<Exception> recorded = strategy.Exception.InnerExceptions;
-        Assert.HasCount(3, recorded);
-        for (int i = 0; i < failures.Length; i++)
+        Assert.AreSequenceEqual(new TimeSpan?[] { TimeSpan.Zero, TimeSpan.Zero, null }, first);
+        Assert.AreSequenceEqual(first, second);
+    }
+
+    [TestMethod]
+    public async Task WhenThreadsDriveOneInstanceConcurrently_EachSeesTheDocumentedSequence()
+    {
+        var strategy = new Count(3);
+        TimeSpan?[] expected = [TimeSpan.Zero, TimeSpan.Zero, null];
+
+        List<List<TimeSpan?>> sequences = await StrategyDriver.FailTimesConcurrentlyAsync(strategy, 3).ConfigureAwait(false);
+
+        foreach (List<TimeSpan?> sequence in sequences)
         {
-            Assert.AreSame(failures[i], recorded[i]);
+            Assert.AreSequenceEqual(expected, sequence);
         }
     }
 
@@ -84,13 +88,5 @@ public class CountTests
         ArgumentOutOfRangeException ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new Count(maxTries));
 
         Assert.AreEqual("maxTries", ex.ParamName);
-    }
-
-    [TestMethod]
-    public void WhenTheLastExceptionIsNull_PrepareToRetryThrows()
-    {
-        ArgumentNullException ex = Assert.ThrowsExactly<ArgumentNullException>(() => new Count().PrepareToRetry(null!));
-
-        Assert.AreEqual("lastException", ex.ParamName);
     }
 }
