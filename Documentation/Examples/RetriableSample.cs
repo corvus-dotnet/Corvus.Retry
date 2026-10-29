@@ -77,7 +77,7 @@ await RunExampleAsync(async () =>
 });
 
 // We can now call the same method and cancel the retry operation using a cancellation token. The retry operation
-// stops at the next failure instead of using all of its tries, and the exception from that try is rethrown.
+// starts no further attempt after the token is cancelled, and the call throws an OperationCanceledException.
 Console.WriteLine();
 Console.WriteLine("## Cancelling the retry operation with a cancellation token");
 await RunExampleAsync(async () =>

@@ -19,7 +19,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 /// Behaviour of the <see cref="Retriable"/> overloads that take a cancellation token, strategy and policy.
 /// </summary>
 /// <remarks>
-/// Only zero-delay strategies are used here, so these tests never reach the sleep service and can run in parallel.
+/// Only zero-delay strategies are used here, so these tests never wait for a delay and can run in parallel.
 /// Delays are covered by <see cref="RetriableDelayTests"/>.
 /// </remarks>
 [TestClass]
@@ -31,7 +31,7 @@ public class RetriableTests
         {
             foreach (MethodInfo method in PublicRetryMethods())
             {
-                foreach (ParameterInfo parameter in method.GetParameters().Where(p => IsNullableArgument(p.ParameterType)))
+                foreach (ParameterInfo parameter in method.GetParameters().Where(IsNullableArgument))
                 {
                     yield return [Describe(method), parameter.Name!];
                 }
@@ -44,6 +44,8 @@ public class RetriableTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task WhenTheOperationFailsTwiceThenSucceeds_ItIsInvokedThreeTimesAndTheThirdResultIsReturned(RetryShape shape)
     {
         var op = new FlakyOperation(2);
@@ -51,7 +53,7 @@ public class RetriableTests
         string? result = await RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, new Count(5), new AnyExceptionPolicy()).ConfigureAwait(false);
 
         Assert.AreEqual(3, op.Invocations);
-        if (shape is RetryShape.Function or RetryShape.AsyncFunction)
+        if (shape is RetryShape.Function or RetryShape.AsyncFunction or RetryShape.AsyncFunctionWithToken)
         {
             Assert.AreEqual("attempt-3", result);
         }
@@ -62,6 +64,8 @@ public class RetriableTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task WhenEveryTryFails_TheLastExceptionIsRethrownAfterMaxTriesInvocations(RetryShape shape)
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
@@ -79,6 +83,8 @@ public class RetriableTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task WhenThePolicyRejectsTheException_TheOperationIsNotRetriedAndTheExceptionIsRethrown(RetryShape shape)
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
@@ -99,6 +105,8 @@ public class RetriableTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task ThePolicyIsConsultedForEveryFailure_RetryingOnlyWhileItSaysYes(RetryShape shape)
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
@@ -120,6 +128,8 @@ public class RetriableTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task WhenThePolicyAcceptsOnlySomeExceptions_AnotherExceptionStopsTheRetry(RetryShape shape)
     {
         var op = new FlakyOperation(
@@ -139,6 +149,8 @@ public class RetriableTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task WhenTheStrategyIsDoNotRetry_TheOperationRunsOnceAndItsExceptionIsRethrownEvenThoughThePolicyAllowsRetry(RetryShape shape)
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
@@ -153,6 +165,7 @@ public class RetriableTests
     [TestMethod]
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task WhenTheStrategyIsDoNotRetryAndTheOperationSucceeds_TheResultIsReturned(RetryShape shape)
     {
         var op = new FlakyOperation(0);
@@ -167,6 +180,8 @@ public class RetriableTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task WhenTheOperationSucceedsFirstTime_ThePolicyIsNotConsulted(RetryShape shape)
     {
         var op = new FlakyOperation(0);
@@ -183,33 +198,19 @@ public class RetriableTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
-    public async Task WhenTheTokenIsAlreadyCancelledAndTheOperationFails_ItIsNotRetriedAndItsOwnExceptionIsRethrown(RetryShape shape)
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
+    public async Task WhenTheTokenIsAlreadyCancelled_AnOperationThatWouldFailIsNotInvokedAndTheCallIsCancelled(RetryShape shape)
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync().ConfigureAwait(false);
 
-        // Cancellation is only checked after a failure, to decide whether to retry. It does not prevent the
-        // first try, and the caller sees the operation's exception rather than an OperationCanceledException.
-        InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+        // The token is checked before each attempt, including the first.
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(
             () => RetriableDriver.RetryAsync(shape, op.Invoke, cts.Token, new Count(5), new AnyExceptionPolicy())).ConfigureAwait(false);
 
-        Assert.AreEqual(1, op.Invocations);
-        Assert.AreSame(op.Thrown[0], thrown);
-    }
-
-    [TestMethod]
-    [DataRow(RetryShape.Function)]
-    [DataRow(RetryShape.AsyncFunction)]
-    public async Task WhenTheTokenIsAlreadyCancelledButTheOperationSucceeds_TheResultIsReturned(RetryShape shape)
-    {
-        var op = new FlakyOperation(0);
-        using var cts = new CancellationTokenSource();
-        await cts.CancelAsync().ConfigureAwait(false);
-
-        string? result = await RetriableDriver.RetryAsync(shape, op.Invoke, cts.Token, new Count(5), new AnyExceptionPolicy()).ConfigureAwait(false);
-
-        Assert.AreEqual("attempt-1", result);
+        Assert.AreEqual(0, op.Invocations);
     }
 
     [TestMethod]
@@ -217,7 +218,28 @@ public class RetriableTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
-    public async Task WhenCancellationIsRequestedDuringRetries_NoFurtherRetriesHappen(RetryShape shape)
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
+    public async Task WhenTheTokenIsAlreadyCancelled_AnOperationThatWouldSucceedIsNotInvokedAndTheCallIsCancelled(RetryShape shape)
+    {
+        var op = new FlakyOperation(0);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync().ConfigureAwait(false);
+
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+            () => RetriableDriver.RetryAsync(shape, op.Invoke, cts.Token, new Count(5), new AnyExceptionPolicy())).ConfigureAwait(false);
+
+        Assert.AreEqual(0, op.Invocations);
+    }
+
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    [DataRow(RetryShape.AsyncAction)]
+    [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
+    public async Task WhenCancellationIsRequestedDuringRetries_NoFurtherRetriesHappenAndTheCallIsCancelled(RetryShape shape)
     {
         using var cts = new CancellationTokenSource();
         var op = new FlakyOperation(
@@ -232,11 +254,11 @@ public class RetriableTests
                 return new InvalidOperationException($"Attempt {attempt} failed");
             });
 
-        InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+        // The strategy and the policy accept the second failure, but the token is checked before the retry.
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(
             () => RetriableDriver.RetryAsync(shape, op.Invoke, cts.Token, new Count(10), new AnyExceptionPolicy())).ConfigureAwait(false);
 
         Assert.AreEqual(2, op.Invocations);
-        Assert.AreSame(op.Thrown[1], thrown);
     }
 
     [TestMethod]
@@ -244,6 +266,166 @@ public class RetriableTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
+    public async Task WhenTheOperationThrowsACancellationThatTheTokenCaused_ItIsNotRetriedEvenThoughThePolicyAllowsIt(RetryShape shape)
+    {
+        using var cts = new CancellationTokenSource();
+        var op = new FlakyOperation(
+            FlakyOperation.AlwaysFails,
+            _ =>
+            {
+                cts.Cancel();
+                return new OperationCanceledException(cts.Token);
+            });
+        var policy = new RecordingRetryPolicy(true);
+
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+            () => RetriableDriver.RetryAsync(shape, op.Invoke, cts.Token, new Count(10), policy)).ConfigureAwait(false);
+
+        Assert.AreEqual(1, op.Invocations);
+        Assert.AreSame(op.Thrown[0], thrown);
+        Assert.IsEmpty(policy.Consulted);
+    }
+
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    [DataRow(RetryShape.AsyncAction)]
+    [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
+    public async Task WhenTheOperationThrowsACancellationThatTheTokenDidNotCause_ThePolicyDecides(RetryShape shape)
+    {
+        var op = new FlakyOperation(1, _ => new OperationCanceledException("The operation cancelled itself"));
+        var policy = new RecordingRetryPolicy(true);
+
+        await RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, new Count(10), policy).ConfigureAwait(false);
+
+        Assert.AreEqual(2, op.Invocations);
+        Assert.AreSame(op.Thrown[0], Assert.ContainsSingle(policy.Consulted));
+    }
+
+    [TestMethod]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
+    public async Task TheTokenPassedToTheOperationIsCancelledWhenTheCallerCancels(RetryShape shape)
+    {
+        using var cts = new CancellationTokenSource();
+        var started = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<string> WaitForCancellationAsync(CancellationToken token)
+        {
+            started.TrySetResult(token);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token).ConfigureAwait(false);
+            return "never";
+        }
+
+        Task call = shape == RetryShape.AsyncActionWithToken
+            ? Retriable.RetryAsync(token => (Task)WaitForCancellationAsync(token), cts.Token, new Count(5), new AnyExceptionPolicy())
+            : Retriable.RetryAsync(WaitForCancellationAsync, cts.Token, new Count(5), new AnyExceptionPolicy());
+
+        CancellationToken received = await started.Task.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+        Assert.IsFalse(received.IsCancellationRequested);
+        await cts.CancelAsync().ConfigureAwait(false);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(TimeSpan.FromSeconds(10))).ConfigureAwait(false);
+        Assert.IsTrue(received.IsCancellationRequested);
+    }
+
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    [DataRow(RetryShape.AsyncAction)]
+    [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
+    public async Task TheOnRetryCallbackIsCalledBeforeEachRetryWithThatFailureTheDelayAndTheAttemptNumber(RetryShape shape)
+    {
+        var op = new FlakyOperation(2);
+        var calls = new List<(RetryEventArgs Args, int InvocationsSoFar)>();
+        ValueTask OnRetry(RetryEventArgs args)
+        {
+            lock (calls)
+            {
+                calls.Add((args, op.Invocations));
+            }
+
+            return ValueTask.CompletedTask;
+        }
+
+        await RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, new Count(5), new AnyExceptionPolicy(), OnRetry).ConfigureAwait(false);
+
+        Assert.AreEqual(3, op.Invocations);
+        Assert.HasCount(2, calls);
+        for (int i = 0; i < calls.Count; i++)
+        {
+            (RetryEventArgs args, int invocationsSoFar) = calls[i];
+            Assert.AreSame(op.Thrown[i], args.LastException);
+            Assert.IsNull(args.Result);
+            Assert.AreEqual(TimeSpan.Zero, args.DelayBeforeRetry);
+            Assert.AreEqual(i + 1, args.AttemptNumber);
+            Assert.AreEqual(i + 2, args.NextAttemptNumber);
+
+            // The callback runs after the attempt that failed and before the next one.
+            Assert.AreEqual(i + 1, invocationsSoFar);
+        }
+    }
+
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    [DataRow(RetryShape.AsyncAction)]
+    [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
+    public async Task TheOnRetryCallbackIsNotCalledForTheFinalFailure(RetryShape shape)
+    {
+        var op = new FlakyOperation(FlakyOperation.AlwaysFails);
+        int callbacks = 0;
+
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            () => RetriableDriver.RetryAsync(
+                shape,
+                op.Invoke,
+                CancellationToken.None,
+                new Count(3),
+                new AnyExceptionPolicy(),
+                _ =>
+                {
+                    Interlocked.Increment(ref callbacks);
+                    return ValueTask.CompletedTask;
+                })).ConfigureAwait(false);
+
+        Assert.AreEqual(3, op.Invocations);
+        Assert.AreEqual(2, callbacks);
+    }
+
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    [DataRow(RetryShape.AsyncAction)]
+    [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
+    public async Task AnExceptionFromTheOnRetryCallbackStopsTheCallAndIsThrownToTheCaller(RetryShape shape)
+    {
+        var op = new FlakyOperation(FlakyOperation.AlwaysFails);
+        var callbackFailure = new FormatException("The callback failed");
+
+        FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
+            () => RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, new Count(5), new AnyExceptionPolicy(), _ => throw callbackFailure)).ConfigureAwait(false);
+
+        Assert.AreSame(callbackFailure, thrown);
+        Assert.AreEqual(1, op.Invocations);
+    }
+
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    [DataRow(RetryShape.AsyncAction)]
+    [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task WhenAStrategyInstanceIsReused_EachCallGetsAllItsTries(RetryShape shape)
     {
         var strategy = new Count(3);
@@ -303,7 +485,7 @@ public class RetriableTests
     {
         MethodInfo method = PublicRetryMethods().Single(m => Describe(m) == overload);
         object?[] arguments = method.GetParameters()
-            .Select(p => p.Name == parameterName ? null : ValidArgument(p.ParameterType))
+            .Select(p => p.Name == parameterName ? null : p.HasDefaultValue ? p.DefaultValue : ValidArgument(p.ParameterType))
             .ToArray();
 
         // The async overloads throw before returning a task, rather than returning a faulted one.
@@ -318,6 +500,8 @@ public class RetriableTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task WhenRetriesAreExhausted_TheRethrownExceptionKeepsTheStackTraceOfTheMethodThatThrewIt(RetryShape shape)
     {
         Exception thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
@@ -338,9 +522,11 @@ public class RetriableTests
             .Select(m => m.IsGenericMethodDefinition ? m.MakeGenericMethod(typeof(object)) : m);
     }
 
-    private static bool IsNullableArgument(Type type)
+    // An optional parameter, such as onRetry, accepts null.
+    private static bool IsNullableArgument(ParameterInfo parameter)
     {
-        return typeof(Delegate).IsAssignableFrom(type) || type == typeof(IRetryStrategy) || type == typeof(IRetryPolicy);
+        Type type = parameter.ParameterType;
+        return !parameter.HasDefaultValue && (typeof(Delegate).IsAssignableFrom(type) || type == typeof(IRetryStrategy) || type == typeof(IRetryPolicy));
     }
 
     private static string Describe(MethodInfo method)
@@ -399,6 +585,16 @@ public class RetriableTests
         if (type == typeof(Func<Task<object>>))
         {
             return new Func<Task<object>>(() => Task.FromResult(new object()));
+        }
+
+        if (type == typeof(Func<CancellationToken, Task>))
+        {
+            return new Func<CancellationToken, Task>(_ => Task.CompletedTask);
+        }
+
+        if (type == typeof(Func<CancellationToken, Task<object>>))
+        {
+            return new Func<CancellationToken, Task<object>>(_ => Task.FromResult(new object()));
         }
 
         throw new NotSupportedException($"No valid argument defined for {type}.");

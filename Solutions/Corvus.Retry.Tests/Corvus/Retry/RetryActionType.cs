@@ -12,4 +12,6 @@ public enum RetryActionType
     AsyncActionSpecifyingContinueContext,
     AsyncFunction,
     AsyncFunctionSpecifyingContinueContext,
+    AsyncActionWithToken,
+    AsyncFunctionWithToken,
 }

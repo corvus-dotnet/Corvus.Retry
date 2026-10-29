@@ -12,7 +12,7 @@ using Corvus.Retry.Strategies;
 
 /// <summary>
 /// Runs an operation through the <see cref="Retriable"/> overload (taking a token, strategy and policy) for a given <see cref="RetryShape"/>,
-/// so one test can assert a behaviour against all four retry loops.
+/// so one test can assert a behaviour against every shape of operation.
 /// </summary>
 internal static class RetriableDriver
 {
@@ -24,27 +24,32 @@ internal static class RetriableDriver
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <param name="strategy">The retry strategy.</param>
     /// <param name="policy">The retry policy.</param>
+    /// <param name="onRetry">
+    /// The retry callback. When it is not <see langword="null"/>, the overload that has all the parameters is used.
+    /// </param>
     /// <returns>The operation's result for the function shapes; <see langword="null"/> for the action shapes.</returns>
     /// <remarks>
     /// The asynchronous shapes yield before running the operation, so a failure faults the returned task
-    /// (as a real async method would) rather than throwing synchronously.
+    /// (as a real async method would) rather than throwing synchronously. The token shapes ignore the token that the
+    /// operation receives.
     /// </remarks>
     public static async Task<string?> RetryAsync(
         RetryShape shape,
         Func<string> operation,
         CancellationToken cancellationToken,
         IRetryStrategy strategy,
-        IRetryPolicy policy)
+        IRetryPolicy policy,
+        Func<RetryEventArgs, ValueTask>? onRetry = null)
     {
         switch (shape)
         {
             case RetryShape.Action:
                 Action action = () => operation();
-                Retriable.Retry(action, cancellationToken, strategy, policy);
+                Retriable.Retry(action, cancellationToken, strategy, policy, onRetry);
                 return null;
 
             case RetryShape.Function:
-                return Retriable.Retry(operation, cancellationToken, strategy, policy);
+                return Retriable.Retry(operation, cancellationToken, strategy, policy, onRetry);
 
             case RetryShape.AsyncAction:
                 Func<Task> asyncAction = async () =>
@@ -52,7 +57,9 @@ internal static class RetriableDriver
                     await Task.Yield();
                     operation();
                 };
-                await Retriable.RetryAsync(asyncAction, cancellationToken, strategy, policy).ConfigureAwait(false);
+                await (onRetry is null
+                    ? Retriable.RetryAsync(asyncAction, cancellationToken, strategy, policy)
+                    : Retriable.RetryAsync(asyncAction, cancellationToken, strategy, policy, false, onRetry)).ConfigureAwait(false);
                 return null;
 
             case RetryShape.AsyncFunction:
@@ -61,7 +68,30 @@ internal static class RetriableDriver
                     await Task.Yield();
                     return operation();
                 };
-                return await Retriable.RetryAsync(asyncFunction, cancellationToken, strategy, policy).ConfigureAwait(false);
+                return await (onRetry is null
+                    ? Retriable.RetryAsync(asyncFunction, cancellationToken, strategy, policy)
+                    : Retriable.RetryAsync(asyncFunction, cancellationToken, strategy, policy, false, onRetry)).ConfigureAwait(false);
+
+            case RetryShape.AsyncActionWithToken:
+                Func<CancellationToken, Task> asyncActionWithToken = async _ =>
+                {
+                    await Task.Yield();
+                    operation();
+                };
+                await (onRetry is null
+                    ? Retriable.RetryAsync(asyncActionWithToken, cancellationToken, strategy, policy)
+                    : Retriable.RetryAsync(asyncActionWithToken, cancellationToken, strategy, policy, false, onRetry)).ConfigureAwait(false);
+                return null;
+
+            case RetryShape.AsyncFunctionWithToken:
+                Func<CancellationToken, Task<string>> asyncFunctionWithToken = async _ =>
+                {
+                    await Task.Yield();
+                    return operation();
+                };
+                return await (onRetry is null
+                    ? Retriable.RetryAsync(asyncFunctionWithToken, cancellationToken, strategy, policy)
+                    : Retriable.RetryAsync(asyncFunctionWithToken, cancellationToken, strategy, policy, false, onRetry)).ConfigureAwait(false);
 
             default:
                 throw new ArgumentOutOfRangeException(nameof(shape), shape, null);

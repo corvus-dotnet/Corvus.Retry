@@ -5,7 +5,7 @@
 namespace Corvus.Retry;
 
 /// <summary>
-/// The four shapes of operation that <see cref="Retriable"/> can retry. Each has its own retry loop in the library.
+/// The shapes of operation that <see cref="Retriable"/> can retry, each through its own overload.
 /// </summary>
 public enum RetryShape
 {
@@ -20,4 +20,10 @@ public enum RetryShape
 
     /// <summary>An asynchronous <c>Func&lt;Task&lt;T&gt;&gt;</c>.</summary>
     AsyncFunction,
+
+    /// <summary>An asynchronous <c>Func&lt;CancellationToken, Task&gt;</c>.</summary>
+    AsyncActionWithToken,
+
+    /// <summary>An asynchronous <c>Func&lt;CancellationToken, Task&lt;T&gt;&gt;</c>.</summary>
+    AsyncFunctionWithToken,
 }

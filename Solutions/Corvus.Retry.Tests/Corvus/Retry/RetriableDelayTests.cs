@@ -40,6 +40,8 @@ public class RetriableDelayTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task WhenTheStrategyIsCount_NoDelayIsRequested(RetryShape shape)
     {
         var op = new FlakyOperation(2);
@@ -55,6 +57,8 @@ public class RetriableDelayTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task EveryRetryWaitsThroughTheInstalledTimeProvider(RetryShape shape)
     {
         // The synchronous loops use Thread.Sleep only with TimeProvider.System; with any other provider they wait for
@@ -73,6 +77,8 @@ public class RetriableDelayTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task TheOperationIsRetriedOnlyAfterTheDelay(RetryShape shape)
     {
         var log = new ConcurrentQueue<string>();
@@ -98,6 +104,8 @@ public class RetriableDelayTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task IncrementalDelaysAreAppliedInSequence(RetryShape shape)
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
@@ -114,6 +122,8 @@ public class RetriableDelayTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task BackoffDelaysAreAppliedAndIncrease(RetryShape shape)
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
@@ -134,6 +144,8 @@ public class RetriableDelayTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task WhenTheRetryIsAbandoned_NoDelayIsRequestedForTheFinalFailure(RetryShape shape)
     {
         TimeSpan period = TimeSpan.FromMilliseconds(100);
@@ -149,6 +161,8 @@ public class RetriableDelayTests
     [TestMethod]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task WithAFakeTimeProvider_AnAsynchronousRetryStartsOnlyWhenTheDelayHasElapsed(RetryShape shape)
     {
         var stopwatch = Stopwatch.StartNew();
@@ -156,9 +170,13 @@ public class RetriableDelayTests
         var op = new FlakyOperation(2);
 
         // The operation completes synchronously, so each delay's timer exists as soon as the failed try returns.
-        Task call = shape == RetryShape.AsyncAction
-            ? Retriable.RetryAsync(op.InvokeAsync, CancellationToken.None, new Linear(OneHour, 3), new AnyExceptionPolicy())
-            : Retriable.RetryAsync(op.InvokeAsyncReturning, CancellationToken.None, new Linear(OneHour, 3), new AnyExceptionPolicy());
+        Task call = shape switch
+        {
+            RetryShape.AsyncAction => Retriable.RetryAsync(op.InvokeAsync, CancellationToken.None, new Linear(OneHour, 3), new AnyExceptionPolicy()),
+            RetryShape.AsyncFunction => Retriable.RetryAsync(op.InvokeAsyncReturning, CancellationToken.None, new Linear(OneHour, 3), new AnyExceptionPolicy()),
+            RetryShape.AsyncActionWithToken => Retriable.RetryAsync(_ => op.InvokeAsync(), CancellationToken.None, new Linear(OneHour, 3), new AnyExceptionPolicy()),
+            _ => Retriable.RetryAsync(_ => op.InvokeAsyncReturning(), CancellationToken.None, new Linear(OneHour, 3), new AnyExceptionPolicy()),
+        };
 
         Assert.AreEqual(1, op.Invocations);
         fake.Advance(OneHour - TimeSpan.FromTicks(1));
@@ -200,6 +218,33 @@ public class RetriableDelayTests
         await call.WaitAsync(Timeout).ConfigureAwait(false);
         Assert.AreEqual(3, op.Invocations);
         Assert.AreSequenceEqual(new[] { OneHour, OneHour }, fake.Delays);
+        Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
+    }
+
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    [DataRow(RetryShape.AsyncAction)]
+    [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
+    public async Task WhenTheTokenIsCancelledDuringADelay_TheCallIsCancelledAtOnceAndNoFurtherAttemptStarts(RetryShape shape)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        RecordingFakeTimeProvider fake = TimeProviderFixture.Install(new RecordingFakeTimeProvider());
+        using var cts = new CancellationTokenSource();
+        var op = new FlakyOperation(FlakyOperation.AlwaysFails);
+
+        // The synchronous shapes block their thread for the delay, so every shape runs on the thread pool. The test
+        // waits until the delay's timer exists before it cancels.
+        Task call = Task.Run(() => RetriableDriver.RetryAsync(shape, op.Invoke, cts.Token, new Linear(OneHour, 3), new AnyExceptionPolicy()));
+
+        await fake.WaitForTimersAsync(1).ConfigureAwait(false);
+        await cts.CancelAsync().ConfigureAwait(false);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(Timeout)).ConfigureAwait(false);
+        fake.Advance(OneHour);
+        Assert.AreEqual(1, op.Invocations);
         Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
     }
 

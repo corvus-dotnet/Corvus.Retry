@@ -23,6 +23,11 @@ using Corvus.Retry.Strategies;
 /// <item><see cref="ReliableTaskRunner"/> -wrapping a long-running asynchronous operation in a host that ensures it continues to run even after failure. You can use <see cref="IRetryPolicy"/> to control when the task restarts.</item>
 /// </list>
 /// </para>
+/// <para>
+/// The overloads that take a cancellation token check it before each attempt, so an attempt never starts after the
+/// token is cancelled, and the token also stops a delay between attempts. Either way, the call throws an
+/// <see cref="OperationCanceledException"/>. A cancellation that the token caused is never retried.
+/// </para>
 /// </remarks>
 public static class Retriable
 {
@@ -36,7 +41,7 @@ public static class Retriable
     {
         ArgumentNullException.ThrowIfNull(func);
 
-        return Retry(func, CancellationToken.None, RetryStrategies.Default, AnyExceptionPolicy.Default);
+        return Run<RetryOperations.FuncOperation<T>, T>(new(func), CancellationToken.None, RetryStrategies.Default, AnyExceptionPolicy.Default, null);
     }
 
     /// <summary>
@@ -50,7 +55,7 @@ public static class Retriable
     {
         ArgumentNullException.ThrowIfNull(asyncFunc);
 
-        return RetryAsync(asyncFunc, false);
+        return RunAsync<RetryOperations.TaskOperation<T>, T>(new(asyncFunc), CancellationToken.None, RetryStrategies.Default, AnyExceptionPolicy.Default, false, null);
     }
 
     /// <summary>
@@ -64,7 +69,7 @@ public static class Retriable
     {
         ArgumentNullException.ThrowIfNull(asyncFunc);
 
-        return RetryAsync(asyncFunc, CancellationToken.None, RetryStrategies.Default, AnyExceptionPolicy.Default, continueOnCapturedContext);
+        return RunAsync<RetryOperations.TaskOperation<T>, T>(new(asyncFunc), CancellationToken.None, RetryStrategies.Default, AnyExceptionPolicy.Default, continueOnCapturedContext, null);
     }
 
     /// <summary>
@@ -75,7 +80,7 @@ public static class Retriable
     {
         ArgumentNullException.ThrowIfNull(func);
 
-        Retry(func, CancellationToken.None, RetryStrategies.Default, AnyExceptionPolicy.Default);
+        Run<RetryOperations.ActionOperation, Unit>(new(func), CancellationToken.None, RetryStrategies.Default, AnyExceptionPolicy.Default, null);
     }
 
     /// <summary>
@@ -83,11 +88,12 @@ public static class Retriable
     /// </summary>
     /// <param name="func">The function to retry.</param>
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
+    /// <exception cref="OperationCanceledException">The token was cancelled.</exception>
     public static void Retry(Action func, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(func);
 
-        Retry(func, cancellationToken, RetryStrategies.Default, AnyExceptionPolicy.Default);
+        Run<RetryOperations.ActionOperation, Unit>(new(func), cancellationToken, RetryStrategies.Default, AnyExceptionPolicy.Default, null);
     }
 
     /// <summary>
@@ -100,7 +106,7 @@ public static class Retriable
     {
         ArgumentNullException.ThrowIfNull(asyncFunc);
 
-        return RetryAsync(asyncFunc, false);
+        return RunAsync(new RetryOperations.TaskUnitOperation(asyncFunc), CancellationToken.None, RetryStrategies.Default, AnyExceptionPolicy.Default, false, null);
     }
 
     /// <summary>
@@ -114,7 +120,7 @@ public static class Retriable
     {
         ArgumentNullException.ThrowIfNull(asyncFunc);
 
-        return RetryAsync(asyncFunc, cancellationToken, RetryStrategies.Default, AnyExceptionPolicy.Default);
+        return RunAsync(new RetryOperations.TaskUnitOperation(asyncFunc), cancellationToken, RetryStrategies.Default, AnyExceptionPolicy.Default, false, null);
     }
 
     /// <summary>
@@ -127,7 +133,7 @@ public static class Retriable
     {
         ArgumentNullException.ThrowIfNull(asyncFunc);
 
-        return RetryAsync(asyncFunc, CancellationToken.None, RetryStrategies.Default, AnyExceptionPolicy.Default, continueOnCapturedContext);
+        return RunAsync(new RetryOperations.TaskUnitOperation(asyncFunc), CancellationToken.None, RetryStrategies.Default, AnyExceptionPolicy.Default, continueOnCapturedContext, null);
     }
 
     /// <summary>
@@ -138,31 +144,19 @@ public static class Retriable
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
     /// <param name="strategy">The retry strategy to use.</param>
     /// <param name="policy">The retry policy to use.</param>
+    /// <param name="onRetry">
+    /// An optional callback that is called before the delay of each retry. It is not called for the final failure. If
+    /// it returns a task that is not complete, the thread waits for it. An exception from the callback stops the retries.
+    /// </param>
     /// <returns>The result of the function.</returns>
-    public static T Retry<T>(Func<T> func, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy)
+    /// <exception cref="OperationCanceledException">The token was cancelled.</exception>
+    public static T Retry<T>(Func<T> func, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, Func<RetryEventArgs, ValueTask>? onRetry = null)
     {
         ArgumentNullException.ThrowIfNull(func);
         ArgumentNullException.ThrowIfNull(strategy);
         ArgumentNullException.ThrowIfNull(policy);
 
-        TimeSpan previousDelay = TimeSpan.Zero;
-        for (int attempt = 1; ; attempt++)
-        {
-            try
-            {
-                return func();
-            }
-            catch (Exception exception)
-            {
-                if (GetRetryDelay(exception, attempt, previousDelay, cancellationToken, strategy, policy) is not TimeSpan delay)
-                {
-                    throw;
-                }
-
-                RetryDelay.Wait(delay, RetryDefaults.TimeProvider, CancellationToken.None);
-                previousDelay = delay;
-            }
-        }
+        return Run<RetryOperations.FuncOperation<T>, T>(new(func), cancellationToken, strategy, policy, onRetry);
     }
 
     /// <summary>
@@ -181,7 +175,7 @@ public static class Retriable
         ArgumentNullException.ThrowIfNull(strategy);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return RetryAsync(asyncFunc, cancellationToken, strategy, policy, false);
+        return RunAsync<RetryOperations.TaskOperation<T>, T>(new(asyncFunc), cancellationToken, strategy, policy, false, null);
     }
 
     /// <summary>
@@ -196,7 +190,7 @@ public static class Retriable
     {
         ArgumentNullException.ThrowIfNull(asyncFunc);
 
-        return RetryAsync(asyncFunc, cancellationToken, RetryStrategies.Default, AnyExceptionPolicy.Default, false);
+        return RunAsync<RetryOperations.TaskOperation<T>, T>(new(asyncFunc), cancellationToken, RetryStrategies.Default, AnyExceptionPolicy.Default, false, null);
     }
 
     /// <summary>
@@ -208,14 +202,81 @@ public static class Retriable
     /// <param name="strategy">The retry strategy.</param>
     /// <param name="policy">The retry policy.</param>
     /// <param name="continueOnCapturedContext">Determines whether to continue on the captured context or not.</param>
+    /// <param name="onRetry">
+    /// An optional callback that is called, and awaited, before the delay of each retry. It is not called for the final
+    /// failure. An exception from the callback stops the retries.
+    /// </param>
     /// <returns>A task which, when complete, provides the result of the function.</returns>
-    public static Task<T> RetryAsync<T>(Func<Task<T>> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext)
+    public static Task<T> RetryAsync<T>(Func<Task<T>> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext, Func<RetryEventArgs, ValueTask>? onRetry = null)
     {
         ArgumentNullException.ThrowIfNull(asyncFunc);
         ArgumentNullException.ThrowIfNull(strategy);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return RetryCoreAsync(asyncFunc, cancellationToken, strategy, policy, continueOnCapturedContext);
+        return RunAsync<RetryOperations.TaskOperation<T>, T>(new(asyncFunc), cancellationToken, strategy, policy, continueOnCapturedContext, onRetry);
+    }
+
+    /// <summary>
+    /// Retries an asynchronous operation that takes a cancellation token.
+    /// </summary>
+    /// <typeparam name="T">The return type of the function to retry.</typeparam>
+    /// <param name="asyncFunc">
+    /// The asynchronous function to retry. It receives a token that is cancelled when <paramref name="cancellationToken"/> is cancelled.
+    /// </param>
+    /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
+    /// <returns>A task which, when complete, provides the result of the function.</returns>
+    /// <remarks>This function does not continue on the captured context. See the overload if you want to override this default behaviour.</remarks>
+    public static Task<T> RetryAsync<T>(Func<CancellationToken, Task<T>> asyncFunc, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(asyncFunc);
+
+        return RunAsync<RetryOperations.TaskTokenOperation<T>, T>(new(asyncFunc), cancellationToken, RetryStrategies.Default, AnyExceptionPolicy.Default, false, null);
+    }
+
+    /// <summary>
+    /// Retries an asynchronous operation that takes a cancellation token.
+    /// </summary>
+    /// <typeparam name="T">The return type of the function to retry.</typeparam>
+    /// <param name="asyncFunc">
+    /// The asynchronous function to retry. It receives a token that is cancelled when <paramref name="cancellationToken"/> is cancelled.
+    /// </param>
+    /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
+    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="policy">The retry policy.</param>
+    /// <returns>A task which, when complete, provides the result of the function.</returns>
+    /// <remarks>This function does not continue on the captured context. See the overload if you want to override this default behaviour.</remarks>
+    public static Task<T> RetryAsync<T>(Func<CancellationToken, Task<T>> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(asyncFunc);
+        ArgumentNullException.ThrowIfNull(strategy);
+        ArgumentNullException.ThrowIfNull(policy);
+
+        return RunAsync<RetryOperations.TaskTokenOperation<T>, T>(new(asyncFunc), cancellationToken, strategy, policy, false, null);
+    }
+
+    /// <summary>
+    /// Retries an asynchronous operation that takes a cancellation token.
+    /// </summary>
+    /// <typeparam name="T">The return type of the function to retry.</typeparam>
+    /// <param name="asyncFunc">
+    /// The asynchronous function to retry. It receives a token that is cancelled when <paramref name="cancellationToken"/> is cancelled.
+    /// </param>
+    /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
+    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="policy">The retry policy.</param>
+    /// <param name="continueOnCapturedContext">Determines whether to continue on the captured context or not.</param>
+    /// <param name="onRetry">
+    /// An optional callback that is called, and awaited, before the delay of each retry. It is not called for the final
+    /// failure. An exception from the callback stops the retries.
+    /// </param>
+    /// <returns>A task which, when complete, provides the result of the function.</returns>
+    public static Task<T> RetryAsync<T>(Func<CancellationToken, Task<T>> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext, Func<RetryEventArgs, ValueTask>? onRetry = null)
+    {
+        ArgumentNullException.ThrowIfNull(asyncFunc);
+        ArgumentNullException.ThrowIfNull(strategy);
+        ArgumentNullException.ThrowIfNull(policy);
+
+        return RunAsync<RetryOperations.TaskTokenOperation<T>, T>(new(asyncFunc), cancellationToken, strategy, policy, continueOnCapturedContext, onRetry);
     }
 
     /// <summary>
@@ -225,32 +286,18 @@ public static class Retriable
     /// <param name="cancellationToken">The token with which cancellation is signalled.</param>
     /// <param name="strategy">The retry strategy.</param>
     /// <param name="policy">The retry policy.</param>
-    /// <remarks>This function does not continue on the captured context. See the overload if you want to override this default behaviour.</remarks>
-    public static void Retry(Action func, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy)
+    /// <param name="onRetry">
+    /// An optional callback that is called before the delay of each retry. It is not called for the final failure. If
+    /// it returns a task that is not complete, the thread waits for it. An exception from the callback stops the retries.
+    /// </param>
+    /// <exception cref="OperationCanceledException">The token was cancelled.</exception>
+    public static void Retry(Action func, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, Func<RetryEventArgs, ValueTask>? onRetry = null)
     {
         ArgumentNullException.ThrowIfNull(func);
         ArgumentNullException.ThrowIfNull(strategy);
         ArgumentNullException.ThrowIfNull(policy);
 
-        TimeSpan previousDelay = TimeSpan.Zero;
-        for (int attempt = 1; ; attempt++)
-        {
-            try
-            {
-                func();
-                return;
-            }
-            catch (Exception exception)
-            {
-                if (GetRetryDelay(exception, attempt, previousDelay, cancellationToken, strategy, policy) is not TimeSpan delay)
-                {
-                    throw;
-                }
-
-                RetryDelay.Wait(delay, RetryDefaults.TimeProvider, CancellationToken.None);
-                previousDelay = delay;
-            }
-        }
+        Run<RetryOperations.ActionOperation, Unit>(new(func), cancellationToken, strategy, policy, onRetry);
     }
 
     /// <summary>
@@ -268,7 +315,7 @@ public static class Retriable
         ArgumentNullException.ThrowIfNull(strategy);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return RetryAsync(asyncFunc, cancellationToken, strategy, policy, false);
+        return RunAsync(new RetryOperations.TaskUnitOperation(asyncFunc), cancellationToken, strategy, policy, false, null);
     }
 
     /// <summary>
@@ -279,99 +326,100 @@ public static class Retriable
     /// <param name="strategy">The retry strategy.</param>
     /// <param name="policy">The retry policy.</param>
     /// <param name="continueOnCapturedContext">Whether to continue on the captured context.</param>
+    /// <param name="onRetry">
+    /// An optional callback that is called, and awaited, before the delay of each retry. It is not called for the final
+    /// failure. An exception from the callback stops the retries.
+    /// </param>
     /// <returns>A task which completes when the operation completes.</returns>
-    public static Task RetryAsync(Func<Task> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext)
+    public static Task RetryAsync(Func<Task> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext, Func<RetryEventArgs, ValueTask>? onRetry = null)
     {
         ArgumentNullException.ThrowIfNull(asyncFunc);
         ArgumentNullException.ThrowIfNull(strategy);
         ArgumentNullException.ThrowIfNull(policy);
 
-        return RetryCoreAsync(asyncFunc, cancellationToken, strategy, policy, continueOnCapturedContext);
-    }
-
-    // The arguments are validated by the public overloads, so that a null argument throws before a task is created.
-    // This is the same loop as RetryCoreAsync<T>. It is kept separate, rather than adapting the operation to return
-    // a value, because the adapter would allocate a closure and a delegate on every call.
-    private static async Task RetryCoreAsync(Func<Task> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext)
-    {
-        TimeSpan previousDelay = TimeSpan.Zero;
-        for (int attempt = 1; ; attempt++)
-        {
-            TimeSpan delay;
-
-            try
-            {
-                await asyncFunc().ConfigureAwait(continueOnCapturedContext);
-                return;
-            }
-            catch (Exception exception)
-            {
-                if (GetRetryDelay(exception, attempt, previousDelay, cancellationToken, strategy, policy) is not TimeSpan retryDelay)
-                {
-                    // Rethrow from inside the catch block so that the exception keeps its original stack trace.
-                    throw;
-                }
-
-                delay = retryDelay;
-            }
-
-            if (delay != TimeSpan.Zero)
-            {
-                await RetryDelay.WaitAsync(delay, RetryDefaults.TimeProvider, CancellationToken.None).ConfigureAwait(continueOnCapturedContext);
-            }
-
-            previousDelay = delay;
-        }
-    }
-
-    // The arguments are validated by the public overloads, so that a null argument throws before a task is created.
-    private static async Task<T> RetryCoreAsync<T>(Func<Task<T>> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext)
-    {
-        TimeSpan previousDelay = TimeSpan.Zero;
-        for (int attempt = 1; ; attempt++)
-        {
-            TimeSpan delay;
-
-            try
-            {
-                return await asyncFunc().ConfigureAwait(continueOnCapturedContext);
-            }
-            catch (Exception exception)
-            {
-                if (GetRetryDelay(exception, attempt, previousDelay, cancellationToken, strategy, policy) is not TimeSpan retryDelay)
-                {
-                    // Rethrow from inside the catch block so that the exception keeps its original stack trace.
-                    throw;
-                }
-
-                delay = retryDelay;
-            }
-
-            if (delay != TimeSpan.Zero)
-            {
-                await RetryDelay.WaitAsync(delay, RetryDefaults.TimeProvider, CancellationToken.None).ConfigureAwait(continueOnCapturedContext);
-            }
-
-            previousDelay = delay;
-        }
+        return RunAsync(new RetryOperations.TaskUnitOperation(asyncFunc), cancellationToken, strategy, policy, continueOnCapturedContext, onRetry);
     }
 
     /// <summary>
-    /// Decides whether to retry after a failed attempt.
+    /// Retries an asynchronous operation that takes a cancellation token.
     /// </summary>
-    /// <returns>
-    /// The delay before the next attempt, limited to the range a timer supports; or <see langword="null"/> if the
-    /// strategy or the policy refuses the retry, or cancellation was requested.
-    /// </returns>
-    private static TimeSpan? GetRetryDelay(Exception exception, int attempt, TimeSpan previousDelay, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy)
+    /// <param name="asyncFunc">
+    /// The asynchronous function to retry. It receives a token that is cancelled when <paramref name="cancellationToken"/> is cancelled.
+    /// </param>
+    /// <param name="cancellationToken">The token with which to signal cancellation.</param>
+    /// <returns>A task which completes when the operation is complete.</returns>
+    /// <remarks>This function does not continue on the captured context. See the overload if you want to override this default behaviour.</remarks>
+    public static Task RetryAsync(Func<CancellationToken, Task> asyncFunc, CancellationToken cancellationToken)
     {
-        TimeSpan? delay = strategy.GetRetryDelay(new RetryAttempt(attempt, exception, null, previousDelay));
+        ArgumentNullException.ThrowIfNull(asyncFunc);
 
-        if (delay is null || cancellationToken.IsCancellationRequested || !policy.CanRetry(exception))
-        {
-            return null;
-        }
+        return RunAsync(new RetryOperations.TaskTokenUnitOperation(asyncFunc), cancellationToken, RetryStrategies.Default, AnyExceptionPolicy.Default, false, null);
+    }
 
-        return RetryDelay.Clamp(delay.Value);
+    /// <summary>
+    /// Retries an asynchronous operation that takes a cancellation token.
+    /// </summary>
+    /// <param name="asyncFunc">
+    /// The asynchronous function to retry. It receives a token that is cancelled when <paramref name="cancellationToken"/> is cancelled.
+    /// </param>
+    /// <param name="cancellationToken">The token with which to signal cancellation.</param>
+    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="policy">The retry policy.</param>
+    /// <returns>A task which completes when the operation is complete.</returns>
+    /// <remarks>This function does not continue on the captured context. See the overload if you want to override this default behaviour.</remarks>
+    public static Task RetryAsync(Func<CancellationToken, Task> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(asyncFunc);
+        ArgumentNullException.ThrowIfNull(strategy);
+        ArgumentNullException.ThrowIfNull(policy);
+
+        return RunAsync(new RetryOperations.TaskTokenUnitOperation(asyncFunc), cancellationToken, strategy, policy, false, null);
+    }
+
+    /// <summary>
+    /// Retries an asynchronous operation that takes a cancellation token.
+    /// </summary>
+    /// <param name="asyncFunc">
+    /// The asynchronous function to retry. It receives a token that is cancelled when <paramref name="cancellationToken"/> is cancelled.
+    /// </param>
+    /// <param name="cancellationToken">The token with which to signal cancellation.</param>
+    /// <param name="strategy">The retry strategy.</param>
+    /// <param name="policy">The retry policy.</param>
+    /// <param name="continueOnCapturedContext">Whether to continue on the captured context.</param>
+    /// <param name="onRetry">
+    /// An optional callback that is called, and awaited, before the delay of each retry. It is not called for the final
+    /// failure. An exception from the callback stops the retries.
+    /// </param>
+    /// <returns>A task which completes when the operation completes.</returns>
+    public static Task RetryAsync(Func<CancellationToken, Task> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext, Func<RetryEventArgs, ValueTask>? onRetry = null)
+    {
+        ArgumentNullException.ThrowIfNull(asyncFunc);
+        ArgumentNullException.ThrowIfNull(strategy);
+        ArgumentNullException.ThrowIfNull(policy);
+
+        return RunAsync(new RetryOperations.TaskTokenUnitOperation(asyncFunc), cancellationToken, strategy, policy, continueOnCapturedContext, onRetry);
+    }
+
+    // The public overloads validate the arguments, so that a null argument throws before a task is created.
+    // Retriable has no timeouts, so the engine creates no cancellation source for a call.
+    private static T Run<TOp, T>(TOp operation, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, Func<RetryEventArgs, ValueTask>? onRetry)
+        where TOp : struct, IRetrySyncOperation<T>
+    {
+        return RetryEngine.Run<TOp, T>(operation, cancellationToken, strategy, policy, RetryDefaults.TimeProvider, onRetry);
+    }
+
+    private static Task<T> RunAsync<TOp, T>(TOp operation, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext, Func<RetryEventArgs, ValueTask>? onRetry)
+        where TOp : struct, IRetryOperation<T>
+    {
+        return RetryEngine.RunAsync<TOp, T>(operation, cancellationToken, strategy, policy, RetryDefaults.TimeProvider, null, null, onRetry, continueOnCapturedContext).AsTask();
+    }
+
+    private static Task RunAsync<TOp>(TOp operation, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext, Func<RetryEventArgs, ValueTask>? onRetry)
+        where TOp : struct, IRetryOperation<Unit>
+    {
+        ValueTask<Unit> run = RetryEngine.RunAsync<TOp, Unit>(operation, cancellationToken, strategy, policy, RetryDefaults.TimeProvider, null, null, onRetry, continueOnCapturedContext);
+
+        // A call that completed synchronously needs no task of its own. Otherwise the engine's task is returned as it is.
+        return run.IsCompletedSuccessfully ? Task.CompletedTask : run.AsTask();
     }
 }

@@ -1,0 +1,317 @@
+// <copyright file="RetryEngine.cs" company="Endjin Limited">
+// Copyright (c) Endjin Limited. All rights reserved.
+// </copyright>
+
+namespace Corvus.Retry;
+
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+
+using Corvus.Retry.Policies;
+using Corvus.Retry.Strategies;
+
+/// <summary>
+/// The retry loops that every retry API runs.
+/// </summary>
+/// <remarks>
+/// <para>
+/// A call has its own state: the attempt number, the previous delay, and the cancellation sources for its timeouts.
+/// The strategy and the policy hold no state for a call, so many calls can share them.
+/// </para>
+/// <para>
+/// When there is no timeout and no callback, and every attempt completes synchronously, a call allocates nothing.
+/// </para>
+/// </remarks>
+internal static class RetryEngine
+{
+    private static readonly Action<object?> CancelSource = static s => ((CancellationTokenSource)s!).Cancel();
+
+    /// <summary>
+    /// Runs an asynchronous operation, and retries it when it fails.
+    /// </summary>
+    /// <typeparam name="TOp">The type of the adapter for the operation.</typeparam>
+    /// <typeparam name="T">The type of the result of the operation.</typeparam>
+    /// <param name="operation">The operation.</param>
+    /// <param name="caller">The caller's token. Its cancellation stops the call with an <see cref="OperationCanceledException"/>.</param>
+    /// <param name="strategy">The strategy that decides whether to retry, and the delay before the retry.</param>
+    /// <param name="policy">The policy that decides whether an exception can be retried.</param>
+    /// <param name="timeProvider">The time provider for the delays and the timeouts.</param>
+    /// <param name="attemptTimeout">
+    /// The time limit for each attempt, or <see langword="null"/> for no limit. It must be greater than zero and not
+    /// greater than <see cref="RetryDelay.MaxSupported"/>.
+    /// </param>
+    /// <param name="totalTimeout">
+    /// The time limit for all the attempts and all the delays, or <see langword="null"/> for no limit. It must be greater
+    /// than zero and not greater than <see cref="RetryDelay.MaxSupported"/>.
+    /// </param>
+    /// <param name="onRetry">A callback that the engine awaits before each delay, or <see langword="null"/>.</param>
+    /// <param name="continueOnCapturedContext">Determines whether to continue on the captured context after each await.</param>
+    /// <returns>The result of the first attempt that succeeds, or the last result that the operation marks as a failure.</returns>
+    /// <exception cref="OperationCanceledException">The caller's token was cancelled.</exception>
+    /// <exception cref="RetryTimeoutException">
+    /// The total timeout expired, or the last attempt timed out and was not retried.
+    /// </exception>
+    /// <remarks>
+    /// When the strategy or the policy refuses a retry, the exception of the last attempt is rethrown with its
+    /// original stack trace. An exception from <paramref name="onRetry"/> stops the call.
+    /// </remarks>
+    internal static async ValueTask<T> RunAsync<TOp, T>(
+        TOp operation,
+        CancellationToken caller,
+        IRetryStrategy strategy,
+        IRetryPolicy policy,
+        TimeProvider timeProvider,
+        TimeSpan? attemptTimeout,
+        TimeSpan? totalTimeout,
+        Func<RetryEventArgs, ValueTask>? onRetry,
+        bool continueOnCapturedContext)
+        where TOp : struct, IRetryOperation<T>
+    {
+        // The total timeout cancels the token that every attempt and every delay uses. The caller's token cancels it too.
+        CancellationTokenSource? totalCts = null;
+        CancellationTokenRegistration totalRegistration = default;
+        CancellationToken outer = caller;
+        TimeSpan total = totalTimeout.GetValueOrDefault();
+        if (totalTimeout.HasValue)
+        {
+            totalCts = new CancellationTokenSource(total, timeProvider);
+            totalRegistration = caller.UnsafeRegister(CancelSource, totalCts);
+            outer = totalCts.Token;
+        }
+
+        try
+        {
+            TimeSpan previousDelay = TimeSpan.Zero;
+            for (int attempt = 1; ; attempt++)
+            {
+                caller.ThrowIfCancellationRequested();
+                ThrowIfTotalTimeoutExpired(totalCts, total);
+
+                // The attempt timeout is linked to the outer token, so that the total timeout also cancels the attempt.
+                CancellationTokenSource? attemptCts = null;
+                CancellationTokenRegistration attemptRegistration = default;
+                CancellationToken token = outer;
+                if (attemptTimeout is TimeSpan timeout)
+                {
+                    attemptCts = new CancellationTokenSource(timeout, timeProvider);
+                    attemptRegistration = outer.UnsafeRegister(CancelSource, attemptCts);
+                    token = attemptCts.Token;
+                }
+
+                T result = default!;
+                Exception? failure = null;
+                TimeSpan delay = TimeSpan.Zero;
+                try
+                {
+                    result = await operation.InvokeAsync(token).ConfigureAwait(continueOnCapturedContext);
+                }
+                catch (Exception exception)
+                {
+                    failure = exception;
+                    if (exception is OperationCanceledException cancellation)
+                    {
+                        switch (Classify(caller, totalCts, attemptCts))
+                        {
+                            case CancellationCause.Caller:
+                                throw;
+
+                            case CancellationCause.TotalTimeout:
+                                throw new RetryTimeoutException(total, cancellation);
+
+                            case CancellationCause.AttemptTimeout:
+                                failure = new RetryTimeoutException(attemptTimeout.GetValueOrDefault(), cancellation);
+                                break;
+
+                            default:
+                                // The operation cancelled itself. The strategy and the policy decide, as for any exception.
+                                break;
+                        }
+                    }
+
+                    // The policy is not consulted when the strategy has no retries left.
+                    if (strategy.GetRetryDelay(new RetryAttempt(attempt, failure, null, previousDelay)) is not TimeSpan retryDelay
+                        || !policy.CanRetry(failure))
+                    {
+                        if (ReferenceEquals(failure, exception))
+                        {
+                            // Rethrow from inside the catch block so that the exception keeps its original stack trace.
+                            throw;
+                        }
+
+                        throw failure;
+                    }
+
+                    delay = RetryDelay.Clamp(retryDelay);
+                }
+                finally
+                {
+                    // Dispose the registration first, so that the outer token cannot cancel a disposed source.
+                    attemptRegistration.Dispose();
+                    attemptCts?.Dispose();
+                }
+
+                if (failure is null)
+                {
+                    // When the strategy has no retries left for a result that is a failure, the caller gets that result.
+                    if (!operation.IsFailure(result)
+                        || strategy.GetRetryDelay(new RetryAttempt(attempt, null, result, previousDelay)) is not TimeSpan retryDelay)
+                    {
+                        return result;
+                    }
+
+                    delay = RetryDelay.Clamp(retryDelay);
+                }
+
+                // Do not report a retry that will not run.
+                caller.ThrowIfCancellationRequested();
+                ThrowIfTotalTimeoutExpired(totalCts, total);
+
+                if (onRetry is not null)
+                {
+                    await onRetry(new RetryEventArgs(failure, failure is null ? (object?)result : null, delay, attempt)).ConfigureAwait(continueOnCapturedContext);
+                }
+
+                if (failure is null && result is IDisposable disposable)
+                {
+                    // The result is not returned to the caller, so release it after the callback has seen it.
+                    disposable.Dispose();
+                }
+
+                if (delay > TimeSpan.Zero)
+                {
+                    try
+                    {
+                        await RetryDelay.WaitAsync(delay, timeProvider, outer).ConfigureAwait(continueOnCapturedContext);
+                    }
+                    catch (OperationCanceledException cancellation) when (!caller.IsCancellationRequested && totalCts is not null)
+                    {
+                        // Only the caller's token and the total timeout can cancel the outer token.
+                        throw new RetryTimeoutException(total, cancellation);
+                    }
+                }
+
+                previousDelay = delay;
+            }
+        }
+        finally
+        {
+            totalRegistration.Dispose();
+            totalCts?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Runs a synchronous operation, and retries it when it fails.
+    /// </summary>
+    /// <typeparam name="TOp">The type of the adapter for the operation.</typeparam>
+    /// <typeparam name="T">The type of the result of the operation.</typeparam>
+    /// <param name="operation">The operation.</param>
+    /// <param name="caller">The caller's token. Its cancellation stops the call with an <see cref="OperationCanceledException"/>.</param>
+    /// <param name="strategy">The strategy that decides whether to retry, and the delay before the retry.</param>
+    /// <param name="policy">The policy that decides whether an exception can be retried.</param>
+    /// <param name="timeProvider">The time provider for the delays.</param>
+    /// <param name="onRetry">
+    /// A callback that the engine calls before each delay, or <see langword="null"/>. If the callback returns a task
+    /// that is not complete, the thread waits for it.
+    /// </param>
+    /// <returns>The result of the first attempt that succeeds.</returns>
+    /// <exception cref="OperationCanceledException">The caller's token was cancelled.</exception>
+    /// <remarks>
+    /// This loop blocks the thread for each delay. It never waits on an asynchronous delay.
+    /// </remarks>
+    internal static T Run<TOp, T>(
+        TOp operation,
+        CancellationToken caller,
+        IRetryStrategy strategy,
+        IRetryPolicy policy,
+        TimeProvider timeProvider,
+        Func<RetryEventArgs, ValueTask>? onRetry)
+        where TOp : struct, IRetrySyncOperation<T>
+    {
+        TimeSpan previousDelay = TimeSpan.Zero;
+        for (int attempt = 1; ; attempt++)
+        {
+            caller.ThrowIfCancellationRequested();
+
+            Exception failure;
+            TimeSpan delay;
+            try
+            {
+                return operation.Invoke();
+            }
+            catch (Exception exception)
+            {
+                // A cancellation that the caller caused is never retried. The policy is not consulted when the
+                // strategy has no retries left.
+                if ((exception is OperationCanceledException && caller.IsCancellationRequested)
+                    || strategy.GetRetryDelay(new RetryAttempt(attempt, exception, null, previousDelay)) is not TimeSpan retryDelay
+                    || !policy.CanRetry(exception))
+                {
+                    // Rethrow from inside the catch block so that the exception keeps its original stack trace.
+                    throw;
+                }
+
+                failure = exception;
+                delay = RetryDelay.Clamp(retryDelay);
+            }
+
+            // Do not report a retry that will not run.
+            caller.ThrowIfCancellationRequested();
+
+            if (onRetry is not null)
+            {
+                ValueTask callback = onRetry(new RetryEventArgs(failure, null, delay, attempt));
+                if (callback.IsCompletedSuccessfully)
+                {
+                    callback.GetAwaiter().GetResult();
+                }
+                else
+                {
+                    callback.AsTask().GetAwaiter().GetResult();
+                }
+            }
+
+            RetryDelay.Wait(delay, timeProvider, caller);
+            previousDelay = delay;
+        }
+    }
+
+    /// <summary>
+    /// Finds the source that cancelled an attempt.
+    /// </summary>
+    /// <param name="caller">The caller's token.</param>
+    /// <param name="total">The source for the total timeout, or <see langword="null"/> if there is none.</param>
+    /// <param name="attempt">The source for the attempt timeout, or <see langword="null"/> if there is none.</param>
+    /// <returns>
+    /// The first cancelled source, in this sequence: the caller, the total timeout, the attempt timeout. When two
+    /// sources are cancelled at the same instant, the first in the sequence wins.
+    /// </returns>
+    internal static CancellationCause Classify(CancellationToken caller, CancellationTokenSource? total, CancellationTokenSource? attempt)
+    {
+        if (caller.IsCancellationRequested)
+        {
+            return CancellationCause.Caller;
+        }
+
+        if (total is { IsCancellationRequested: true })
+        {
+            return CancellationCause.TotalTimeout;
+        }
+
+        if (attempt is { IsCancellationRequested: true })
+        {
+            return CancellationCause.AttemptTimeout;
+        }
+
+        return CancellationCause.None;
+    }
+
+    private static void ThrowIfTotalTimeoutExpired(CancellationTokenSource? totalCts, TimeSpan total)
+    {
+        if (totalCts is { IsCancellationRequested: true })
+        {
+            throw new RetryTimeoutException(total);
+        }
+    }
+}

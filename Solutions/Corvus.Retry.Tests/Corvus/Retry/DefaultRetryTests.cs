@@ -5,6 +5,7 @@
 namespace Corvus.Retry;
 
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -25,6 +26,8 @@ public class DefaultRetryTests
     [DataRow(RetryActionType.AsyncActionSpecifyingContinueContext)]
     [DataRow(RetryActionType.AsyncFunction)]
     [DataRow(RetryActionType.AsyncFunctionSpecifyingContinueContext)]
+    [DataRow(RetryActionType.AsyncActionWithToken)]
+    [DataRow(RetryActionType.AsyncFunctionWithToken)]
     public async Task ActionSucceedsFirstTime(RetryActionType actionType)
     {
         await this.InvokeAsync(actionType, this.MakeOperation(0)).ConfigureAwait(false);
@@ -39,6 +42,8 @@ public class DefaultRetryTests
     [DataRow(RetryActionType.AsyncActionSpecifyingContinueContext)]
     [DataRow(RetryActionType.AsyncFunction)]
     [DataRow(RetryActionType.AsyncFunctionSpecifyingContinueContext)]
+    [DataRow(RetryActionType.AsyncActionWithToken)]
+    [DataRow(RetryActionType.AsyncFunctionWithToken)]
     public async Task ActionSucceedsAfterFailures(RetryActionType actionType)
     {
         await this.InvokeAsync(actionType, this.MakeOperation(3)).ConfigureAwait(false);
@@ -51,6 +56,7 @@ public class DefaultRetryTests
             case RetryActionType.Function:
             case RetryActionType.AsyncFunction:
             case RetryActionType.AsyncFunctionSpecifyingContinueContext:
+            case RetryActionType.AsyncFunctionWithToken:
                 Assert.IsNotNull(this.lastObjectReturnedByFunction);
                 Assert.AreSame(this.lastObjectReturnedByFunction, this.retryResult);
                 break;
@@ -64,6 +70,8 @@ public class DefaultRetryTests
     [DataRow(RetryActionType.AsyncActionSpecifyingContinueContext)]
     [DataRow(RetryActionType.AsyncFunction)]
     [DataRow(RetryActionType.AsyncFunctionSpecifyingContinueContext)]
+    [DataRow(RetryActionType.AsyncActionWithToken)]
+    [DataRow(RetryActionType.AsyncFunctionWithToken)]
     public async Task ValidateOperationArgument(RetryActionType actionType)
     {
         await Assert.ThrowsExactlyAsync<ArgumentNullException>(() => this.InvokeAsync(actionType, null)).ConfigureAwait(false);
@@ -90,6 +98,8 @@ public class DefaultRetryTests
         Action? action = null;
         Func<Task>? asyncAction = null;
         Func<Task<object>>? asyncFunction = null;
+        Func<CancellationToken, Task>? asyncActionWithToken = null;
+        Func<CancellationToken, Task<object>>? asyncFunctionWithToken = null;
         if (function != null)
         {
             action = () => function();
@@ -99,6 +109,8 @@ public class DefaultRetryTests
                 return Task.CompletedTask;
             };
             asyncFunction = () => Task.FromResult(function());
+            asyncActionWithToken = _ => asyncAction();
+            asyncFunctionWithToken = _ => asyncFunction();
         }
 
         // This code is used when testing the case where the operation is null, therefore the null forgiving
@@ -122,6 +134,12 @@ public class DefaultRetryTests
                 break;
             case RetryActionType.AsyncFunctionSpecifyingContinueContext:
                 this.retryResult = await Retriable.RetryAsync(asyncFunction!, false).ConfigureAwait(false);
+                break;
+            case RetryActionType.AsyncActionWithToken:
+                await Retriable.RetryAsync(asyncActionWithToken!, CancellationToken.None).ConfigureAwait(false);
+                break;
+            case RetryActionType.AsyncFunctionWithToken:
+                this.retryResult = await Retriable.RetryAsync(asyncFunctionWithToken!, CancellationToken.None).ConfigureAwait(false);
                 break;
             default:
                 throw new ArgumentException("Unknown action: " + actionType);
