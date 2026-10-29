@@ -148,10 +148,85 @@ public class RetryEngineTests
 
         RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
         Assert.AreEqual(totalTimeout, thrown.Timeout);
-        Assert.IsInstanceOfType<OperationCanceledException>(thrown.InnerException);
+        Assert.AreSame(op.LastThrown, thrown.InnerException);
         fake.Advance(OneHour);
         Assert.AreEqual(1, op.Invocations);
         Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
+    }
+
+    // RetryTimeoutException.cs and RetryEngine.cs: "When the total timeout expires between attempts, the inner exception
+    // ... is the exception of the last attempt". A delay is between two attempts.
+    [TestMethod]
+    public async Task WhenTheTotalTimeoutExpiresDuringADelay_TheInnerExceptionIsTheLastFailure()
+    {
+        RecordingFakeTimeProvider fake = new();
+        TimeSpan totalTimeout = TimeSpan.FromMilliseconds(200);
+        var op = new FlakyOperation(FlakyOperation.AlwaysFails);
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Linear(OneHour, 3), TotalTimeout = totalTimeout, TimeProvider = fake });
+
+        Task<string> call = pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask();
+
+        // One timer for the total timeout, and one for the delay after the first failure.
+        await fake.WaitForTimersAsync(2).ConfigureAwait(false);
+        fake.Advance(totalTimeout);
+
+        RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(totalTimeout, thrown.Timeout);
+        Assert.AreSame(op.LastThrown, thrown.InnerException);
+        fake.Advance(OneHour);
+        Assert.AreEqual(1, op.Invocations);
+    }
+
+    // RetryEngine.cs: "... or null if the last attempt returned a result".
+    [TestMethod]
+    public async Task WhenTheTotalTimeoutExpiresDuringADelayAfterARejectedResult_TheInnerExceptionIsNull()
+    {
+        RecordingFakeTimeProvider fake = new();
+        TimeSpan totalTimeout = TimeSpan.FromMilliseconds(200);
+        int invocations = 0;
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new Linear(OneHour, 3),
+            TotalTimeout = totalTimeout,
+            TimeProvider = fake,
+            ShouldRetryResult = _ => true,
+        });
+
+        Task<string> call = pipeline.ExecuteAsync(
+            _ =>
+            {
+                Interlocked.Increment(ref invocations);
+                return new ValueTask<string>("rejected");
+            }).AsTask();
+
+        await fake.WaitForTimersAsync(2).ConfigureAwait(false);
+        fake.Advance(totalTimeout);
+
+        RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(totalTimeout, thrown.Timeout);
+        Assert.IsNull(thrown.InnerException);
+        fake.Advance(OneHour);
+        Assert.AreEqual(1, invocations);
+    }
+
+    [TestMethod]
+    public async Task WhenTheTotalTimeoutExpiresAtTheSameInstantAsTheDelay_TheInnerExceptionIsTheLastFailureAndNoFurtherAttemptStarts()
+    {
+        RecordingFakeTimeProvider fake = new();
+        TimeSpan timeout = TimeSpan.FromMilliseconds(200);
+        var op = new FlakyOperation(FlakyOperation.AlwaysFails);
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Linear(timeout, 3), TotalTimeout = timeout, TimeProvider = fake });
+
+        Task<string> call = pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask();
+
+        await fake.WaitForTimersAsync(2).ConfigureAwait(false);
+        Assert.AreSequenceEqual(new[] { timeout, timeout }, fake.Delays);
+        fake.Advance(timeout);
+
+        RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(timeout, thrown.Timeout);
+        Assert.AreSame(op.LastThrown, thrown.InnerException);
+        Assert.AreEqual(1, op.Invocations);
     }
 
     [TestMethod]

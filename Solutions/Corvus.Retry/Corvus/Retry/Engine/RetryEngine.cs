@@ -308,10 +308,12 @@ internal static class RetryEngine
                     {
                         await RetryDelay.WaitAsync(delay, timeProvider, outer).ConfigureAwait(continueOnCapturedContext);
                     }
-                    catch (OperationCanceledException cancellation) when (!caller.IsCancellationRequested && totalCts is not null)
+                    catch (OperationCanceledException) when (!caller.IsCancellationRequested && totalCts is not null)
                     {
-                        // Only the caller's token and the total timeout can cancel the outer token.
-                        throw SetOutcome(outcome, new RetryTimeoutException(total, cancellation));
+                        // Only the caller's token and the total timeout can cancel the outer token. The delay is between
+                        // two attempts, so the inner exception is the failure of the last attempt, as at the check
+                        // before an attempt. It is null when the last attempt returned a result that is a failure.
+                        throw SetOutcome(outcome, new RetryTimeoutException(total, failure));
                     }
                 }
 
