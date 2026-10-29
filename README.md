@@ -727,6 +727,8 @@ To run the benchmarks in Release, use this command from the root of the reposito
 
 A full run has many cases and takes more than one hour. Use `--filter` to select benchmarks (for example `"*RetryPipeline*"`), and `--job short` for a fast run. BenchmarkDotNet writes the results to `BenchmarkDotNet.Artifacts`. The times change between sessions. Thus, compare the ratios from one run, not the absolute times from different runs. The build compiles the benchmarks, but does not run them.
 
+[Performance of Corvus.Retry 3.0](Documentation/Performance.md) gives the results, a comparison with version 2.0, and the causes of the slower results.
+
 ## Building
 
 The build uses [ZeroFailed](https://github.com/zerofailed/ZeroFailed). It must have PowerShell 7.4 or later and the .NET 10 SDK.
