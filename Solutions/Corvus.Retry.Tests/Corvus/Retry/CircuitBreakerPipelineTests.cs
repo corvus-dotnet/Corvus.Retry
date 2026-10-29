@@ -5,6 +5,7 @@
 namespace Corvus.Retry;
 
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Corvus.Retry.Policies;
@@ -32,15 +33,35 @@ public class CircuitBreakerPipelineTests
         CircuitBreaker breaker = this.NewOpenBreaker();
         var policy = new RecordingRetryPolicy(true);
         int invocations = 0;
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(3), Policy = policy, CircuitBreaker = breaker, TimeProvider = this.fake });
+        List<Exception?> retried = [];
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+        {
+            Strategy = new Count(3),
+            Policy = policy,
+            CircuitBreaker = breaker,
+            TimeProvider = this.fake,
+            OnRetry = a =>
+            {
+                retried.Add(a.LastException);
+                return ValueTask.CompletedTask;
+            },
+        });
 
         BrokenCircuitException thrown = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
             () => pipeline.ExecuteAsync(_ => new ValueTask<int>(Interlocked.Increment(ref invocations))).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
         // Three attempts, all rejected. The policy is not consulted for the last attempt, because the strategy refuses.
+        // The policy and the retry callback get the same rejection of each attempt, with the time left in the break.
         Assert.AreEqual(0, invocations);
         Assert.HasCount(2, policy.Consulted);
-        Assert.IsInstanceOfType<BrokenCircuitException>(policy.Consulted[0]);
+        Assert.HasCount(2, retried);
+        for (int i = 0; i < 2; i++)
+        {
+            BrokenCircuitException rejection = Assert.IsInstanceOfType<BrokenCircuitException>(policy.Consulted[i]);
+            Assert.AreSame(rejection, retried[i]);
+            Assert.AreEqual(BreakDuration, rejection.RetryAfter);
+        }
+
         Assert.AreEqual(BreakDuration, thrown.RetryAfter);
 
         // A rejection is not a call: the counts are still those of the two failures that opened the circuit.
@@ -52,9 +73,11 @@ public class CircuitBreakerPipelineTests
     {
         CircuitBreaker breaker = this.NewOpenBreaker();
         RetryEventArgs? args = null;
+        var policy = new RecordingRetryPolicy(true);
         var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
         {
             Strategy = new Count(2),
+            Policy = policy,
             CircuitBreaker = breaker,
             TimeProvider = this.fake,
             OnRetry = a =>
@@ -67,8 +90,11 @@ public class CircuitBreakerPipelineTests
         await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
             () => pipeline.ExecuteAsync(_ => new ValueTask<int>(1)).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
+        // The callback gets the rejection of the first attempt: the exception that the policy was asked about.
         Assert.IsNotNull(args);
-        Assert.IsInstanceOfType<BrokenCircuitException>(args.Value.LastException);
+        BrokenCircuitException rejection = Assert.IsInstanceOfType<BrokenCircuitException>(args.Value.LastException);
+        Assert.AreSame(Assert.ContainsSingle(policy.Consulted), rejection);
+        Assert.AreEqual(BreakDuration, rejection.RetryAfter);
         Assert.AreEqual(1, args.Value.AttemptNumber);
     }
 
@@ -207,8 +233,9 @@ public class CircuitBreakerPipelineTests
 
         Assert.IsFalse(call.IsCompleted);
         await cts.CancelAsync().ConfigureAwait(false);
-        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        TaskCanceledException cancelled = await Assert.ThrowsExactlyAsync<TaskCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
 
+        Assert.AreEqual(cts.Token, cancelled.CancellationToken);
         Assert.AreEqual(2, invocations);
         Assert.AreEqual((1, 1), breaker.GetCounts());
     }

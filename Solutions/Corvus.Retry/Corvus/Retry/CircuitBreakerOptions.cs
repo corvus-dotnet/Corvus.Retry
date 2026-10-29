@@ -60,6 +60,11 @@ public sealed record CircuitBreakerOptions
     /// counts as a call that succeeded.
     /// </para>
     /// <para>
+    /// When a call throws an <see cref="AggregateException"/>, the breaker asks the policy about the exceptions inside
+    /// it, not about the wrapper, in depth-first order. The call is a failure only if the policy accepts each of them.
+    /// An <see cref="AggregateException"/> with no inner exceptions is itself the exception that the policy gets.
+    /// </para>
+    /// <para>
     /// A <see cref="RetryTimeoutException"/> is always a failure. The breaker does not ask the policy about it. If the
     /// policy throws, the call throws that exception, and the call is not counted.
     /// </para>
