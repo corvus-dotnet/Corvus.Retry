@@ -6,7 +6,6 @@ namespace Corvus.Retry;
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
@@ -116,7 +115,8 @@ public class HedgingTests
             this.HedgingEvents);
 
         await cts.CancelAsync().ConfigureAwait(false);
-        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
     }
 
     // §6.8
@@ -157,6 +157,7 @@ public class HedgingTests
         firstAttempt.SetException(new InvalidOperationException("Attempt 1 failed"));
         await op.WhenInvokedAsync(2).ConfigureAwait(false);
         Assert.AreEqual(2, op.Invocations);
+        await this.fake.WaitForTimersAsync(2).ConfigureAwait(false);
 
         // The first delay would have expired at 2 s.
         this.fake.Advance(TimeSpan.FromSeconds(1));
@@ -169,7 +170,8 @@ public class HedgingTests
         Assert.AreSequenceEqual(new[] { HedgingDelay, HedgingDelay }, this.fake.Delays);
 
         await cts.CancelAsync().ConfigureAwait(false);
-        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
     }
 
     [TestMethod]
@@ -217,27 +219,48 @@ public class HedgingTests
     [TestMethod]
     public async Task WithAZeroDelay_WhenAHedgedAttemptSucceeds_ItWinsAndTheOtherAttemptsAreCancelled()
     {
-        // The attempts after the first start on the thread pool, so with a zero delay they all start before the
-        // pipeline can read an outcome. The test cannot tell how many of them run.
-        var op = new ScriptedOperation<string>(NeverCompletesAsync, Succeeds("attempt 2"), NeverCompletesAsync);
-        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = TimeSpan.Zero, MaxHedgedAttempts = 5 });
+        // The attempts after the first start on the thread pool, so with a zero delay some of them can start before the
+        // pipeline reads the outcome of attempt 2. The test cannot tell how many: the generator tells which started.
+        using SemaphoreSlim ended = new(0);
+        var generatorCalls = new List<int>();
+        var op = new ScriptedOperation<string>(
+            EndsWith(ended, NeverCompletesAsync),
+            EndsWith(ended, Succeeds("attempt 2")),
+            EndsWith(ended, NeverCompletesAsync));
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
+            new HedgingOptions { Delay = TimeSpan.Zero, MaxHedgedAttempts = 5 },
+            o => o with { HedgingActionGenerator = RecordingGenerator<string>(generatorCalls) });
 
         Assert.AreEqual("attempt 2", await pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false));
 
+        // The pipeline cancels each attempt that started, other than the winner. Wait until each operation has ended.
+        int started = Generated(generatorCalls).Length;
+        Assert.IsGreaterThanOrEqualTo(2, started);
+        Assert.AreSequenceEqual(Enumerable.Range(1, started), Generated(generatorCalls));
+        for (int i = 0; i < op.Invocations; i++)
+        {
+            Assert.IsTrue(await ended.WaitAsync(WaitLimit).ConfigureAwait(false));
+        }
+
         IReadOnlyList<CancellationToken> tokens = op.Tokens;
+        Assert.IsLessThanOrEqualTo(started, tokens.Count);
         Assert.IsTrue(tokens[0].IsCancellationRequested);
         Assert.IsFalse(tokens[1].IsCancellationRequested);
         Assert.IsTrue(tokens.Skip(2).All(t => t.IsCancellationRequested));
-        Assert.IsLessThanOrEqualTo(6, op.Invocations);
     }
 
     [TestMethod]
     public async Task WhenAnAttemptWinsWhileAnEarlierAttemptFails_NoOtherAttemptStarts()
     {
+        using SemaphoreSlim ended = new(0);
+        var generatorCalls = new List<int>();
         var firstAttempt = new PendingOutcome<string>();
         var secondAttempt = new PendingOutcome<string>();
         var events = new List<int>();
-        var op = new ScriptedOperation<string>(_ => firstAttempt.ValueTask, _ => secondAttempt.ValueTask, Succeeds("attempt 3"));
+        var op = new ScriptedOperation<string>(
+            EndsWith(ended, _ => firstAttempt.ValueTask),
+            EndsWith(ended, _ => secondAttempt.ValueTask),
+            EndsWith(ended, Succeeds("attempt 3")));
         ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
             new HedgingOptions
             {
@@ -256,15 +279,23 @@ public class HedgingTests
 
                     return ValueTask.CompletedTask;
                 },
-            });
+            },
+            o => o with { HedgingActionGenerator = RecordingGenerator<string>(generatorCalls) });
 
         Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
         this.fake.Advance(HedgingDelay);
         await secondAttempt.WhenAwaitedAsync().ConfigureAwait(false);
+        await this.fake.WaitForTimersAsync(2).ConfigureAwait(false);
         this.fake.Advance(HedgingDelay);
 
         Assert.AreEqual("attempt 2", await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+
+        // Both attempts that started have ended, and the generator was never asked for attempt 3.
+        Assert.IsTrue(await ended.WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.IsTrue(await ended.WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.AreEqual(0, ended.CurrentCount);
         Assert.AreEqual(2, op.Invocations);
+        Assert.AreSequenceEqual(new[] { 1, 2 }, Generated(generatorCalls));
         Assert.AreSequenceEqual(new[] { 2, 3 }, events);
     }
 
@@ -274,13 +305,15 @@ public class HedgingTests
         var log = new List<string>();
         var rejected = new Response(503, log);
         var accepted = new Response(200, log);
+        using SemaphoreSlim ended = new(0);
+        var generatorCalls = new List<int>();
         var firstAttempt = new PendingOutcome<Response>();
         var secondAttempt = new PendingOutcome<Response>();
         var events = new List<int>();
         var op = new ScriptedOperation<Response>(
-            _ => firstAttempt.ValueTask,
-            _ => secondAttempt.ValueTask,
-            _ => new ValueTask<Response>(new Response(201, log)));
+            EndsWith(ended, _ => firstAttempt.ValueTask),
+            EndsWith(ended, _ => secondAttempt.ValueTask),
+            EndsWith(ended, _ => new ValueTask<Response>(new Response(201, log))));
         ReliabilityPipeline<Response> pipeline = this.NewPipeline<Response>(
             new HedgingOptions
             {
@@ -298,15 +331,20 @@ public class HedgingTests
                     return ValueTask.CompletedTask;
                 },
             },
-            o => o with { ShouldRetryResult = r => r.StatusCode >= 500 });
+            o => o with { ShouldRetryResult = r => r.StatusCode >= 500, HedgingActionGenerator = RecordingGenerator<Response>(generatorCalls) });
 
         Task<Response> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
         this.fake.Advance(HedgingDelay);
         await secondAttempt.WhenAwaitedAsync().ConfigureAwait(false);
+        await this.fake.WaitForTimersAsync(2).ConfigureAwait(false);
         this.fake.Advance(HedgingDelay);
 
         Assert.AreSame(accepted, await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.IsTrue(await ended.WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.IsTrue(await ended.WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.AreEqual(0, ended.CurrentCount);
         Assert.AreEqual(2, op.Invocations);
+        Assert.AreSequenceEqual(new[] { 1, 2 }, Generated(generatorCalls));
         Assert.AreSequenceEqual(new[] { 2, 3 }, events);
         Assert.IsTrue(rejected.Disposed);
         Assert.IsFalse(accepted.Disposed);
@@ -337,6 +375,7 @@ public class HedgingTests
         Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
         this.fake.Advance(HedgingDelay);
         await secondAttemptBlocks.Task.WaitAsync(WaitLimit).ConfigureAwait(false);
+        await this.fake.WaitForTimersAsync(2).ConfigureAwait(false);
         this.fake.Advance(HedgingDelay);
 
         Assert.AreEqual("attempt 3", await call.WaitAsync(WaitLimit).ConfigureAwait(false));
@@ -345,11 +384,13 @@ public class HedgingTests
     }
 
     [TestMethod]
-    public async Task WhenAnAttemptWinsWhileTheHedgingCallbackRuns_TheNextAttemptDoesNotStart()
+    public async Task WhenAnAttemptWinsWhileTheHedgingCallbackRuns_TheOperationAndTheGeneratorAreNeverInvokedForTheNextAttempt()
     {
+        using SemaphoreSlim ended = new(0);
+        var generatorCalls = new List<int>();
         var firstAttempt = new TaskCompletionSource<string>();
         var events = new List<int>();
-        var op = new ScriptedOperation<string>(_ => new ValueTask<string>(firstAttempt.Task), Succeeds("attempt 2"));
+        var op = new ScriptedOperation<string>(EndsWith(ended, _ => new ValueTask<string>(firstAttempt.Task)), EndsWith(ended, Succeeds("attempt 2")));
         ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
             new HedgingOptions
             {
@@ -361,12 +402,19 @@ public class HedgingTests
                     firstAttempt.SetResult("attempt 1");
                     return ValueTask.CompletedTask;
                 },
-            });
+            },
+            o => o with { HedgingActionGenerator = RecordingGenerator<string>(generatorCalls) });
 
         Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
         this.fake.Advance(HedgingDelay);
 
         Assert.AreEqual("attempt 1", await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+
+        // Attempt 1 has ended. The generator is asked for an attempt only when the attempt starts, so a call for attempt
+        // 2 would show an attempt that started after the winner, whether or not its operation has run yet.
+        Assert.IsTrue(await ended.WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.AreSequenceEqual(new[] { 1 }, Generated(generatorCalls));
+        Assert.AreEqual(0, ended.CurrentCount);
         Assert.AreEqual(1, op.Invocations);
         Assert.AreSequenceEqual(new[] { 2 }, events);
     }
@@ -375,20 +423,24 @@ public class HedgingTests
     [TestMethod]
     public async Task WhenAllTheAttemptsFail_ThePipelineThrowsTheLastExceptionWithItsStackTrace()
     {
-        var op = new ScriptedOperation<string>(
-            Fails<string>(new InvalidOperationException("Attempt 1 failed")),
-            Fails<string>(new InvalidOperationException("Attempt 2 failed")),
-            Fails<string>(new InvalidOperationException("Attempt 3 failed")));
+        InvalidOperationException[] failures =
+        [
+            new("Attempt 1 failed"),
+            new("Attempt 2 failed"),
+            new("Attempt 3 failed"),
+        ];
+        var op = new ScriptedOperation<string>(Fails<string>(failures[0]), Fails<string>(failures[1]), Fails<string>(failures[2]));
         ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { MaxHedgedAttempts = 2 });
 
         InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
             () => pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
-        Assert.AreEqual("Attempt 3 failed", thrown.Message);
+        Assert.AreSame(failures[2], thrown);
         Assert.AreEqual(3, op.Invocations);
         Assert.Contains(nameof(ThrowFailure), thrown.StackTrace!);
         Assert.AreSequenceEqual(new[] { 2, 3 }, this.HedgingEvents.Select(e => e.AttemptNumber));
-        Assert.AreSequenceEqual(new[] { "Attempt 1 failed", "Attempt 2 failed" }, this.HedgingEvents.Select(e => e.LastException!.Message));
+        Assert.AreSame(failures[0], this.HedgingEvents[0].LastException);
+        Assert.AreSame(failures[1], this.HedgingEvents[1].LastException);
     }
 
     [TestMethod]
@@ -451,6 +503,7 @@ public class HedgingTests
     [TestMethod]
     public async Task AResultOfAnAttemptThatCompletedButLost_IsDisposed()
     {
+        var generatorCalls = new List<int>();
         var first = new Disposable("first");
         var second = new Disposable("second");
         var firstAttempt = new PendingOutcome<Disposable>();
@@ -472,17 +525,20 @@ public class HedgingTests
 
                     return ValueTask.CompletedTask;
                 },
-            });
+            },
+            o => o with { HedgingActionGenerator = RecordingGenerator<Disposable>(generatorCalls) });
 
         Task<Disposable> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
         this.fake.Advance(HedgingDelay);
         await secondAttempt.WhenAwaitedAsync().ConfigureAwait(false);
+        await this.fake.WaitForTimersAsync(2).ConfigureAwait(false);
         this.fake.Advance(HedgingDelay);
 
-        // Attempt 1 started first, so it wins.
+        // Attempt 1 started first, so it wins. Both attempts completed before the call returned.
         Disposable result = await call.WaitAsync(WaitLimit).ConfigureAwait(false);
 
         Assert.AreSame(first, result);
+        Assert.AreSequenceEqual(new[] { 1, 2 }, Generated(generatorCalls));
         Assert.AreEqual(2, op.Invocations);
         Assert.IsFalse(first.Disposed);
         Assert.IsTrue(second.Disposed);
@@ -670,9 +726,21 @@ public class HedgingTests
     [TestMethod]
     [DataRow(1)]
     [DataRow(10)]
-    public void TheConstructorAcceptsMaxHedgedAttemptsFromOneThruTen(int maxHedgedAttempts)
+    public async Task TheConstructorAcceptsMaxHedgedAttemptsFromOneThruTen_AndThePipelineMakesThatManyAttemptsAfterTheFirst(int maxHedgedAttempts)
     {
-        _ = new ReliabilityPipeline(new ReliabilityPipelineOptions { Hedging = new HedgingOptions { MaxHedgedAttempts = maxHedgedAttempts } });
+        var op = new FlakyOperation(FlakyOperation.AlwaysFails);
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Hedging = new HedgingOptions { MaxHedgedAttempts = maxHedgedAttempts }, TimeProvider = this.fake });
+
+        InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            () => pipeline.ExecuteAsync(
+                _ =>
+                {
+                    op.Invoke();
+                    return ValueTask.CompletedTask;
+                }).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        Assert.AreSame(op.LastThrown, thrown);
+        Assert.AreEqual(maxHedgedAttempts + 1, op.Invocations);
     }
 
     [TestMethod]
@@ -688,9 +756,37 @@ public class HedgingTests
 
     [TestMethod]
     [DynamicData(nameof(DelaysInRange))]
-    public void TheConstructorAcceptsZeroInfiniteAndPositiveDelays(TimeSpan delay)
+    public async Task TheConstructorAcceptsZeroInfiniteAndPositiveDelays_AndThePipelineUsesTheDelay(TimeSpan delay)
     {
-        _ = new ReliabilityPipeline(new ReliabilityPipelineOptions { Hedging = new HedgingOptions { Delay = delay } });
+        using CancellationTokenSource cts = new();
+        var op = new ScriptedOperation<string>(NeverCompletesAsync);
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = delay });
+
+        Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync, cts.Token).AsTask();
+
+        if (delay == TimeSpan.Zero)
+        {
+            // Both attempts start at once, with no timer.
+            await op.WhenInvokedAsync(2).ConfigureAwait(false);
+            Assert.AreEqual(0, this.fake.TimersCreated);
+        }
+        else if (delay == Timeout.InfiniteTimeSpan)
+        {
+            // Only a failure starts the next attempt.
+            Assert.AreEqual(0, this.fake.TimersCreated);
+            Assert.AreEqual(1, op.Invocations);
+        }
+        else
+        {
+            // The next attempt starts when a timer for the delay fires.
+            Assert.AreSequenceEqual(new[] { delay }, this.fake.Delays);
+            this.fake.Advance(delay);
+            await op.WhenInvokedAsync(2).ConfigureAwait(false);
+        }
+
+        await cts.CancelAsync().ConfigureAwait(false);
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
     }
 
     [TestMethod]
@@ -726,13 +822,15 @@ public class HedgingTests
 
         Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync, cts.Token).AsTask();
         this.fake.Advance(HedgingDelay);
+        await this.fake.WaitForTimersAsync(2).ConfigureAwait(false);
         this.fake.Advance(HedgingDelay);
         await op.WhenInvokedAsync(3).ConfigureAwait(false);
         Assert.AreEqual(3, op.Invocations);
 
         await cts.CancelAsync().ConfigureAwait(false);
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
         Assert.IsTrue(op.Tokens.All(t => t.IsCancellationRequested));
 
         // No attempt starts after the cancellation.
@@ -753,8 +851,10 @@ public class HedgingTests
 
         await cts.CancelAsync().ConfigureAwait(false);
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
         Assert.IsTrue(op.Tokens[0].IsCancellationRequested);
+        Assert.IsFalse(neverCompletes.Task.IsCompleted);
     }
 
     [TestMethod]
@@ -765,8 +865,10 @@ public class HedgingTests
         var op = new ScriptedOperation<string>(Succeeds("attempt 1"));
         ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions());
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => pipeline.ExecuteAsync(op.InvokeAsync, cts.Token).AsTask()).ConfigureAwait(false);
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+            () => pipeline.ExecuteAsync(op.InvokeAsync, cts.Token).AsTask()).ConfigureAwait(false);
 
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
         Assert.AreEqual(0, op.Invocations);
     }
 
@@ -786,8 +888,10 @@ public class HedgingTests
         Assert.AreEqual(2, op.Invocations);
         this.fake.Advance(totalTimeout - HedgingDelay);
 
+        // No attempt failed before the timeout, so there is no inner exception.
         RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
         Assert.AreEqual(totalTimeout, thrown.Timeout);
+        Assert.IsNull(thrown.InnerException);
         Assert.AreEqual(2, op.Invocations);
         Assert.IsTrue(op.Tokens.All(t => t.IsCancellationRequested));
     }
@@ -806,6 +910,8 @@ public class HedgingTests
 
         RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
         Assert.AreEqual(totalTimeout, thrown.Timeout);
+        Assert.IsNull(thrown.InnerException);
+        Assert.IsFalse(neverCompletes.Task.IsCompleted);
     }
 
     [TestMethod]
@@ -829,8 +935,12 @@ public class HedgingTests
 
         this.fake.Advance(HedgingDelay);
 
+        // The inner exception is the cancellation that an attempt timeout caused: the timeout of whichever attempt the
+        // pipeline reads last, as both have timed out.
         RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
         Assert.AreEqual(attemptTimeout, thrown.Timeout);
+        CancellationToken innerToken = Assert.IsInstanceOfType<OperationCanceledException>(thrown.InnerException).CancellationToken;
+        Assert.IsTrue(innerToken == op.Tokens[0] || innerToken == op.Tokens[1]);
         Assert.AreEqual(new HedgingEventArgs(2, null), Assert.ContainsSingle(this.HedgingEvents));
     }
 
@@ -872,16 +982,27 @@ public class HedgingTests
     }
 
     [TestMethod]
-    public async Task AnAttemptThatTheEngineCancelsAfterAnotherWins_IsNotACallForTheCircuitBreaker()
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task AnAttemptThatTheEngineCancelsAfterAnotherWins_IsNotACallForTheCircuitBreaker(bool withAttemptTimeout)
     {
+        // With an attempt timeout, the token of the attempt has a timer, and the cancellation of a loser could look like an
+        // attempt timeout.
+        using SemaphoreSlim ended = new(0);
         var breaker = new CircuitBreaker(new CircuitBreakerOptions { TimeProvider = this.fake });
-        var op = new ScriptedOperation<string>(NeverCompletesAsync, Succeeds("attempt 2"));
-        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay }, o => o with { CircuitBreaker = breaker });
+        var op = new ScriptedOperation<string>(EndsWith(ended, NeverCompletesAsync), Succeeds("attempt 2"));
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
+            new HedgingOptions { Delay = HedgingDelay },
+            o => o with { CircuitBreaker = breaker, AttemptTimeout = withAttemptTimeout ? TimeSpan.FromSeconds(30) : null });
 
         Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
         this.fake.Advance(HedgingDelay);
 
         Assert.AreEqual("attempt 2", await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+
+        // The pipeline does not wait for the loser, so wait until its operation has ended.
+        Assert.IsTrue(await ended.WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.IsTrue(op.Tokens[0].IsCancellationRequested);
         Assert.AreEqual((1, 0), breaker.GetCounts());
     }
 
@@ -893,12 +1014,18 @@ public class HedgingTests
         var op = new ScriptedOperation<string>(Succeeds("attempt"));
         ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { MaxHedgedAttempts = 2 }, o => o with { CircuitBreaker = breaker });
 
-        await Assert.ThrowsExactlyAsync<IsolatedCircuitException>(() => pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        IsolatedCircuitException thrown = await Assert.ThrowsExactlyAsync<IsolatedCircuitException>(
+            () => pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
-        // The hedging policy accepts the rejection as a failure, so every attempt starts and is rejected.
+        // The hedging policy accepts the rejection as a failure, so every attempt starts and is rejected. Each attempt
+        // gets its own rejection, and the call throws the rejection of the last attempt.
         Assert.AreEqual(0, op.Invocations);
-        Assert.HasCount(2, this.HedgingEvents);
-        Assert.IsTrue(this.HedgingEvents.All(e => e.LastException is IsolatedCircuitException));
+        IReadOnlyList<HedgingEventArgs> events = this.HedgingEvents;
+        Assert.AreSequenceEqual(new[] { 2, 3 }, events.Select(e => e.AttemptNumber));
+        IsolatedCircuitException first = Assert.IsInstanceOfType<IsolatedCircuitException>(events[0].LastException);
+        IsolatedCircuitException second = Assert.IsInstanceOfType<IsolatedCircuitException>(events[1].LastException);
+        Assert.AreNotSame(first, second);
+        Assert.AreNotSame(second, thrown);
         Assert.AreEqual((0, 0), breaker.GetCounts());
     }
 
@@ -920,9 +1047,10 @@ public class HedgingTests
         Task<string> call = pipeline.ExecuteAsync(NeverCompletesAsync, cts.Token).AsTask();
         Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
         await cts.CancelAsync().ConfigureAwait(false);
-        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
 
-        // Another call can make the test call.
+        // Another call can make the test call at once: the pipeline released the test call before it threw.
         Assert.AreEqual("success", await pipeline.ExecuteAsync(_ => new ValueTask<string>("success")).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false));
         Assert.AreEqual(CircuitState.Closed, breaker.State);
     }
@@ -1166,9 +1294,8 @@ public class HedgingTests
     [TestMethod]
     public async Task TheFallbackReceivesTheLastExceptionOfTheHedging()
     {
-        var op = new ScriptedOperation<string>(
-            Fails<string>(new InvalidOperationException("Attempt 1 failed")),
-            Fails<string>(new InvalidOperationException("Attempt 2 failed")));
+        var lastFailure = new InvalidOperationException("Attempt 2 failed");
+        var op = new ScriptedOperation<string>(Fails<string>(new InvalidOperationException("Attempt 1 failed")), Fails<string>(lastFailure));
         FallbackArgs<string>? received = null;
         ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
             new HedgingOptions(),
@@ -1185,7 +1312,7 @@ public class HedgingTests
             });
 
         Assert.AreEqual("fallback", await pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false));
-        Assert.AreEqual("Attempt 2 failed", received!.Value.Exception!.Message);
+        Assert.AreSame(lastFailure, received!.Value.Exception);
     }
 
     [TestMethod]
@@ -1213,7 +1340,9 @@ public class HedgingTests
         this.fake.Advance(totalTimeout - HedgingDelay);
 
         Assert.AreEqual("fallback", await call.WaitAsync(WaitLimit).ConfigureAwait(false));
-        Assert.AreEqual(totalTimeout, Assert.IsInstanceOfType<RetryTimeoutException>(received!.Value.Exception).Timeout);
+        RetryTimeoutException timeout = Assert.IsInstanceOfType<RetryTimeoutException>(received!.Value.Exception);
+        Assert.AreEqual(totalTimeout, timeout.Timeout);
+        Assert.IsNull(timeout.InnerException);
     }
 
     [TestMethod]
@@ -1288,7 +1417,6 @@ public class HedgingTests
     [TestMethod]
     public async Task AOneHourHedgingDelayTakesNoRealTime()
     {
-        var stopwatch = Stopwatch.StartNew();
         var op = new ScriptedOperation<string>(NeverCompletesAsync, Succeeds("attempt 2"));
         ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = TimeSpan.FromHours(1) });
 
@@ -1296,7 +1424,6 @@ public class HedgingTests
         this.fake.Advance(TimeSpan.FromHours(1));
 
         Assert.AreEqual("attempt 2", await call.WaitAsync(WaitLimit).ConfigureAwait(false));
-        Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
         Assert.AreSequenceEqual(new[] { TimeSpan.FromHours(1) }, this.fake.Delays);
     }
 
@@ -1514,6 +1641,796 @@ public class HedgingTests
         Assert.IsEmpty(this.HedgingEvents);
     }
 
+    // F1: each guard that stops an attempt after an outcome wins has a test that only it can satisfy. This one is for the
+    // check that an attempt that the call abandoned before the thread pool started it does not run its operation.
+    [TestMethod]
+    public async Task AnAttemptThatTheCallAbandonsBeforeTheThreadPoolRunsIt_DoesNotInvokeTheOperation()
+    {
+        // The generator marks the execution context that attempt 2 captures. The thread pool restores that context before
+        // the attempt runs, and the change handler of the marker holds that thread until the call has ended. So the call
+        // abandons attempt 2 before attempt 2 runs. The handler sees the context restored again when the work item ends.
+        var generatorFailure = new FormatException("The generator failed");
+        var marker = new object();
+        using ManualResetEventSlim callEnded = new();
+        var attemptTwoThreadDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int heldThread = 0;
+        var local = new AsyncLocal<object?>(args =>
+        {
+            if (!args.ThreadContextChanged)
+            {
+                return;
+            }
+
+            if (ReferenceEquals(args.CurrentValue, marker) && Interlocked.CompareExchange(ref heldThread, Environment.CurrentManagedThreadId, 0) == 0)
+            {
+                callEnded.Wait(WaitLimit);
+            }
+            else if (ReferenceEquals(args.PreviousValue, marker) && Volatile.Read(ref heldThread) == Environment.CurrentManagedThreadId)
+            {
+                attemptTwoThreadDone.TrySetResult();
+            }
+        });
+        var generatorCalls = new List<int>();
+        var op = new ScriptedOperation<string>(NeverCompletesAsync, Succeeds("attempt 2"));
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
+            new HedgingOptions { Delay = TimeSpan.Zero, MaxHedgedAttempts = 2 },
+            o => o with
+            {
+                HedgingActionGenerator = attempt =>
+                {
+                    generatorCalls.Add(attempt);
+                    if (attempt == 2)
+                    {
+                        local.Value = marker;
+                    }
+
+                    return attempt == 3 ? throw generatorFailure : null;
+                },
+            });
+
+        FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
+            () => pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreSame(generatorFailure, thrown);
+        callEnded.Set();
+
+        // Attempt 2 started, and its work item has ended, but it did not run the operation.
+        await attemptTwoThreadDone.Task.WaitAsync(WaitLimit).ConfigureAwait(false);
+        Assert.AreSequenceEqual(new[] { 1, 2, 3 }, generatorCalls);
+        Assert.AreEqual(1, op.Invocations);
+    }
+
+    // The exit-path matrix for the circuit breaker: each exit of an attempt that holds the breaker's permit reports the
+    // call once, as a success, a failure, or no call.
+    [TestMethod]
+    public async Task WithHedging_ARejectedResultIsAFailedCallForTheCircuitBreaker()
+    {
+        var log = new List<string>();
+        var breaker = new CircuitBreaker(new CircuitBreakerOptions { TimeProvider = this.fake });
+        var op = new ScriptedOperation<Response>(_ => new ValueTask<Response>(new Response(503, log)), _ => new ValueTask<Response>(new Response(200, log)));
+        ReliabilityPipeline<Response> pipeline = this.NewPipeline<Response>(
+            new HedgingOptions { Delay = HedgingDelay },
+            o => o with { CircuitBreaker = breaker, ShouldRetryResult = r => r.StatusCode >= 500 });
+
+        Response result = await pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual(200, result.StatusCode);
+        Assert.AreEqual((2, 1), breaker.GetCounts());
+    }
+
+    [TestMethod]
+    public async Task WithHedging_WhenTheTestCallReturnsARejectedResult_TheCircuitOpensAgain()
+    {
+        CircuitBreaker breaker = await this.NewCircuitThatIsReadyForATestCallAsync().ConfigureAwait(false);
+        var log = new List<string>();
+        var rejected = new Response(503, log);
+        var op = new ScriptedOperation<Response>(_ => new ValueTask<Response>(rejected), _ => new ValueTask<Response>(new Response(200, log)));
+        ReliabilityPipeline<Response> pipeline = this.NewPipeline<Response>(
+            new HedgingOptions { Delay = HedgingDelay },
+            o => o with { CircuitBreaker = breaker, ShouldRetryResult = r => r.StatusCode >= 500 });
+
+        // The test call fails, so the open circuit rejects attempt 2, and the rejection is the last outcome.
+        BrokenCircuitException thrown = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
+            () => pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        Assert.AreEqual(CircuitState.Open, breaker.State);
+        Assert.AreEqual(new CircuitBreakerOptions().BreakDuration, thrown.RetryAfter);
+        Assert.AreEqual(1, op.Invocations);
+        Assert.IsTrue(rejected.Disposed);
+    }
+
+    [TestMethod]
+    public async Task ACancellationByTheCaller_IsNotACallForTheCircuitBreaker()
+    {
+        using SemaphoreSlim ended = new(0);
+        using CancellationTokenSource cts = new();
+        var breaker = new CircuitBreaker(new CircuitBreakerOptions { TimeProvider = this.fake });
+        var op = new ScriptedOperation<string>(EndsWith(ended, NeverCompletesAsync));
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay }, o => o with { CircuitBreaker = breaker });
+
+        Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync, cts.Token).AsTask();
+        await cts.CancelAsync().ConfigureAwait(false);
+
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
+        Assert.IsTrue(await ended.WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.AreEqual((0, 0), breaker.GetCounts());
+    }
+
+    [TestMethod]
+    public async Task WithHedging_WhenShouldRetryResultThrowsDuringTheTestCall_TheCallThrowsThatExceptionAndTheNextCallMakesTheTest()
+    {
+        var predicateFailure = new FormatException("The predicate failed");
+        CircuitBreaker breaker = await this.NewCircuitThatIsReadyForATestCallAsync().ConfigureAwait(false);
+        var result = new Response(200, []);
+        ReliabilityPipeline<Response> pipeline = this.NewPipeline<Response>(
+            new HedgingOptions { Delay = Timeout.InfiniteTimeSpan },
+            o => o with { CircuitBreaker = breaker, ShouldRetryResult = r => r == result ? throw predicateFailure : false });
+
+        FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
+            () => pipeline.ExecuteAsync(_ => new ValueTask<Response>(result)).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreSame(predicateFailure, thrown);
+        Assert.IsTrue(result.Disposed);
+
+        // The test call has no outcome, so the circuit is still half-open, and the next call makes the test.
+        Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
+        Response next = await pipeline.ExecuteAsync(_ => new ValueTask<Response>(new Response(201, []))).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
+        Assert.AreEqual(201, next.StatusCode);
+        Assert.AreEqual(CircuitState.Closed, breaker.State);
+    }
+
+    [TestMethod]
+    public async Task WithHedging_WhenTheTotalTimeoutExpiresDuringTheTestCall_TheAttemptReportsAFailureAndTheCircuitOpensAgain()
+    {
+        // The pipeline waits in OnHedging, so only the attempt can see the timeout and report it.
+        TimeSpan totalTimeout = TimeSpan.FromSeconds(3);
+        var changes = new List<CircuitStateChange>();
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CircuitBreaker breaker = await this.NewCircuitThatIsReadyForATestCallAsync(
+            change =>
+            {
+                lock (changes)
+                {
+                    changes.Add(change);
+                }
+
+                if (change.From == CircuitState.HalfOpen)
+                {
+                    changed.TrySetResult();
+                }
+
+                return ValueTask.CompletedTask;
+            }).ConfigureAwait(false);
+        var callbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackCompletion = new TaskCompletionSource();
+        var op = new ScriptedOperation<string>(NeverCompletesAsync);
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
+            new HedgingOptions
+            {
+                Delay = HedgingDelay,
+                OnHedging = _ =>
+                {
+                    callbackEntered.TrySetResult();
+                    return new ValueTask(callbackCompletion.Task);
+                },
+            },
+            o => o with { CircuitBreaker = breaker, TotalTimeout = totalTimeout });
+
+        Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
+        Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
+        this.fake.Advance(HedgingDelay);
+        await callbackEntered.Task.WaitAsync(WaitLimit).ConfigureAwait(false);
+        this.fake.Advance(totalTimeout - HedgingDelay);
+
+        // The attempt sees its token cancelled by the total timeout, and reports the test call as a failure.
+        await changed.Task.WaitAsync(WaitLimit).ConfigureAwait(false);
+        callbackCompletion.SetResult();
+
+        RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(totalTimeout, thrown.Timeout);
+        Assert.AreEqual(CircuitState.Open, breaker.State);
+        CircuitStateChange reopened;
+        lock (changes)
+        {
+            reopened = changes[^1];
+        }
+
+        Assert.AreEqual(CircuitState.HalfOpen, reopened.From);
+        Assert.AreEqual(CircuitState.Open, reopened.To);
+        Assert.AreEqual(totalTimeout, Assert.IsInstanceOfType<RetryTimeoutException>(reopened.LastException).Timeout);
+        Assert.AreEqual(1, op.Invocations);
+    }
+
+    [TestMethod]
+    public async Task WithHedging_WhenTheTotalTimeoutStopsTheCall_EachAttemptInFlightIsAFailedCall()
+    {
+        // The operations ignore their tokens, so only the pipeline can report them.
+        TimeSpan totalTimeout = TimeSpan.FromSeconds(3);
+        var breaker = new CircuitBreaker(new CircuitBreakerOptions { TimeProvider = this.fake });
+        var gate = new TaskCompletionSource<string>();
+        var op = new ScriptedOperation<string>(_ => new ValueTask<string>(gate.Task));
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
+            new HedgingOptions { Delay = TimeSpan.Zero },
+            o => o with { CircuitBreaker = breaker, TotalTimeout = totalTimeout });
+
+        Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
+        await op.WhenInvokedAsync(2).ConfigureAwait(false);
+        this.fake.Advance(totalTimeout);
+
+        await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual((2, 2), breaker.GetCounts());
+
+        // The operations end later. That does not change the counts.
+        gate.SetResult("late");
+        Assert.AreEqual((2, 2), breaker.GetCounts());
+    }
+
+    [TestMethod]
+    public async Task WithHedging_AnOperationThatCancelsItself_IsAFailedCallForTheCircuitBreaker()
+    {
+        var selfCancellation = new OperationCanceledException("The operation cancelled itself");
+        var breaker = new CircuitBreaker(new CircuitBreakerOptions { TimeProvider = this.fake });
+        var op = new ScriptedOperation<string>(Fails<string>(selfCancellation), Succeeds("attempt 2"));
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay }, o => o with { CircuitBreaker = breaker });
+
+        Assert.AreEqual("attempt 2", await pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false));
+
+        // The hedging policy treats the cancellation as any other failure, and so does the breaker.
+        Assert.AreSame(selfCancellation, Assert.ContainsSingle(this.HedgingEvents).LastException);
+        Assert.AreEqual((2, 1), breaker.GetCounts());
+    }
+
+    [TestMethod]
+    public async Task WithHedging_WhenOnHedgingThrowsDuringTheTestCall_TheNextCallMakesTheTest()
+    {
+        var callbackFailure = new FormatException("The callback failed");
+        CircuitBreaker breaker = await this.NewCircuitThatIsReadyForATestCallAsync().ConfigureAwait(false);
+        var gate = new TaskCompletionSource<string>();
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
+            new HedgingOptions { Delay = HedgingDelay, OnHedging = _ => throw callbackFailure },
+            o => o with { CircuitBreaker = breaker });
+
+        // The operation ignores its token, so it is still running when the call throws.
+        Task<string> call = pipeline.ExecuteAsync(_ => new ValueTask<string>(gate.Task)).AsTask();
+        Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
+        this.fake.Advance(HedgingDelay);
+
+        FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreSame(callbackFailure, thrown);
+
+        Assert.AreEqual("success", await pipeline.ExecuteAsync(_ => new ValueTask<string>("success")).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.AreEqual(CircuitState.Closed, breaker.State);
+        gate.SetResult("late");
+    }
+
+    [TestMethod]
+    public async Task WithHedging_WhileAttemptOneMakesTheTestCall_TheHalfOpenCircuitRejectsAttemptTwo()
+    {
+        CircuitBreaker breaker = await this.NewCircuitThatIsReadyForATestCallAsync().ConfigureAwait(false);
+        var firstAttempt = new TaskCompletionSource<string>();
+        var op = new ScriptedOperation<string>(_ => new ValueTask<string>(firstAttempt.Task), Succeeds("attempt 2"));
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay }, o => o with { CircuitBreaker = breaker });
+
+        Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
+        this.fake.Advance(HedgingDelay);
+
+        // Attempt 2 is rejected without a call, and is a failure for the hedging. Attempt 1 is still the test call.
+        HedgingEventArgs args = Assert.ContainsSingle(this.HedgingEvents);
+        Assert.AreEqual(2, args.AttemptNumber);
+        Assert.IsNull(args.LastException);
+        await this.WaitUntilAsync(() => breaker.State == CircuitState.HalfOpen && op.Invocations == 1).ConfigureAwait(false);
+        Assert.IsFalse(call.IsCompleted);
+
+        firstAttempt.SetResult("attempt 1");
+
+        Assert.AreEqual("attempt 1", await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.AreEqual(1, op.Invocations);
+        Assert.AreEqual(CircuitState.Closed, breaker.State);
+    }
+
+    // F3: a rejected result is disposed whatever stops the call during OnHedging.
+    [TestMethod]
+    [DataRow("throws")]
+    [DataRow("cancels the caller and throws")]
+    [DataRow("waits while the total timeout expires")]
+    public async Task WhenOnHedgingThrowsAfterARejectedResult_TheResultIsDisposedAndTheCallerGetsTheCallbacksException(string callback)
+    {
+        TimeSpan totalTimeout = TimeSpan.FromSeconds(1);
+        var callbackFailure = new FormatException("The callback failed");
+        using CancellationTokenSource cts = new();
+        var callbackCompletion = new TaskCompletionSource();
+        var rejected = new Response(503, []);
+        var op = new ScriptedOperation<Response>(_ => new ValueTask<Response>(rejected), _ => new ValueTask<Response>(new Response(200, [])));
+        ReliabilityPipeline<Response> pipeline = this.NewPipeline<Response>(
+            new HedgingOptions
+            {
+                Delay = HedgingDelay,
+                OnHedging = _ =>
+                {
+                    switch (callback)
+                    {
+                        case "throws":
+                            throw callbackFailure;
+                        case "cancels the caller and throws":
+                            cts.Cancel();
+                            cts.Token.ThrowIfCancellationRequested();
+                            return ValueTask.CompletedTask;
+                        default:
+                            return new ValueTask(callbackCompletion.Task);
+                    }
+                },
+            },
+            o => o with { ShouldRetryResult = r => r.StatusCode >= 500, TotalTimeout = totalTimeout });
+
+        Task<Response> call = pipeline.ExecuteAsync(op.InvokeAsync, cts.Token).AsTask();
+        switch (callback)
+        {
+            case "throws":
+                Assert.AreSame(callbackFailure, await Assert.ThrowsExactlyAsync<FormatException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false));
+                break;
+            case "cancels the caller and throws":
+                Assert.AreEqual(cts.Token, (await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false)).CancellationToken);
+                break;
+            default:
+                this.fake.Advance(totalTimeout);
+                callbackCompletion.SetResult();
+                RetryTimeoutException timeout = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+                Assert.IsNull(timeout.InnerException);
+                break;
+        }
+
+        Assert.IsTrue(rejected.Disposed);
+        Assert.AreEqual(1, op.Invocations);
+    }
+
+    // F6
+    [TestMethod]
+    public async Task WithHedging_AnExceptionThatTheHedgingPolicyRefuses_GoesToTheFallback()
+    {
+        var refused = new FormatException("Not a failure");
+        var op = new ScriptedOperation<string>(Fails<string>(refused), Succeeds("attempt 2"));
+        FallbackArgs<string>? received = null;
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
+            new HedgingOptions { Policy = RetryPolicies.Handle<InvalidOperationException>() },
+            o => o with
+            {
+                Fallback = new FallbackOptions<string>
+                {
+                    Action = args =>
+                    {
+                        received = args;
+                        return new ValueTask<string>("fallback");
+                    },
+                },
+            });
+
+        Assert.AreEqual("fallback", await pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.AreSame(refused, received!.Value.Exception);
+        Assert.AreEqual(1, op.Invocations);
+    }
+
+    // F7
+    [TestMethod]
+    public async Task WithAZeroDelay_WhenAttemptOneFailsSynchronously_OnHedgingForAttemptTwoReceivesThatFailure()
+    {
+        var failure = new InvalidOperationException("Attempt 1 failed");
+        var op = new ScriptedOperation<string>(Fails<string>(failure), Succeeds("attempt 2"));
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = TimeSpan.Zero });
+
+        Assert.AreEqual("attempt 2", await pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false));
+
+        HedgingEventArgs args = Assert.ContainsSingle(this.HedgingEvents);
+        Assert.AreEqual(2, args.AttemptNumber);
+        Assert.AreSame(failure, args.LastException);
+    }
+
+    // F8: HedgingOptions.Delay says that each later attempt starts on the thread pool, with no SynchronizationContext.
+    [TestMethod]
+    public async Task WithContinueOnCapturedContext_HedgedAttemptsStartOnTheThreadPoolWithNoSynchronizationContext()
+    {
+        var seen = new List<(int Attempt, SynchronizationContext? Context, int ThreadId, bool IsThreadPoolThread, TaskScheduler Scheduler)>();
+        ReliabilityPipeline<string> pipeline = this.NewThreadRecordingPipeline(seen);
+
+        (string result, PumpingSynchronizationContext context) = await PumpingSynchronizationContext.RunAsync(
+            async context => (await pipeline.ExecuteAsync(_ => throw new InvalidOperationException("Unused")).ConfigureAwait(true), context)).WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual("attempt 3", result);
+        var observed = Snapshot(seen);
+        Assert.AreSequenceEqual(new[] { 1, 2, 3 }, observed.Select(s => s.Attempt));
+
+        // Attempt 1 runs on the caller's thread, with the caller's context.
+        Assert.AreSame(context, observed[0].Context);
+        Assert.AreEqual(context.ThreadId, observed[0].ThreadId);
+        foreach (var later in observed.Skip(1))
+        {
+            Assert.IsNull(later.Context);
+            Assert.IsTrue(later.IsThreadPoolThread);
+            Assert.AreSame(TaskScheduler.Default, later.Scheduler);
+        }
+    }
+
+    [TestMethod]
+    public async Task WhenTheCallerRunsOnACustomScheduler_HedgedAttemptsStartOnTheDefaultScheduler()
+    {
+        var seen = new List<(int Attempt, SynchronizationContext? Context, int ThreadId, bool IsThreadPoolThread, TaskScheduler Scheduler)>();
+        ReliabilityPipeline<string> pipeline = this.NewThreadRecordingPipeline(seen);
+        TaskScheduler scheduler = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
+
+        string result = await Task.Factory.StartNew(
+            () => pipeline.ExecuteAsync(_ => throw new InvalidOperationException("Unused")).AsTask(),
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            scheduler).Unwrap().WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual("attempt 3", result);
+        var observed = Snapshot(seen);
+        Assert.AreSequenceEqual(new[] { 1, 2, 3 }, observed.Select(s => s.Attempt));
+        Assert.AreSame(scheduler, observed[0].Scheduler);
+        foreach (var later in observed.Skip(1))
+        {
+            Assert.AreSame(TaskScheduler.Default, later.Scheduler);
+            Assert.IsTrue(later.IsThreadPoolThread);
+            Assert.IsNull(later.Context);
+        }
+    }
+
+    // F9: a result that the pipeline holds because it could be the last outcome is disposed on every exit.
+    [TestMethod]
+    [DataRow("a later attempt succeeds")]
+    [DataRow("the caller cancels")]
+    [DataRow("the total timeout expires")]
+    [DataRow("a later attempt throws an exception that the policy refuses")]
+    public async Task WhenEveryAttemptHasStarted_AHeldRejectedResultIsDisposedWhenTheCallEnds(string exit)
+    {
+        TimeSpan totalTimeout = TimeSpan.FromSeconds(1);
+        var refused = new FormatException("Not a failure");
+        using CancellationTokenSource cts = new();
+        var first = new Disposable("rejected");
+        var second = new Disposable("rejected");
+        var accepted = new Disposable("accepted");
+        PendingOutcome<Disposable>[] attempts = [new(), new(), new()];
+        var op = new ScriptedOperation<Disposable>(_ => attempts[0].ValueTask, _ => attempts[1].ValueTask, _ => attempts[2].ValueTask);
+        ReliabilityPipeline<Disposable> pipeline = this.NewPipeline<Disposable>(
+            new HedgingOptions { Delay = TimeSpan.Zero, MaxHedgedAttempts = 2, Policy = RetryPolicies.Handle<InvalidOperationException>() },
+            o => o with { ShouldRetryResult = r => r.Name == "rejected", TotalTimeout = totalTimeout });
+
+        Task<Disposable> call = pipeline.ExecuteAsync(op.InvokeAsync, cts.Token).AsTask();
+        await attempts[1].WhenAwaitedAsync().ConfigureAwait(false);
+        await attempts[2].WhenAwaitedAsync().ConfigureAwait(false);
+
+        // Every attempt has started, so the pipeline holds a rejected result. When it reads the second, it disposes the
+        // first: that shows that it now holds the second.
+        attempts[0].SetResult(first);
+        attempts[1].SetResult(second);
+        await first.WhenDisposed.WaitAsync(WaitLimit).ConfigureAwait(false);
+        Assert.IsFalse(second.Disposed);
+
+        switch (exit)
+        {
+            case "a later attempt succeeds":
+                attempts[2].SetResult(accepted);
+                Assert.AreSame(accepted, await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+                Assert.AreEqual(0, accepted.DisposeCount);
+                break;
+            case "the caller cancels":
+                await cts.CancelAsync().ConfigureAwait(false);
+                Assert.AreEqual(cts.Token, (await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false)).CancellationToken);
+                break;
+            case "the total timeout expires":
+                this.fake.Advance(totalTimeout);
+                Assert.IsNull((await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false)).InnerException);
+                break;
+            default:
+                attempts[2].SetException(refused);
+                Assert.AreSame(refused, await Assert.ThrowsExactlyAsync<FormatException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false));
+                break;
+        }
+
+        Assert.AreEqual(1, first.DisposeCount);
+        Assert.AreEqual(1, second.DisposeCount);
+    }
+
+    [TestMethod]
+    public async Task WhenEveryAttemptHasStarted_ARejectedResultIsDisposedWhenALaterResultIsAlsoRejected()
+    {
+        var first = new Disposable("rejected");
+        var second = new Disposable("rejected");
+        PendingOutcome<Disposable>[] attempts = [new(), new()];
+        var op = new ScriptedOperation<Disposable>(_ => attempts[0].ValueTask, _ => attempts[1].ValueTask);
+        ReliabilityPipeline<Disposable> pipeline = this.NewPipeline<Disposable>(
+            new HedgingOptions { Delay = TimeSpan.Zero },
+            o => o with { ShouldRetryResult = r => r.Name == "rejected" });
+
+        Task<Disposable> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
+        await attempts[1].WhenAwaitedAsync().ConfigureAwait(false);
+        attempts[0].SetResult(first);
+        attempts[1].SetResult(second);
+
+        // The last rejected result is the outcome. The pipeline disposed the one before it.
+        Assert.AreSame(second, await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.AreEqual(1, first.DisposeCount);
+        Assert.AreEqual(0, second.DisposeCount);
+    }
+
+    // F11: an outcome that stops the call comes first, and OnHedging does not run for an attempt that cannot start.
+    [TestMethod]
+    public async Task WhenTheCallerCancelsWhileAnAttemptFails_OnHedgingIsNotCalled()
+    {
+        using CancellationTokenSource cts = new();
+        var generatorCalls = new List<int>();
+        var op = new ScriptedOperation<string>(
+            _ =>
+            {
+                // The operation fails with an exception that is not a cancellation, after the caller cancelled.
+                cts.Cancel();
+                throw new InvalidOperationException("Attempt 1 failed");
+            },
+            Succeeds("attempt 2"));
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
+            new HedgingOptions { Delay = HedgingDelay },
+            o => o with { HedgingActionGenerator = RecordingGenerator<string>(generatorCalls) });
+
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+            () => pipeline.ExecuteAsync(op.InvokeAsync, cts.Token).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
+        Assert.IsEmpty(this.HedgingEvents);
+        Assert.AreSequenceEqual(new[] { 1 }, Generated(generatorCalls));
+        Assert.AreEqual(1, op.Invocations);
+    }
+
+    [TestMethod]
+    public async Task WhenTheCallerCancelsWhileAnEarlierAttemptFails_TheCancellationComesFirstAndThePolicyIsNotAsked()
+    {
+        // The pipeline continues on the single thread of the context. The test blocks that thread while another thread
+        // completes both attempts, so the pipeline reads neither outcome until both exist.
+        var failure = new InvalidOperationException("Attempt 1 failed");
+        var policy = new RecordingRetryPolicy(false);
+        using CancellationTokenSource cts = new();
+        PendingOutcome<string>[] attempts = [new(), new()];
+        var op = new ScriptedOperation<string>(_ => attempts[0].ValueTask, _ => attempts[1].ValueTask);
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
+            new HedgingOptions { Delay = TimeSpan.Zero, Policy = policy },
+            o => o with { ContinueOnCapturedContext = true });
+
+        OperationCanceledException thrown = await PumpingSynchronizationContext.RunAsync(
+            async _ =>
+            {
+                Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync, cts.Token).AsTask();
+                await attempts[1].WhenAwaitedAsync().ConfigureAwait(true);
+                Assert.IsTrue(
+                    Task.Run(
+                        () =>
+                        {
+                            attempts[0].SetException(failure);
+                            cts.Cancel();
+                            attempts[1].SetException(new OperationCanceledException(cts.Token));
+                        }).Wait(WaitLimit));
+                return await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call).ConfigureAwait(true);
+            }).WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
+        Assert.IsEmpty(policy.Consulted);
+        Assert.AreEqual(new HedgingEventArgs(2, null), Assert.ContainsSingle(this.HedgingEvents));
+    }
+
+    // Behaviours that had no test.
+    [TestMethod]
+    public async Task AnExceptionFromTheGeneratorForTheFirstAttempt_StopsTheCallBeforeAnyAttemptStarts()
+    {
+        var generatorFailure = new FormatException("The generator failed");
+        var op = new ScriptedOperation<string>(Succeeds("attempt 1"));
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
+            new HedgingOptions(),
+            o => o with { HedgingActionGenerator = _ => throw generatorFailure });
+
+        FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
+            () => pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        Assert.AreSame(generatorFailure, thrown);
+        Assert.AreEqual(0, op.Invocations);
+        Assert.IsEmpty(this.HedgingEvents);
+    }
+
+    [TestMethod]
+    public async Task AnExceptionThatOnHedgingThrowsAfterItsFirstAwait_StopsTheCallAndCancelsTheAttempts()
+    {
+        var callbackFailure = new FormatException("The callback failed");
+        var op = new ScriptedOperation<string>(NeverCompletesAsync);
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
+            new HedgingOptions
+            {
+                Delay = HedgingDelay,
+                OnHedging = async _ =>
+                {
+                    await Task.Yield();
+                    throw callbackFailure;
+                },
+            });
+
+        Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
+        this.fake.Advance(HedgingDelay);
+
+        FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreSame(callbackFailure, thrown);
+        Assert.AreEqual(1, op.Invocations);
+        Assert.IsTrue(op.Tokens[0].IsCancellationRequested);
+    }
+
+    [TestMethod]
+    public async Task WhenTheCallerCancelsWhileOnHedgingRuns_TheNextAttemptDoesNotStart()
+    {
+        using CancellationTokenSource cts = new();
+        var generatorCalls = new List<int>();
+        var callbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackCompletion = new TaskCompletionSource();
+        var op = new ScriptedOperation<string>(NeverCompletesAsync, Succeeds("attempt 2"));
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
+            new HedgingOptions
+            {
+                Delay = HedgingDelay,
+                OnHedging = _ =>
+                {
+                    callbackEntered.TrySetResult();
+                    return new ValueTask(callbackCompletion.Task);
+                },
+            },
+            o => o with { HedgingActionGenerator = RecordingGenerator<string>(generatorCalls) });
+
+        Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync, cts.Token).AsTask();
+        this.fake.Advance(HedgingDelay);
+        await callbackEntered.Task.WaitAsync(WaitLimit).ConfigureAwait(false);
+        await cts.CancelAsync().ConfigureAwait(false);
+        callbackCompletion.SetResult();
+
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
+        Assert.AreSequenceEqual(new[] { 1 }, Generated(generatorCalls));
+        Assert.AreEqual(1, op.Invocations);
+        Assert.IsTrue(op.Tokens[0].IsCancellationRequested);
+    }
+
+    [TestMethod]
+    public async Task WhenTheTotalTimeoutExpires_ResultsThatTheAttemptsReturnLaterAreDisposed()
+    {
+        TimeSpan totalTimeout = TimeSpan.FromSeconds(1);
+        PendingOutcome<Disposable>[] attempts = [new(), new(), new()];
+        Disposable[] results = [new("1"), new("2"), new("3")];
+        var op = new ScriptedOperation<Disposable>(_ => attempts[0].ValueTask, _ => attempts[1].ValueTask, _ => attempts[2].ValueTask);
+        ReliabilityPipeline<Disposable> pipeline = this.NewPipeline<Disposable>(
+            new HedgingOptions { Delay = TimeSpan.Zero, MaxHedgedAttempts = 2 },
+            o => o with { TotalTimeout = totalTimeout });
+
+        Task<Disposable> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
+        await attempts[1].WhenAwaitedAsync().ConfigureAwait(false);
+        await attempts[2].WhenAwaitedAsync().ConfigureAwait(false);
+        this.fake.Advance(totalTimeout);
+
+        await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        // The operations ignore their tokens, and return results after the call has ended.
+        for (int i = 0; i < attempts.Length; i++)
+        {
+            attempts[i].SetResult(results[i]);
+        }
+
+        foreach (Disposable result in results)
+        {
+            await result.WhenDisposed.WaitAsync(WaitLimit).ConfigureAwait(false);
+            Assert.AreEqual(1, result.DisposeCount);
+        }
+    }
+
+    [TestMethod]
+    public async Task AnExceptionOfAnAttemptThatLosesAfterTheWinner_IsObservedAndDoesNotReachTheCaller()
+    {
+        var loserFailure = new InvalidOperationException("The loser failed late");
+        var unobserved = new List<Exception>();
+        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs e)
+        {
+            lock (unobserved)
+            {
+                unobserved.AddRange(e.Exception.Flatten().InnerExceptions);
+            }
+        }
+
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
+        try
+        {
+            using SemaphoreSlim ended = new(0);
+            var gate = new TaskCompletionSource();
+            var op = new ScriptedOperation<string>(
+                EndsWith<string>(ended, async _ =>
+                {
+                    await gate.Task.ConfigureAwait(false);
+                    throw loserFailure;
+                }),
+                Succeeds("attempt 2"));
+            ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay });
+
+            Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
+            this.fake.Advance(HedgingDelay);
+            Assert.AreEqual("attempt 2", await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+
+            gate.SetResult();
+            Assert.IsTrue(await ended.WaitAsync(WaitLimit).ConfigureAwait(false));
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+        }
+
+        lock (unobserved)
+        {
+            Assert.DoesNotContain(loserFailure, unobserved);
+        }
+    }
+
+    [TestMethod]
+    public async Task WhenTheDelayIsLongerThanTheAttemptTimeout_TheNextAttemptStartsWhenTheAttemptTimesOut()
+    {
+        TimeSpan attemptTimeout = TimeSpan.FromSeconds(1);
+        TimeSpan delay = TimeSpan.FromSeconds(5);
+        var op = new ScriptedOperation<string>(NeverCompletesAsync, Succeeds("attempt 2"));
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = delay }, o => o with { AttemptTimeout = attemptTimeout });
+
+        Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
+        this.fake.Advance(attemptTimeout);
+
+        // The attempt timeout is a failure, so attempt 2 starts at once, long before the delay expires.
+        Assert.AreEqual("attempt 2", await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+        HedgingEventArgs args = Assert.ContainsSingle(this.HedgingEvents);
+        Assert.AreEqual(2, args.AttemptNumber);
+        RetryTimeoutException timeout = Assert.IsInstanceOfType<RetryTimeoutException>(args.LastException);
+        Assert.AreEqual(attemptTimeout, timeout.Timeout);
+        Assert.AreEqual(op.Tokens[0], Assert.IsInstanceOfType<OperationCanceledException>(timeout.InnerException).CancellationToken);
+    }
+
+    [TestMethod]
+    public async Task ThePipelineWithoutAResultTypeHedgesAnOperationThatFailsAsynchronously()
+    {
+        InvalidOperationException[] failures = [new("Attempt 1 failed"), new("Attempt 2 failed"), new("Attempt 3 failed")];
+        var events = new List<HedgingEventArgs>();
+        int invocations = 0;
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+        {
+            Hedging = new HedgingOptions
+            {
+                MaxHedgedAttempts = 2,
+                OnHedging = args =>
+                {
+                    lock (events)
+                    {
+                        events.Add(args);
+                    }
+
+                    return ValueTask.CompletedTask;
+                },
+            },
+            TimeProvider = this.fake,
+        });
+
+        InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            () => pipeline.ExecuteAsync(
+                async _ =>
+                {
+                    int attempt = Interlocked.Increment(ref invocations);
+                    await Task.Yield();
+                    throw failures[attempt - 1];
+                }).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        Assert.AreSame(failures[2], thrown);
+        Assert.AreEqual(3, Volatile.Read(ref invocations));
+        lock (events)
+        {
+            Assert.AreSequenceEqual(new[] { 2, 3 }, events.Select(e => e.AttemptNumber));
+            Assert.AreSame(failures[0], events[0].LastException);
+            Assert.AreSame(failures[1], events[1].LastException);
+        }
+    }
+
     // A circuit breaker that two failures opened, and whose break has ended, so that the next call is the test call.
     private async Task<CircuitBreaker> NewCircuitThatIsReadyForATestCallAsync(Func<CircuitStateChange, ValueTask>? onStateChanged = null)
     {
@@ -1528,6 +2445,49 @@ public class HedgingTests
         Assert.AreEqual(CircuitState.Open, breaker.State);
         this.fake.Advance(new CircuitBreakerOptions().BreakDuration);
         return breaker;
+    }
+
+    private static (int Attempt, SynchronizationContext? Context, int ThreadId, bool IsThreadPoolThread, TaskScheduler Scheduler)[] Snapshot(
+        List<(int Attempt, SynchronizationContext? Context, int ThreadId, bool IsThreadPoolThread, TaskScheduler Scheduler)> seen)
+    {
+        lock (seen)
+        {
+            return [.. seen.OrderBy(s => s.Attempt)];
+        }
+    }
+
+    // Polls a condition that another thread makes true, with WaitLimit as a safety bound only.
+    private async Task WaitUntilAsync(Func<bool> condition)
+    {
+        TimeSpan waited = TimeSpan.Zero;
+        while (!condition())
+        {
+            Assert.IsLessThan(WaitLimit, waited, "The condition did not become true.");
+            await Task.Delay(1).ConfigureAwait(false);
+            waited += TimeSpan.FromMilliseconds(1);
+        }
+    }
+
+    // A pipeline that continues on the captured context, whose attempts 1 and 2 fail synchronously and attempt 3
+    // succeeds. Each attempt records where it runs.
+    private ReliabilityPipeline<string> NewThreadRecordingPipeline(
+        List<(int Attempt, SynchronizationContext? Context, int ThreadId, bool IsThreadPoolThread, TaskScheduler Scheduler)> seen)
+    {
+        return this.NewPipeline<string>(
+            new HedgingOptions { Delay = Timeout.InfiniteTimeSpan, MaxHedgedAttempts = 2 },
+            o => o with
+            {
+                ContinueOnCapturedContext = true,
+                HedgingActionGenerator = attempt => _ =>
+                {
+                    lock (seen)
+                    {
+                        seen.Add((attempt, SynchronizationContext.Current, Environment.CurrentManagedThreadId, Thread.CurrentThread.IsThreadPoolThread, TaskScheduler.Current));
+                    }
+
+                    return attempt < 3 ? throw new InvalidOperationException($"Attempt {attempt} failed") : new ValueTask<string>("attempt 3");
+                },
+            });
     }
 
     // A pipeline with the fake time provider and hedging that records each call to OnHedging, unless the test sets
@@ -1555,6 +2515,44 @@ public class HedgingTests
     }
 
     private static Func<CancellationToken, ValueTask<T>> Succeeds<T>(T value) => _ => new ValueTask<T>(value);
+
+    // Wraps an operation so that it releases the semaphore when it ends, however it ends.
+    private static Func<CancellationToken, ValueTask<T>> EndsWith<T>(SemaphoreSlim ended, Func<CancellationToken, ValueTask<T>> operation)
+    {
+        return async cancellationToken =>
+        {
+            try
+            {
+                return await operation(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                ended.Release();
+            }
+        };
+    }
+
+    // A generator that records each attempt number that it is asked for, and gives the primary operation.
+    private static Func<int, Func<CancellationToken, ValueTask<T>>?> RecordingGenerator<T>(List<int> calls)
+    {
+        return attempt =>
+        {
+            lock (calls)
+            {
+                calls.Add(attempt);
+            }
+
+            return null;
+        };
+    }
+
+    private static int[] Generated(List<int> calls)
+    {
+        lock (calls)
+        {
+            return [.. calls];
+        }
+    }
 
     private static Func<CancellationToken, ValueTask<T>> Fails<T>(Exception exception) => _ => ThrowFailure<T>(exception);
 
