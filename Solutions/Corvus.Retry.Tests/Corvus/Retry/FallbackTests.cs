@@ -942,6 +942,87 @@ public class FallbackTests
         Assert.IsInstanceOfType<RetryTimeoutException>(Assert.ContainsSingle(calls).Exception);
     }
 
+    [TestMethod]
+    [DataRow(true, false)]
+    [DataRow(false, false)]
+    [DataRow(true, true)]
+    [DataRow(false, true)]
+    public async Task WithContinueOnCapturedContext_TheGenericPipelineAndItsFallbackContinueOnTheCapturedContextOnlyWhenItIsTrue(
+        bool continueOnCapturedContext,
+        bool aRejectedResultCausesTheFallback)
+    {
+        var context = new ThreadPoolSynchronizationContext();
+        var seen = new Dictionary<string, SynchronizationContext?>();
+        var actionGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int attempts = 0;
+
+        void Record(string name)
+        {
+            lock (seen)
+            {
+                seen.Add(name, SynchronizationContext.Current);
+            }
+        }
+
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new Count(2),
+            ContinueOnCapturedContext = continueOnCapturedContext,
+            ShouldRetryResult = r => r == "rejected",
+            OnRetry = _ =>
+            {
+                Record("OnRetry");
+                return DeferredValueTask.Completed();
+            },
+            Fallback = new FallbackOptions<string>
+            {
+                ShouldFallbackResult = r => r == "rejected",
+                OnFallback = _ =>
+                {
+                    Record("OnFallback");
+                    return DeferredValueTask.Completed();
+                },
+                Action = _ =>
+                {
+                    Record("Action");
+                    return DeferredValueTask.FromResult(FallbackValue, actionGate.Task);
+                },
+            },
+        });
+
+        // Each attempt completes on a thread with no context, after the pipeline awaits it.
+        ValueTask<string> OperationAsync(CancellationToken cancellationToken)
+        {
+            Record($"attempt {Interlocked.Increment(ref attempts)}");
+            return aRejectedResultCausesTheFallback
+                ? DeferredValueTask.FromResult("rejected")
+                : DeferredValueTask.FromException<string>(new InvalidOperationException("Failure"));
+        }
+
+        (Task<string> call, Task<SynchronizationContext?> completedOn) = context.Run(() =>
+        {
+            Task<string> call = pipeline.ExecuteAsync(OperationAsync).AsTask();
+            Task<SynchronizationContext?> completedOn = call.ContinueWith(
+                _ => SynchronizationContext.Current,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return (call, completedOn);
+        });
+
+        // The call cannot complete before the continuation that records its context is registered.
+        actionGate.SetResult();
+
+        Assert.AreEqual(FallbackValue, await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+        SynchronizationContext? expected = continueOnCapturedContext ? context : null;
+        Assert.AreSame(context, seen["attempt 1"]);
+        Assert.AreSame(expected, seen["OnRetry"]);
+        Assert.AreSame(expected, seen["attempt 2"]);
+        Assert.AreSame(expected, seen["OnFallback"]);
+        Assert.AreSame(expected, seen["Action"]);
+        Assert.AreSame(expected, await completedOn.WaitAsync(WaitLimit).ConfigureAwait(false));
+    }
+
     private static async Task AssertCallbackExceptionPropagatesAsync(
         ReliabilityPipeline<string> pipeline,
         Func<CancellationToken, ValueTask<string>> operation,

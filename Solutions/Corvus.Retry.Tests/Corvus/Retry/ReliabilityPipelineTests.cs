@@ -555,41 +555,115 @@ public class ReliabilityPipelineTests
     }
 
     [TestMethod]
-    [DataRow(true)]
-    [DataRow(false)]
-    public async Task ContinueOnCapturedContextControlsWhetherTheContinuationIsPostedToTheContext(bool continueOnCapturedContext)
+    [DataRow(true, true)]
+    [DataRow(false, true)]
+    [DataRow(true, false)]
+    [DataRow(false, false)]
+    public async Task ContinueOnCapturedContextControlsWhetherTheRetryRunsOnTheCapturedContext(bool continueOnCapturedContext, bool withResult)
     {
         var op = new FlakyOperation(1);
-        var context = new CountingSynchronizationContext();
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(2), ContinueOnCapturedContext = continueOnCapturedContext });
+        var context = new ThreadPoolSynchronizationContext();
+        var firstAttemptGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        SynchronizationContext? onRetryContext = null;
+        SynchronizationContext? secondAttemptContext = null;
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+        {
+            Strategy = new Count(2),
+            ContinueOnCapturedContext = continueOnCapturedContext,
+            OnRetry = _ =>
+            {
+                onRetryContext = SynchronizationContext.Current;
+                return DeferredValueTask.Completed();
+            },
+        });
 
-        async ValueTask<string> OperationAsync(CancellationToken cancellationToken)
+        // The first attempt fails on a thread with no context, after the test opens the gate. By then the call has
+        // returned, so the pipeline is awaiting the attempt. The second attempt succeeds.
+        ValueTask<string> WithResultAsync(CancellationToken cancellationToken)
         {
-            await Task.Delay(1, cancellationToken).ConfigureAwait(false);
-            return op.Invoke();
+            string result;
+            try
+            {
+                result = op.Invoke();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return DeferredValueTask.FromException<string>(ex, firstAttemptGate.Task);
+            }
+
+            secondAttemptContext = SynchronizationContext.Current;
+            return new ValueTask<string>(result);
         }
 
-        Task<string> call;
-        SynchronizationContext? original = SynchronizationContext.Current;
-        SynchronizationContext.SetSynchronizationContext(context);
-        try
+        ValueTask WithoutResultAsync(CancellationToken cancellationToken)
         {
-            call = pipeline.ExecuteAsync(OperationAsync).AsTask();
+            try
+            {
+                op.Invoke();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return DeferredValueTask.FromException(ex, firstAttemptGate.Task);
+            }
+
+            secondAttemptContext = SynchronizationContext.Current;
+            return ValueTask.CompletedTask;
         }
-        finally
+
+        Task call = context.Run(() => withResult
+            ? pipeline.ExecuteAsync(WithResultAsync).AsTask()
+            : pipeline.ExecuteAsync(WithoutResultAsync).AsTask());
+        firstAttemptGate.SetResult();
+
+        await call.WaitAsync(WaitLimit).ConfigureAwait(false);
+        Assert.AreEqual(2, op.Invocations);
+        SynchronizationContext? expected = continueOnCapturedContext ? context : null;
+        Assert.AreSame(expected, onRetryContext);
+        Assert.AreSame(expected, secondAttemptContext);
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task ContinueOnCapturedContextControlsWhetherTheRetryOfTheGenericPipelineRunsOnTheCapturedContext(bool continueOnCapturedContext)
+    {
+        var op = new FlakyOperation(1);
+        var context = new ThreadPoolSynchronizationContext();
+        SynchronizationContext? onRetryContext = null;
+        SynchronizationContext? secondAttemptContext = null;
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
         {
-            SynchronizationContext.SetSynchronizationContext(original);
+            Strategy = new Count(2),
+            ContinueOnCapturedContext = continueOnCapturedContext,
+            OnRetry = _ =>
+            {
+                onRetryContext = SynchronizationContext.Current;
+                return DeferredValueTask.Completed();
+            },
+        });
+
+        ValueTask<string> AttemptAsync(CancellationToken cancellationToken)
+        {
+            string result;
+            try
+            {
+                result = op.Invoke();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return DeferredValueTask.FromException<string>(ex);
+            }
+
+            secondAttemptContext = SynchronizationContext.Current;
+            return new ValueTask<string>(result);
         }
+
+        Task<string> call = context.Run(() => pipeline.ExecuteAsync(AttemptAsync).AsTask());
 
         Assert.AreEqual("attempt-2", await call.WaitAsync(WaitLimit).ConfigureAwait(false));
-        if (continueOnCapturedContext)
-        {
-            Assert.IsGreaterThan(0, context.Posts);
-        }
-        else
-        {
-            Assert.AreEqual(0, context.Posts);
-        }
+        SynchronizationContext? expected = continueOnCapturedContext ? context : null;
+        Assert.AreSame(expected, onRetryContext);
+        Assert.AreSame(expected, secondAttemptContext);
     }
 
     [TestMethod]
@@ -667,18 +741,5 @@ public class ReliabilityPipelineTests
     {
         await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
         return "never";
-    }
-
-    private sealed class CountingSynchronizationContext : SynchronizationContext
-    {
-        private int posts;
-
-        public int Posts => Volatile.Read(ref this.posts);
-
-        public override void Post(SendOrPostCallback d, object? state)
-        {
-            Interlocked.Increment(ref this.posts);
-            ThreadPool.QueueUserWorkItem(_ => d(state));
-        }
     }
 }
