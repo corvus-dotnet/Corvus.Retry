@@ -68,8 +68,17 @@ public sealed record HedgingOptions
     /// Gets the policy that decides whether an exception from an attempt is a failure.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The default is <see cref="AnyExceptionPolicy.Default"/>. A failure starts the next attempt. An exception that
     /// the policy refuses is not a failure: the pipeline throws it immediately, and cancels the other attempts.
+    /// </para>
+    /// <para>
+    /// The pipeline asks the policy about the exceptions that the attempt threw, not the
+    /// <see cref="AggregateException"/> around them: for an <see cref="AggregateException"/>, it asks about each inner
+    /// exception, and the aggregate is a failure only if the policy accepts every one of them. An aggregate with no inner
+    /// exceptions is itself the failure. <see cref="OnHedging"/> and the pipeline's caller still receive the exception as
+    /// the attempt threw it.
+    /// </para>
     /// </remarks>
     public IRetryPolicy Policy { get; init; } = AnyExceptionPolicy.Default;
 

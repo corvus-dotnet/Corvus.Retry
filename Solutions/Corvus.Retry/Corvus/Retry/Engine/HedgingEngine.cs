@@ -11,6 +11,8 @@ using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Corvus.Retry.Policies;
+
 /// <summary>
 /// The engine that runs hedged attempts: it starts more attempts in parallel when an attempt is slow or fails, and the
 /// first acceptable outcome wins.
@@ -114,7 +116,8 @@ internal static class HedgingEngine
     /// <remarks>
     /// When every attempt fails and the last outcome is an exception, that exception is rethrown with its original stack
     /// trace. An exception that the policy of <paramref name="hedging"/> refuses is not a failure: it is rethrown at
-    /// once. An exception from a callback stops the call.
+    /// once. The policy is asked about the exceptions that the operation threw: for an <see cref="AggregateException"/>,
+    /// about each inner exception. An exception from a callback stops the call.
     /// </remarks>
     internal static async ValueTask<T> RunAsync<T>(
         Func<CancellationToken, ValueTask<T>> primary,
@@ -256,7 +259,7 @@ internal static class HedgingEngine
 
                     case AttemptOutcome.Failed:
                         Exception failure = completed.Exception!;
-                        if (!hedging.Policy.CanRetry(failure))
+                        if (!CanRetry(hedging.Policy, failure))
                         {
                             // An exception that the policy refuses is not a failure, so it wins.
                             ExceptionDispatchInfo.Throw(SetOutcome(outcome, failure));
@@ -382,6 +385,12 @@ internal static class HedgingEngine
                 lastResult = default!;
             }
         }
+    }
+
+    // Asks the policy about the exceptions that the operation threw, not the AggregateException around them.
+    private static bool CanRetry(IRetryPolicy policy, Exception failure)
+    {
+        return failure is AggregateException aggregate ? policy.CanRetryAll(aggregate) : policy.CanRetry(failure);
     }
 
     // Records an exception that the call throws as the outcome of its attempts, so that the fallback can tell it from an

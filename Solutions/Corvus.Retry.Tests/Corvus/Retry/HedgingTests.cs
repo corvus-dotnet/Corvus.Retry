@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -1470,6 +1471,45 @@ public class HedgingTests
             () => pipeline.ExecuteAsync(op.InvokeAsync, cts.Token).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
         Assert.AreEqual(cts.Token, thrown.CancellationToken);
+        Assert.AreEqual(1, op.Invocations);
+        Assert.IsEmpty(this.HedgingEvents);
+    }
+
+    // Each entry point asks the policy about the exceptions that the operation threw, not the AggregateException
+    // around them.
+    [TestMethod]
+    public async Task WithHedging_AnAggregateExceptionOfExceptionsThatThePolicyHandles_IsAFailureThatStartsTheNextAttempt()
+    {
+        var aggregate = new AggregateException(new HttpRequestException("Attempt 1 failed"));
+        var op = new ScriptedOperation<string>(Fails<string>(aggregate), Succeeds("attempt 2"));
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
+            new HedgingOptions { Delay = HedgingDelay, Policy = RetryPolicies.Handle<HttpRequestException>() });
+
+        Assert.AreEqual("attempt 2", await pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false));
+
+        // OnHedging receives the exception as the operation threw it.
+        HedgingEventArgs args = Assert.ContainsSingle(this.HedgingEvents);
+        Assert.AreEqual(2, args.AttemptNumber);
+        Assert.AreSame(aggregate, args.LastException);
+        Assert.AreEqual(2, op.Invocations);
+    }
+
+    [TestMethod]
+    public async Task WithHedging_ThePolicyIsAskedAboutEachInnerExceptionOfAnAggregateException()
+    {
+        var accepted = new HttpRequestException("Accepted");
+        var refused = new FormatException("Refused");
+        var aggregate = new AggregateException(accepted, new AggregateException(refused));
+        var policy = new RecordingRetryPolicy(e => e is HttpRequestException);
+        var op = new ScriptedOperation<string>(Fails<string>(aggregate), Succeeds("attempt 2"));
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay, Policy = policy });
+
+        // One inner exception is refused, so the aggregate is not a failure, and the call throws it at once.
+        AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(
+            () => pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        Assert.AreSame(aggregate, thrown);
+        Assert.AreSequenceEqual(new Exception[] { accepted, refused }, policy.Consulted);
         Assert.AreEqual(1, op.Invocations);
         Assert.IsEmpty(this.HedgingEvents);
     }
