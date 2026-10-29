@@ -7,6 +7,7 @@
 using System.Diagnostics;
 using Corvus.Retry;
 using Corvus.Retry.Policies;
+using Corvus.Retry.Strategies;
 
 // ### `ReliableTaskRunner`
 //
@@ -26,7 +27,7 @@ using Corvus.Retry.Policies;
 //     await using ReliableTaskRunner runner = ReliableTaskRunner.Run(cancellationToken => DoSomeOperationAsync(cancellationToken));
 //
 // As with the other retry methods, there are overloads where you can pass an `IRetryPolicy` to control the restart
-// behaviour.
+// behaviour, and an `IRetryStrategy` to wait between restarts (see the last example).
 
 // #### Example - Stopping the runner with `await using`
 //
@@ -143,6 +144,48 @@ Console.WriteLine("## Cancelling an operation that faults");
 
 // You can see from the output that after three retries, the policy stops retrying and the method has exited the while
 // loop. At this point it's doing nothing - it has faulted.
+
+// #### Example - Waiting between restarts with a restart strategy
+//
+// `Run(runFunction)` and `Run(runFunction, retryPolicy)` restart the operation immediately after each failure, with no
+// limit. If the operation fails immediately each time it starts (for example, because a service it needs is down), the
+// runner restarts it continuously and uses much processor time.
+//
+// The overload `Run(runFunction, restartStrategy, retryPolicy)` waits for the delay of an `IRetryStrategy` before each
+// restart. The strategy receives the number of failed runs (from 1) and the exception of the run. If it returns
+// `null`, the runner does not restart. Use a strategy with no limit for an operation that must continue: a bounded
+// strategy stops the runner after that number of failed runs.
+//
+// Here the operation always fails at once. The exponential strategy waits 200 ms, 400 ms, 800 ms, 1.6 s (and then
+// at most 2 s) before each restart. After 3 seconds we stop the runner. StopAsync also stops a restart delay.
+Console.WriteLine();
+Console.WriteLine("## Waiting between restarts with a restart strategy");
+{
+    Stopwatch stopwatch = Stopwatch.StartNew();
+    int runs = 0;
+    await using ReliableTaskRunner runner = ReliableTaskRunner.Run(
+        cancellationToken =>
+        {
+            runs++;
+            Console.WriteLine($"Run {runs} started after {stopwatch.ElapsedMilliseconds} ms, and fails at once");
+            return Task.FromException(new InvalidOperationException("The service is not available"));
+        },
+        new Exponential(int.MaxValue, TimeSpan.FromMilliseconds(200), TimeSpan.FromSeconds(2)),
+        AnyExceptionPolicy.Default);
+
+    await Task.Delay(3000);
+    Console.WriteLine("Stopping the runner");
+    try
+    {
+        await runner.StopAsync();
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Awaiting the runner task threw {ex.GetType().Name}: {ex.Message}");
+    }
+
+    Console.WriteLine($"The operation ran {runs} times in 3 seconds");
+}
 
 // ---- Types used above (must follow the top-level statements) ----
 

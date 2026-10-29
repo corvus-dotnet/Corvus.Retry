@@ -22,7 +22,9 @@ The .NET package validation tool compared the 3.0 package with the 2.0.0 package
 | `IRetryStrategy.OnRetrying(RetryEventArgs)` | CP0002 | The `onRetry` parameter of `Retriable`, or `ReliabilityPipelineOptions.OnRetry`. See [Events and callbacks](#events-and-callbacks). |
 | The `IRetryStrategy.Retrying` event | CP0002 | The `onRetry` parameter of `Retriable`, or `ReliabilityPipelineOptions.OnRetry`. See [Events and callbacks](#events-and-callbacks). |
 | A new member `IRetryStrategy.GetRetryDelay(in RetryAttempt)` | CP0006 | Implement this method in each custom strategy. See [Strategies](#strategies). |
-| The `RetryEventArgs(Exception, TimeSpan)` constructor | CP0002 | `RetryEventArgs(Exception? lastException, object? result, TimeSpan delayBeforeRetry, int attemptNumber)`. |
+| The `RetryEventArgs(Exception, TimeSpan)` constructor | CP0002 | `RetryEventArgs(Exception? LastException, object? Result, TimeSpan DelayBeforeRetry, int AttemptNumber)`. |
+| `RetryEventArgs` is a class that derives from `EventArgs` | CP0007, CP0009 | `RetryEventArgs` is a `readonly record struct`. See [Events and callbacks](#events-and-callbacks). |
+| `RetryTaskFactory` and `RetryTaskFactory<T>` are not sealed | CP0009 | Both classes are sealed. If you derived a class from them, call `RetryTask.Factory` from a class of your own. |
 | The setters of `Backoff.MinBackoff` and `Backoff.MaxBackoff` | CP0002 | `init` accessors. Set the values with an object initializer. |
 | `Retriable.Retry<T>(Func<T>, CancellationToken, IRetryStrategy, IRetryPolicy)` | CP0002 | The same overload with an optional `onRetry` parameter. Compile your project again. |
 | `Retriable.Retry(Action, CancellationToken, IRetryStrategy, IRetryPolicy)` | CP0002 | The same overload with an optional `onRetry` parameter. Compile your project again. |
@@ -117,11 +119,12 @@ Version 3.0 has no `Retrying` event and no `OnRetrying` method. Use a callback:
 | `strategy.Retrying += handler` with `Retriable` | The `onRetry` parameter of the `Retriable` overloads that have all the parameters, or `ReliabilityPipelineOptions.OnRetry` if you move the call to a `ReliabilityPipeline` |
 | `strategy.Retrying += handler` with `RetryTask` | None. `RetryTask` has no retry callback. Use `Retriable` or `ReliabilityPipeline` in the operation, if you must have a callback. |
 
-The callback is `Func<RetryEventArgs, ValueTask>`. `Retriable` and the pipeline await it before the delay. An exception from the callback stops the call. The synchronous `Retry` overloads wait for the callback.
+The callback is `Func<RetryEventArgs, ValueTask>`. `Retriable` and the pipeline await it before the delay. An exception from the callback stops the call. The synchronous `Retry` overloads wait for the callback. They run the callback with no `SynchronizationContext`. Thus, if the callback awaits on a UI thread, it continues on the thread pool, and a deadlock does not occur.
 
 `RetryEventArgs` has these changes:
 
-- The constructor is `RetryEventArgs(Exception? lastException, object? result, TimeSpan delayBeforeRetry, int attemptNumber)`.
+- `RetryEventArgs` is a `readonly record struct`, not a class. It does not derive from `EventArgs`. Thus, you cannot compare it with `null`, and you cannot derive a class from it. To keep the last value in a variable, use `RetryEventArgs?`.
+- The constructor is `RetryEventArgs(Exception? LastException, object? Result, TimeSpan DelayBeforeRetry, int AttemptNumber)`. If you use named arguments, change `lastException:` to `LastException:`.
 - `LastException` can be `null`. It is `null` when a result caused the retry.
 - The new property `Result` gives that result.
 - The new property `AttemptNumber` gives the number of the attempt that failed. The first attempt is 1.
@@ -144,6 +147,34 @@ If your code catches the exception of the operation after a cancellation, change
 
 The overloads without a cancellation token use `CancellationToken.None`. Thus, these rules have no effect on them.
 
+## Asynchronous operations with Retry and StartNew
+
+In version 3.0, the compiler gives the error CS0619 when you give an asynchronous operation to `Retriable.Retry` or to `RetryTask.Factory.StartNew`. In version 2.x, these calls compiled, but the retries did not operate:
+
+| Call | 2.x | 3.0 |
+|------|-----|-----|
+| `Retriable.Retry(async () => ...)` | The call bound to `Retry<Task>`. It retried only an exception before the first `await`, and returned the task of the first attempt. | Compile error CS0619. |
+| `Retriable.Retry(() => client.SendAsync(request))` | The same as the previous row. | Compile error CS0619. |
+| `Retriable.Retry(() => stream.ReadAsync(buffer))`, or an operation that returns a different `ValueTask` or `ValueTask<TResult>` | The call bound to `Retry<ValueTask<int>>`. It retried only an exception that the method threw before it returned the `ValueTask`. | Compile error CS0619. |
+| `RetryTask.Factory.StartNew(async () => ...)` | The lambda ran as `async void`. The task completed at the first `await`. An exception after it was not retried, and could stop the process. | Compile error CS0619. |
+| `RetryTask.Factory.StartNew(() => DoAsync())`, where `DoAsync` returns a `ValueTask` or a `ValueTask<TResult>` | The task completed when `DoAsync` returned its `ValueTask`. A failure of the `ValueTask` was not retried. | Compile error CS0619. |
+| `Retriable.RetryAsync(async () => client.SendAsync(request))`, with no `await` in the lambda | The call bound to `RetryAsync<Task<HttpResponseMessage>>`. It completed when the lambda returned the inner task, and did not retry a failure of that task. | Compile error CS0619. |
+| `RetryTask<Task>.Factory.StartNew(...)`, or a different task type for `T` | The task completed when the function returned its task. A failure of that task was not retried. | `StartNew` throws a `NotSupportedException`, before it calls the function. The compiler cannot find this error. |
+
+To correct the error, do these steps:
+
+1. Replace `Retriable.Retry` with `Retriable.RetryAsync`. Use the same arguments.
+2. Replace `RetryTask.Factory.StartNew(async () => ...)` and `RetryTask<Task>.Factory.StartNew(...)` with `Retriable.RetryAsync(async () => ...)`. If you used a `TaskCreationOptions` or a `TaskScheduler`, start the call with `Task.Factory.StartNew(...).Unwrap()`.
+3. For an operation that returns a `ValueTask` or a `ValueTask<TResult>`, use `ReliabilityPipeline.ExecuteAsync`. As an alternative, call `AsTask()` in the operation, and use `Retriable.RetryAsync`.
+4. In an `async` lambda for `RetryAsync`, use `await` on the task of the operation: `async () => await client.SendAsync(request)`.
+5. Use `await` on the result.
+
+A synchronous lambda that only throws an exception does not cause the error. It binds to the same overload as in version 2.x.
+
+The `RetryAsync` error also occurs for a function that must return a task of a task, for example `() => Task.FromResult(someTask)`. Change the function to return the inner task, or put the inner task in a different type.
+
+If an operation gives a `null` task to `Retriable.RetryAsync`, the attempt fails with an `InvalidOperationException`. In version 2.x, it failed with a `NullReferenceException`. The strategy and the policy decide if `RetryAsync` retries it, as for each other exception. If your policy examines `NullReferenceException`, change it.
+
 ## RetryTask
 
 `RetryTask.Factory` and `RetryTask<T>.Factory` keep all their `StartNew` overloads.
@@ -151,7 +182,9 @@ The overloads without a cancellation token use `CancellationToken.None`. Thus, t
 - A retry does not block a thread. In version 2.x, the delay blocked a thread, and each retry ran synchronously on that thread. In version 3.0, a delay task and continuations start each retry on the scheduler of the caller.
 - `RetryTask` has no retry callback, because the `Retrying` event is removed.
 - If the scheduler refuses to queue a retry, the refusal is a failure of that try. The strategy and the policy decide if `RetryTask` retries it. In version 2.0, the task faulted immediately.
-- If the operation stops, the task faults with all the failures that the operation recorded. This did not change.
+- If the operation stops, the task faults with the failures that the operation recorded. `RetryTask` keeps a maximum of 100 failures: the first 99 failures and the last failure. In version 2.x, it kept all the failures.
+- The task that `RetryTask` returns obeys `TaskCreationOptions.RunContinuationsAsynchronously`. In version 2.x, a continuation of the task could run synchronously in the retry code.
+- `RetryTask<T>.Factory.StartNew` throws a `NotSupportedException` when `T` is a task type. See [Asynchronous operations with Retry and StartNew](#asynchronous-operations-with-retry-and-startnew).
 
 ## ReliableTaskRunner
 
@@ -161,6 +194,22 @@ The overloads without a cancellation token use `CancellationToken.None`. Thus, t
 - `StopAsync` cancels the token with `CancelAsync`. Thus, the callbacks of the token run on a thread-pool thread, not on the thread that calls `StopAsync`. In version 2.x, an exception from a callback came from `StopAsync` immediately. In version 3.0, the task from `StopAsync` faults with that exception.
 - `StopAsync` returns a new task, not the task of the run. The task ends as the last run ended. If the run faulted with many exceptions, the task faults with all of them.
 - After `DisposeAsync`, `StopAsync` does not cancel the token. Its task ends as the last run ended.
+- If the policy throws an exception, the runner stops, and the task from `StopAsync` faults with that exception. In version 2.x, the runner stopped, and the exception was lost.
+- The runner starts each restart on the thread pool (`TaskScheduler.Default`). In version 2.x, it used the scheduler of the caller of `Run`. If your run function must start on a special scheduler, start it on that scheduler in the run function.
+- If the run function returns a `null` task, `Run` throws an `InvalidOperationException`. On a restart, a `null` task is a run that failed with an `InvalidOperationException`, and the policy decides if the runner restarts.
+- `StopAsync` and `DisposeAsync` wait until a restart decision that is in progress ends. Then they use the outcome of the last run.
+- Do not await the task from `StopAsync` in the run function. The task completes only when the run ends.
+
+`Run(runFunction)` and `Run(runFunction, retryPolicy)` restart the operation immediately after each failure, with no limit, as in version 2.x. To wait between restarts, use the new overload `Run(runFunction, restartStrategy, retryPolicy)`:
+
+```csharp
+await using ReliableTaskRunner runner = ReliableTaskRunner.Run(
+    cancellationToken => ProcessMessagesAsync(cancellationToken),
+    new Exponential(int.MaxValue, TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(1)),
+    AnyExceptionPolicy.Default);
+```
+
+CAUTION: Use a strategy with no limit, for example `new Exponential(int.MaxValue, ...)`. A strategy with a limit stops the runner after that number of failed runs, and the operation does not run again.
 
 ## Removed types
 

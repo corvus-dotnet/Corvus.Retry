@@ -15,6 +15,8 @@ them.
 - An asynchronous `Retriable` call that completes immediately takes 3 ns to 22 ns more than in 2.0.
 - `RetryTask` and `ReliableTaskRunner.StopAsync` are slower than in 2.0, because of changes to their behavior.
 - A `ReliabilityPipeline` with no options adds approximately 26 ns to a call, and allocates no memory.
+- A hedged attempt after the first attempt starts on the thread pool. In the benchmark, this adds approximately 620 B
+  and 2.4 µs to a hedged call.
 
 ## Test environment
 
@@ -37,6 +39,8 @@ them.
    `RetryTaskBenchmarks` and `ReliabilityPipelineBenchmarks`. The two versions used the same benchmark code.
 3. After the changes that this document describes in [Changes from the analysis](#changes-from-the-analysis), we ran
    the benchmarks that these changes affect again. Each run used the same job as the run before the change.
+4. After the changes in [Changes to the behavior](#changes-to-the-behavior), we ran the benchmarks that these
+   changes affect with the short job, before and after the changes.
 
 Some benchmarks have a different name in 3.0:
 
@@ -56,7 +60,7 @@ run, not the absolute times from different runs. Times of less than 1 ns are les
 
 ## Version 2.0 and version 3.0
 
-These results come from the default job, unless the table shows "short job". The notes R1 thru R4 refer to the
+These results come from the default job, unless the table shows "short job". The notes R1 thru R3 refer to the
 [causes of the slower results](#causes-of-the-slower-results).
 
 | Benchmark | 2.0 | 3.0 | Note |
@@ -74,10 +78,10 @@ These results come from the default job, unless the table shows "short job". The
 | `Count` strategy, 9 failures | 95.3 ns, 368 B | 10.6 ns, 0 B | |
 | `Linear` strategy, 9 failures | 99.9 ns, 376 B | 10.0 ns, 0 B | |
 | `Backoff` strategy, 9 failures | 253 ns, 392 B | 205 ns, 0 B | |
-| `ReliableTaskRunner.Run` and `StopAsync` (short job) | 384 ns, 832 B | 1.94 µs, 1,111 B | R3 |
+| `ReliableTaskRunner.Run` and `StopAsync` (short job) | 384 ns, 832 B | 1.93 µs, 1.3 KB | R3 |
 | `RetryAsync_WithDelay_TaskDelay` (short job) | 3.37 µs, 1,112 B | 2.01 µs, 992 B | |
 | `Retry_WithDelay_ThreadSleep` (short job) | 3.82 µs, 448 B | 3.56 µs, 328 B | |
-| `RetryEventArgs` constructor (short job) | 10.7 ns, 32 B | 12.3 ns, 48 B | R4 |
+| `RetryEventArgs` constructor (short job) | 10.7 ns, 32 B | 0.3 ns, 0 B | |
 
 ## Functions that are new in 3.0
 
@@ -90,19 +94,19 @@ The last column gives a benchmark in the same class, for comparison.
 | Pipeline, `TotalTimeout` | 154 ns, 144 B | |
 | Pipeline, `AttemptTimeout` and `TotalTimeout` | 189 ns, 432 B | |
 | Pipeline, 2 failures | 4.01 µs, 432 B | Hand-written loop: 3.85 µs, 432 B |
-| Pipeline, 2 failures, with `OnRetry` | 528 B | The 96 B more are two `RetryEventArgs` objects. |
+| Pipeline, 2 failures, with `OnRetry` (short job) | 3.64 µs, 432 B | The callback allocates no memory. `RetryEventArgs` is a value type. |
 | `ReliabilityPipeline<T>`, one result retry | 47 ns, 24 B | The 24 B is a boxed `int` in `RetryAttempt.Result`. |
 | Circuit breaker, closed circuit, success | 76.6 ns, 0 B | No circuit breaker: 23.1 ns |
 | Circuit breaker, closed circuit, failure | 9.3 µs, 1,480 B | No circuit breaker: 9.0 µs, 1,480 B |
 | Circuit breaker, open or isolated circuit (the call is rejected) | 5.6 µs, 920 B | |
-| Fallback, set but not used | 40.8 ns, 0 B | No fallback: 24.2 ns |
-| Fallback, used for a result | 55.1 ns, 0 B | No fallback: 26.1 ns |
-| Fallback, used for an exception | 9.45 µs, 1,480 B | No fallback: 9.09 µs, 1,480 B |
-| Hedging, the first attempt succeeds | 103.5 ns, 472 B | Pipeline with retries: 26.2 ns, 0 B |
-| Hedging, the first attempt fails and the second succeeds | 3.05 µs, 824 B | Pipeline with retries: 2.38 µs, 216 B |
-| Hedging, delay of zero, two attempts | 267 ns, 608 B | |
-| Hedging, delay of zero, the attempt that loses is cancelled | 5.89 µs, 2,300 B | |
-| `ReliableTaskRunner.Run` and `DisposeAsync` | 2.28 µs, 1,040 B | |
+| Fallback, set but not used (short job) | 39.2 ns, 24 B | No fallback: 25.8 ns, 0 B. The 24 B is the object that records the outcome of the attempts. |
+| Fallback, used for a result (short job) | 53.7 ns, 24 B | No fallback: 25.7 ns, 0 B |
+| Fallback, used for an exception (short job) | 8.96 µs, 1,504 B | No fallback: 8.65 µs, 1,480 B |
+| Hedging, the first attempt succeeds (short job) | 150 ns, 496 B | Pipeline with retries: 24.4 ns, 0 B |
+| Hedging, the first attempt fails and the second succeeds (short job) | 5.01 µs, 1,444 B | Pipeline with retries: 2.18 µs, 216 B. Attempt 2 starts on the thread pool. |
+| Hedging, delay of zero, attempt 1 succeeds synchronously (short job) | 160 ns, 496 B | Attempt 2 does not start, because attempt 1 won before it. |
+| Hedging, delay of zero, the attempt that loses is cancelled (short job) | 2.60 µs, 2,951 B | |
+| `ReliableTaskRunner.Run` and `DisposeAsync` (short job) | 2.01 µs, 1.22 KB | |
 | `RetryTask`, delay of one tick, 2 failures | 15.46 µs, 4,119 B | |
 
 Exceptions cause most of the cost of a failure. A rejection by the circuit breaker is an exception, thus it costs
@@ -119,10 +123,10 @@ We accept these results. Each one is the result of a change to the behavior of 3
 - **R2: `RetryTask` with failures takes 26% more time and allocates 233 B more.** Each `StartNew` overload allocates
   16 B or 32 B more. In 3.0, a retry does not block a thread. The scheduler runs each retry as a continuation. The state
   for each call is in the factory, not in the strategy.
-- **R3: `ReliableTaskRunner.StopAsync` takes approximately 1.9 µs, and allocates 279 B more.** `StopAsync` uses
-  `CancellationTokenSource.CancelAsync`, which continues on a different thread. It also keeps all the exceptions of
-  the operation.
-- **R4: `RetryEventArgs` allocates 16 B more.** The new properties `Result` and `AttemptNumber` use this memory.
+- **R3: `ReliableTaskRunner.StopAsync` takes approximately 1.9 µs, and allocates approximately 500 B more.**
+  `StopAsync` uses `CancellationTokenSource.CancelAsync`, which continues on a different thread. It also keeps all
+  the exceptions of the operation. The runner also keeps a task for the restart decision. `StopAsync` and
+  `DisposeAsync` wait for this task.
 
 ## Changes from the analysis
 
@@ -137,6 +141,30 @@ The analysis made these changes. They do not change the public API or the docume
 The `RetriableBenchmarks` results after this change are not directly comparable with the 2.0 results. The 2.0 and
 3.0 values in the table [Version 2.0 and version 3.0](#version-20-and-version-30) use the old benchmark code for
 the two versions.
+
+## Changes to the behavior
+
+Some changes to the behavior of 3.0 changed the cost of the fallback, hedging and `ReliableTaskRunner`. We ran
+`FallbackBenchmarks`, `HedgingBenchmarks`, `ReliableTaskRunnerBenchmarks`, `CircuitBreakerBenchmarks` and
+`RetryTaskBenchmarks` with the short job, before and after these changes, one run after the other.
+
+| Change | Benchmark | Before | After |
+|---|---|---|---|
+| The fallback applies only to the outcome of the attempts. For each call, a pipeline with a fallback allocates one 24 B object that records that outcome. | Fallback, set but not used | 36.2 ns, 0 B | 39.2 ns, 24 B |
+| | Fallback, used for a result | 50.7 ns, 0 B | 53.7 ns, 24 B |
+| | Fallback, used for an exception | 8.84 µs, 1,480 B | 8.96 µs, 1,504 B |
+| Hedged attempts 2 and higher start on the thread pool. Each one allocates a task, a proxy task from `Unwrap` and a work item of the thread pool. | Hedging, the first attempt fails and the second succeeds | 2.62 µs, 824 B | 5.01 µs, 1,444 B |
+| | Hedging, delay of zero, the attempt that loses is cancelled | 4.51 µs, 2,314 B | 2.60 µs, 2,951 B |
+| | Hedging, the first attempt succeeds | 129 ns, 472 B | 150 ns, 496 B |
+| Hedging does not start an attempt after an outcome wins. With a delay of zero, attempt 1 succeeds synchronously, thus attempt 2 does not start. | Hedging, delay of zero, two attempts | 211 ns, 608 B | 160 ns, 496 B |
+| `ReliableTaskRunner` keeps a task for the restart decision, and starts each restart on the thread pool. | `Run` and `StopAsync` | 1.68 µs, 1.08 KB | 1.93 µs, 1.3 KB |
+| | `Run` and `DisposeAsync` | 1.60 µs, 1.02 KB | 2.01 µs, 1.22 KB |
+| | `Run`, a restart after 1 failure, and `StopAsync` | 8.54 µs, 2.59 KB | 14.06 µs, 2.77 KB |
+| | `Run`, restarts after 4 failures, and `StopAsync` | 5.07 µs, 6.36 KB | 20.72 µs, 6.49 KB |
+
+The time of the cancelled hedged attempt decreased, but this change is in the range of the noise. The time and the
+memory of the circuit breaker did not change. The `RetryTask` results with 2 failures allocate less than 70 B more,
+and their time changed less than the noise.
 
 ## Changes that we did not make
 

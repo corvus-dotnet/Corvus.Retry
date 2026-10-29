@@ -76,6 +76,7 @@ The constructor throws an exception for an incorrect option. The `ParamName` of 
 - `ArgumentOutOfRangeException`: a timeout is zero, negative, or more than approximately 49.7 days. For no limit, use `null`, not `Timeout.InfiniteTimeSpan`.
 - `ArgumentNullException`: `Policy` or `TimeProvider` is `null`.
 - `ArgumentException`: `Hedging` and `Strategy` are set at the same time.
+- `ArgumentException`, with the `ParamName` `options`: the non-generic `ReliabilityPipeline` received a `ReliabilityPipelineOptions<T>` that sets `ShouldRetryResult`, `Fallback` or `HedgingActionGenerator`. Only `ReliabilityPipeline<T>` can use these settings.
 
 To make one attempt and no retry, set `Strategy` to `new Count(1)`, `new DoNotRetry()`, or a `RetryStrategies` method with `retries: 0`.
 
@@ -86,7 +87,7 @@ The pipeline has two time limits:
 - **Attempt timeout.** When `AttemptTimeout` expires, the pipeline cancels the token of the attempt. The attempt then fails with a `RetryTimeoutException`. The strategy and the policy decide if the pipeline retries it.
 - **Total timeout.** When `TotalTimeout` expires, the pipeline cancels the token of the attempt, or stops the delay. No other attempt starts, and the call throws a `RetryTimeoutException`.
 
-`RetryTimeoutException` derives from `TimeoutException`. Its `Timeout` property gives the time limit that expired.
+`RetryTimeoutException` derives from `TimeoutException`. Its `Timeout` property gives the time limit that expired. When the total timeout expires between two attempts, the inner exception is the exception of the last attempt.
 
 The two timeouts are cooperative. The pipeline cancels the token, and then waits until the operation stops.
 
@@ -160,6 +161,7 @@ ReliabilityPipeline pipeline = new(new ReliabilityPipelineOptions
 `ReliabilityPipeline<T>` can also retry a result. If `ShouldRetryResult` returns `true`, the pipeline uses the result as a failure. The strategy, the callback and the delay then apply. The policy applies only to exceptions.
 
 - Before the next attempt, the pipeline disposes a rejected result that implements `IDisposable`. It does this after the callback.
+- If the call stops with an exception after the operation returned a result, the pipeline also disposes that result. For example, the caller cancels, the total timeout expires, or `ShouldRetryResult`, the strategy or `OnRetry` throws an exception.
 - If no retries remain, the pipeline returns the last result. It does not throw an exception.
 
 `RetryStrategies.RetryAfter` uses the `Retry-After` header of an `HttpResponseMessage` result for the delay:
@@ -194,7 +196,7 @@ ExecuteAsync(operation, cancellationToken)
 
 Each part is optional. If an option is `null`, the pipeline does not use that part, and does not allocate memory for it. These are the results of the sequence:
 
-- The fallback receives the outcome of all the other parts. This outcome can be a `RetryTimeoutException` or a `BrokenCircuitException`.
+- The fallback receives the outcome of the attempts. This outcome can be a `RetryTimeoutException` or a `BrokenCircuitException`.
 - The total timeout includes all the attempts and all the delays.
 - The circuit breaker counts each attempt as one call. It counts an attempt timeout as a failure.
 
@@ -231,6 +233,7 @@ ReliabilityPipeline<string> pipeline = new(new ReliabilityPipelineOptions<string
 - The fallback does not apply when the caller cancels the token.
 - `FallbackArgs<T>` gives the `Exception` or the `Result`, and the `CancellationToken` of the caller. The total timeout does not apply to the fallback.
 - An exception from `OnFallback` or from `Action` stops the call. The pipeline does not catch it.
+- The fallback applies only to the outcome of the attempts: the exception or the result of the last attempt, a `RetryTimeoutException`, or a rejection by the circuit breaker. An exception from `ShouldRetryResult`, `OnRetry`, the strategy, a policy, `OnStateChanged`, `OnHedging` or `HedgingActionGenerator` stops the call. The fallback does not give a value for it.
 
 #### Circuit breaker
 
@@ -277,11 +280,14 @@ The circuit has four states (`CircuitState`):
 
 These rules apply to the breaker:
 
-- A failure is an exception that the `Policy` of the breaker accepts, or a result that `ShouldRetryResult` rejects. An attempt timeout is a failure.
+- A failure is an exception that the `Policy` of the breaker accepts, or a result that `ShouldRetryResult` rejects.
+- An attempt timeout is always a failure. The breaker does not ask its `Policy` about a `RetryTimeoutException`. Thus, a `Policy` such as `RetryPolicies.Handle<HttpRequestException>()` does not make the breaker ignore timeouts.
+- If the `Policy` of the breaker throws an exception, the call throws that exception. The breaker does not count the call. If the call was the test call of a half-open circuit, the next call can be the test call.
 - A cancellation by the caller is not a call and not a failure. A call that the breaker rejects is not a call.
+- A test call that started before `Isolate()`, `Close()` or a subsequent break does not change the state of the circuit.
 - The circuit goes from `Open` to `HalfOpen` on the first call after the break, not at the end of the break. Until that call, `State` gives `Open`.
 - The breaker measures time with the monotonic timestamp of its `TimeProvider`. A change to the system clock does not change the window or the break.
-- The breaker calls `OnStateChanged` after it releases its lock. A pipeline awaits the callback. `Isolate()` and `Close()` wait until the callback completes, thus the callback must be fast. An exception from the callback stops the call.
+- The breaker calls `OnStateChanged` after it releases its lock. A pipeline awaits the callback. `Isolate()` and `Close()` wait until the callback completes, thus the callback must be fast. They run the callback with no `SynchronizationContext`. Thus, a callback that awaits on a UI thread does not cause a deadlock. An exception from the callback stops the call.
 
 The breaker is inside the retry part. Thus, a rejection is a failure of one attempt, and the strategy and the policy decide if the pipeline retries it:
 
@@ -317,8 +323,11 @@ string body = await pipeline.ExecuteAsync(
 
 - Hedging replaces the retry part of the pipeline. If `Hedging` is set, `Strategy` must be `null`. The pipeline does not use `OnRetry` or the retry `Policy`.
 - The pipeline starts attempt 1. It starts the next attempt when `Delay` expires, or immediately when an attempt fails.
+- Attempt 1 runs on the thread of the caller until its first `await`. Attempts 2 and higher start on the thread pool, with no `SynchronizationContext`. Thus, an attempt that blocks its thread before its first `await` does not delay the next attempt, the cancellation or the total timeout. An attempt 1 that blocks also blocks the caller.
 - A failure is an exception that `Hedging.Policy` accepts, or a result for which `ShouldRetryResult` returns `true`. An exception that `Hedging.Policy` refuses is not a failure: the pipeline throws it immediately.
 - The first outcome that is not a failure wins. The pipeline returns it immediately, and cancels the token of each other attempt. It does not wait for the cancelled attempts, and it disposes their results if they implement `IDisposable`.
+- The pipeline does not start an attempt after it received an outcome that wins. With a `Delay` of zero, an attempt 1 that wins synchronously stops all the other attempts. An attempt 2 or higher completes on the thread pool, thus the pipeline can start more attempts before it receives that outcome.
+- `OnHedging` can run for an attempt that then does not start, because an outcome won during the callback. With a `Delay` of zero, if attempt 1 fails synchronously, `OnHedging` for attempt 2 receives that failure in `LastException`.
 - If all the attempts fail, the pipeline throws the last exception, or returns the last result.
 - `HedgingActionGenerator` receives the attempt number, from 1. It can give a different operation for each attempt, for example a different endpoint. If it returns `null`, the attempt uses the operation that you give to `ExecuteAsync`.
 - Each attempt goes through the circuit breaker, and has its own attempt timeout. The total timeout and the fallback apply to all the attempts.
@@ -354,6 +363,13 @@ SomeResult result = Retriable.Retry(() => new SomeResult());
 Task resultTask = Retriable.RetryAsync(() => SomeOperationAsync());
 ```
 
+Use `RetryAsync` for an asynchronous operation. The compiler gives the error CS0619 for these incorrect calls, because they cannot retry a failure of the task:
+
+- `Retry` or `RetryTask.Factory.StartNew` with an operation that returns a `Task`, a `Task<T>`, a `ValueTask` or a `ValueTask<T>`. For a `ValueTask`, use `ReliabilityPipeline.ExecuteAsync`, or call `AsTask()` in the operation.
+- `RetryAsync` with an `async` lambda that returns a task without `await`, for example `async () => SomeOperationAsync()`. Write `async () => await SomeOperationAsync()`, or `() => SomeOperationAsync()`.
+
+If the operation returns a `null` task, the attempt fails with an `InvalidOperationException`. The strategy and the policy decide if `RetryAsync` retries it.
+
 Without a strategy and a policy, `Retriable` makes a maximum of 10 attempts with no delay (`RetryStrategies.Default`), and retries all exceptions (`AnyExceptionPolicy`).
 
 The overloads for `Func<CancellationToken, Task<T>>` and `Func<CancellationToken, Task>` give a cancellation token to the operation. The overloads that have all the parameters also have an optional `onRetry` callback:
@@ -378,7 +394,7 @@ The overloads that have a cancellation token obey these rules:
 - The token stops a delay immediately.
 - `Retriable` does not retry an `OperationCanceledException` that the token caused.
 
-`Retriable` awaits `onRetry` before each delay. The synchronous `Retry` overloads wait for the callback. An exception from the callback stops the call.
+`Retriable` awaits `onRetry` before each delay. The synchronous `Retry` overloads wait for the callback. They run it with no `SynchronizationContext`, thus a callback that awaits continues on the thread pool. An exception from the callback stops the call.
 
 `Retriable` has no timeouts and no result retries. For these functions, use `ReliabilityPipeline`.
 
@@ -551,7 +567,7 @@ The library uses `TimeProvider` for all delays and all timeouts.
 
 - `ReliabilityPipeline` and `CircuitBreaker` get the `TimeProvider` from their options. A test can set a fake time provider, for example `FakeTimeProvider` from the `Microsoft.Extensions.TimeProvider.Testing` package. Then the test controls the time of the retries.
 - `RetryStrategies.RetryAfter` has an optional `timeProvider` parameter for a `Retry-After` header with a date.
-- `Retriable` and `RetryTask` use `TimeProvider.System`. They have no parameter for a different time provider.
+- `Retriable`, `RetryTask` and the restart delay of `ReliableTaskRunner` use `TimeProvider.System`. They have no parameter for a different time provider.
 
 See [ADR 0002](Documentation/adr/0002-use-timeprovider-for-delays-and-timeouts.md).
 
@@ -566,9 +582,11 @@ Task<string> task = RetryTask<string>.Factory.StartNew(() => File.ReadAllText("s
 You can also give an `IRetryPolicy` and an `IRetryStrategy`. The default strategy is `new Count()` (5 attempts) and the default policy is `AnyExceptionPolicy`. These defaults are different from the defaults of `Retriable`.
 
 - A retry does not block a thread. A delay task and continuations start each retry on the scheduler of the caller.
-- If the operation stops, the task faults with all the failures that the operation recorded.
+- If the operation stops, the task faults with the failures that the operation recorded. `RetryTask` keeps a maximum of 100 failures: the first 99 failures and the last failure.
 - A cancellation gives a `Canceled` task.
+- The returned task obeys `TaskCreationOptions.RunContinuationsAsynchronously`.
 - `RetryTask` has no retry callback.
+- `RetryTask` retries only synchronous operations. `RetryTask<T>.Factory.StartNew` throws a `NotSupportedException` when `T` is a `Task`, a `Task<TResult>`, a `ValueTask` or a `ValueTask<TResult>`. For an asynchronous operation, use `Retriable.RetryAsync`.
 
 The overloads that take a state object use the same nullable annotations as `Task.Factory.StartNew()`: the state is `object?`, and the action or function takes an `object?` argument. Version 1 used non-nullable `object`. If your project uses nullable reference types, change each method or delegate that takes `object`. It must take `object?`, or examine the state for `null` before it uses the state:
 
@@ -596,9 +614,34 @@ An overload of `Run` takes an `IRetryPolicy`, which controls the restarts.
 - When a run fails, the runner gives each exception of the run to the policy (not the `AggregateException` around them). The runner starts the operation again only if the policy accepts all the exceptions.
 - A run that cancels itself, for example because of an `HttpClient` timeout, is a failure. The runner gives the `OperationCanceledException` to the policy.
 - The runner does not start the operation again after a run that completes, or after a call to `StopAsync()`.
-- The task from `StopAsync()` ends as the last run ended. If the run faulted, the task faults with all the exceptions of the run.
+- The runner starts each restart on the thread pool.
+- The task from `StopAsync()` ends as the last run ended. If the run faulted, the task faults with all the exceptions of the run. If the policy or the restart strategy throws an exception, the runner stops, and the task faults with that exception.
 - `StopAsync()` cancels the token with `CancelAsync`. Thus, the callbacks of the token run on a thread-pool thread, not on the thread that calls `StopAsync()`.
+- `StopAsync()` and `DisposeAsync()` wait until a restart decision that is in progress ends.
 - `DisposeAsync()` stops the operation, waits until the run ends, and releases the resources of the runner. It does not throw the exception of the run. A second call has no effect.
+- If the run function returns a `null` task, `Run` throws an `InvalidOperationException`. On a restart, a `null` task is a run that failed with an `InvalidOperationException`.
+- Do not await the task from `StopAsync()` in the run function. The task completes only when the run ends.
+
+#### Wait between restarts
+
+`Run(runFunction)` and `Run(runFunction, retryPolicy)` restart the operation immediately after each failure, with no limit.
+
+> **CAUTION:** If the operation fails immediately at each start, these overloads restart it continuously, and use much processor time. To prevent this, use a restart strategy.
+
+The overload `Run(runFunction, restartStrategy, retryPolicy)` waits for the delay of an `IRetryStrategy` before each restart:
+
+```csharp
+await using ReliableTaskRunner runner = ReliableTaskRunner.Run(
+    cancellationToken => ProcessMessagesAsync(cancellationToken),
+    new Exponential(int.MaxValue, TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(1)),
+    AnyExceptionPolicy.Default);
+```
+
+- After a run fails, the runner gives a `RetryAttempt` to the strategy. `AttemptNumber` is the number of runs that failed since the call to `Run`, from 1. `Exception` is the `AggregateException` of the run, or the `OperationCanceledException` of a run that cancelled itself.
+- If the strategy returns `null`, the runner does not restart. If not, the policy decides. If the policy accepts the failure, the runner waits for the delay, and then restarts.
+- A strategy with a limit stops the runner after that number of failed runs. For a runner that must continue, use a strategy with no limit, for example `new Exponential(int.MaxValue, ...)`.
+- `StopAsync()` and `DisposeAsync()` stop a restart delay, and no restart occurs.
+- The delay uses `TimeProvider.System`.
 
 ## Migrating from Polly
 
@@ -637,6 +680,7 @@ These are the primary differences:
 - Polly adds the parts in the sequence of the builder calls. Corvus.Retry always uses the sequence in [Order of the parts](#order-of-the-parts).
 - In Polly, `AttemptNumber` in `OnRetry` starts at 0. In Corvus.Retry, `AttemptNumber` is the number of the attempt that failed, and starts at 1.
 - A Corvus.Retry pipeline cannot use hedging and retries together. Use two pipelines.
+- The Corvus.Retry fallback applies only to the outcome of the attempts. An exception from a callback, a strategy or a policy of the pipeline, for example from `OnRetry`, stops the call. The fallback does not give a value for it.
 
 This example shows a Polly pipeline with a total timeout, a retry and an attempt timeout:
 
@@ -712,7 +756,7 @@ The samples use the .NET 10 SDK. `RetriableSample` sends pings to `endjin.com`, 
 | `RetriableBenchmarks` | `Retry`, `RetryAsync` and the token overload (with and without `onRetry`), with 0 and 2 failures before a success | A hand-written retry loop |
 | `RetryTaskFactoryOverloadBenchmarks` | All the `StartNew` overloads of `RetryTask.Factory` and `RetryTask<T>.Factory` (29 each), when the first attempt succeeds | |
 | `RetryTaskBenchmarks` | `RetryTask<T>.Factory.StartNew` with 0 and 2 failures | `Task<T>.Factory.StartNew` with a hand-written loop |
-| `ReliableTaskRunnerBenchmarks` | `ReliableTaskRunner.Run` (the two overloads), `StopAsync` and `DisposeAsync`, with restarts after 1 and 4 failures | `Run` and then `StopAsync` |
+| `ReliableTaskRunnerBenchmarks` | `ReliableTaskRunner.Run` (the two overloads without a restart strategy), `StopAsync` and `DisposeAsync`, with restarts after 1 and 4 failures | `Run` and then `StopAsync` |
 | `StrategyBenchmarks` | `GetRetryDelay` of all the strategy classes and the `RetryStrategies` methods, with jitter, `maxDelay`, `RetryAfter` and `RetryStrategies.Default`, for 1 and 9 failures | `Count` |
 | `PolicyBenchmarks` | `CanRetry` of `AnyExceptionPolicy`, `DoNotRetryPolicy`, the `RetryPolicies` methods, the extension members and `TransientHttp`, and `IsTransientHttpResponse` | The first item of each category |
 | `AggregatePolicyBenchmarks` | `AggregatePolicy.CanRetry` with 1, 4 and 16 child policies | One policy |
