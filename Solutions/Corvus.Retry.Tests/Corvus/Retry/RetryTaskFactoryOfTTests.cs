@@ -59,22 +59,60 @@ public class RetryTaskFactoryOfTTests
     }
 
     [TestMethod]
-    public async Task WithAttachedToParent_TheResultOfTheSuccessfulTryIsReturnedAndTheParentIsNotFaulted()
+    public async Task WithAttachedToParent_TheParentDoesNotCompleteUntilTheRetriedFunctionHasAndIsNotFaulted()
     {
+        using ManualResetEventSlim gate = new();
         FlakyOperation operation = new(2);
-        Task<string>? retryTask = null;
 
-        Task parent = Task.Factory.StartNew(
-            () => retryTask = this.factory.StartNew(operation.Invoke, TaskCreationOptions.AttachedToParent, new Count(5), new AnyExceptionPolicy()),
-            CancellationToken.None,
-            TaskCreationOptions.None,
-            TaskScheduler.Default);
+        // The first two tries fail; the third waits for the gate.
+        (Task parent, Task<TaskStatus> statusWhenItsBodyHasReturned, Task<Task<string>> started) = ParentTask.Run(
+            () => this.factory.StartNew(
+                () =>
+                {
+                    string result = operation.Invoke();
+                    Assert.IsTrue(gate.Wait(Timeout));
+                    return result;
+                },
+                TaskCreationOptions.AttachedToParent,
+                new Count(5),
+                new AnyExceptionPolicy()));
 
+        try
+        {
+            // The parent's body has returned, but the parent waits for the retried function.
+            Assert.AreEqual(TaskStatus.WaitingForChildrenToComplete, await statusWhenItsBodyHasReturned.WaitAsync(Timeout).ConfigureAwait(false));
+        }
+        finally
+        {
+            gate.Set();
+        }
+
+        // The parent saw only the successful outcome, not the failures of the tries that were retried.
         await parent.WaitAsync(Timeout).ConfigureAwait(false);
-
         Assert.AreEqual(TaskStatus.RanToCompletion, parent.Status);
-        Assert.IsNotNull(retryTask);
-        Assert.AreEqual("attempt-3", retryTask.Result);
+        Assert.AreEqual("attempt-3", await (await started.ConfigureAwait(false)).ConfigureAwait(false));
+    }
+
+    [TestMethod]
+    public async Task WithAttachedToParent_WhenEveryTryFails_TheParentFaultsWithTheOutcome()
+    {
+        FlakyOperation operation = new(FlakyOperation.AlwaysFails);
+
+        (Task parent, _, Task<Task<string>> started) = ParentTask.Run(
+            () => this.factory.StartNew(operation.Invoke, TaskCreationOptions.AttachedToParent, new Count(3), new AnyExceptionPolicy()));
+
+        AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(() => parent.WaitAsync(Timeout)).ConfigureAwait(false);
+
+        // The parent reports the retried function's failure once, not each try's.
+        Task<string> retryTask = await started.ConfigureAwait(false);
+        AggregateException outcome = Assert.IsInstanceOfType<AggregateException>(Assert.ContainsSingle(retryTask.Exception!.InnerExceptions));
+        Assert.AreSame(outcome, Assert.ContainsSingle(thrown.InnerExceptions));
+        Assert.AreEqual(3, operation.Invocations);
+        Assert.HasCount(3, outcome.InnerExceptions);
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.AreSame(operation.Thrown[i], outcome.InnerExceptions[i]);
+        }
     }
 
     [TestMethod]
@@ -121,11 +159,14 @@ public class RetryTaskFactoryOfTTests
             new Count(5),
             policy);
 
-        await Assert.ThrowsExactlyAsync<AggregateException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
+        AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
 
         // There is nothing to flatten, so the policy is asked about the AggregateException itself, and says no.
         Assert.AreEqual(1, invocations);
         Assert.AreSame(failure, Assert.ContainsSingle(policy.Consulted));
+
+        // The failure is not lost: the task reports that AggregateException, not an empty one.
+        Assert.AreSame(failure, Assert.ContainsSingle(thrown.InnerExceptions));
     }
 
     [TestMethod]

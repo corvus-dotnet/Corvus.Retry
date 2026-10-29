@@ -4,6 +4,7 @@
 
 namespace Corvus.Retry;
 
+using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -37,21 +38,48 @@ public class RetryTaskTests
     public void WhenManyThreadsGetTheFactoryForTheFirstTime_TheyAllGetTheSameInstance()
     {
         // No other test uses this type argument, so this is the first access to this RetryTask<T>.Factory.
+        RetryTaskFactory<FirstAccessMarker>[] factories = GetOnManyThreadsAtOnce(() => RetryTask<FirstAccessMarker>.Factory);
+
+        Assert.IsNotNull(factories[0]);
+        Assert.IsTrue(factories.All(f => ReferenceEquals(f, factories[0])));
+    }
+
+    [TestMethod]
+    public void WhenManyThreadsGetTheNonGenericFactoryAtOnce_TheyAllGetTheSameInstance()
+    {
+        // Other tests may have read RetryTask.Factory already, so this cannot be sure to be the first access. The static
+        // initialiser makes the first access safe; this checks that every thread sees one instance.
+        RetryTaskFactory[] factories = GetOnManyThreadsAtOnce(() => RetryTask.Factory);
+
+        Assert.IsNotNull(factories[0]);
+        Assert.IsTrue(factories.All(f => ReferenceEquals(f, factories[0])));
+    }
+
+    private static T[] GetOnManyThreadsAtOnce<T>(Func<T> get)
+    {
+        // Dedicated threads, not the thread pool: threads that wait at the barrier would hold pool threads that other
+        // tests need.
         const int Threads = 16;
-        var factories = new RetryTaskFactory<FirstAccessMarker>[Threads];
+        var results = new T[Threads];
         using Barrier start = new(Threads);
 
-        Parallel.For(
-            0,
-            Threads,
-            new ParallelOptions { MaxDegreeOfParallelism = Threads },
-            i =>
-            {
-                start.SignalAndWait();
-                factories[i] = RetryTask<FirstAccessMarker>.Factory;
-            });
+        Thread[] threads = Enumerable.Range(0, Threads).Select(i => new Thread(() =>
+        {
+            start.SignalAndWait();
+            results[i] = get();
+        })).ToArray();
 
-        Assert.IsTrue(factories.All(f => ReferenceEquals(f, factories[0])));
+        foreach (Thread thread in threads)
+        {
+            thread.Start();
+        }
+
+        foreach (Thread thread in threads)
+        {
+            thread.Join();
+        }
+
+        return results;
     }
 
     private sealed class FirstAccessMarker

@@ -7,6 +7,7 @@ namespace Corvus.Retry;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Corvus.Retry.Policies;
@@ -59,20 +60,22 @@ public class RetryTaskFactoryDelayTests
     }
 
     [TestMethod]
-    public async Task WhenCancellationIsRequestedDuringTheDelay_TheTaskIsCancelledWithoutWaitingForTheDelayToEnd()
+    [DataRow(RetryTaskFactoryKind.RetryTaskFactory)]
+    [DataRow(RetryTaskFactoryKind.RetryTaskFactoryOfT)]
+    public async Task WhenCancellationIsRequestedDuringTheDelay_TheTaskIsCancelledWithoutWaitingForTheDelayToEnd(RetryTaskFactoryKind factory)
     {
         // Time does not move in this test, so the retry can only stop waiting because of cancellation.
         RecordingFakeTimeProvider fake = TimeProviderFixture.Install(new RecordingFakeTimeProvider());
         using CancellationTokenSource cancellation = new();
         FlakyOperation operation = new(FlakyOperation.AlwaysFails);
 
-        Task task = new RetryTaskFactory().StartNew(() => operation.Invoke(), cancellation.Token, new Linear(TimeSpan.FromHours(1), 3), new AnyExceptionPolicy());
+        Task task = RetryTaskFactories.StartNew(factory, () => operation.Invoke(), new Linear(TimeSpan.FromHours(1), 3), new AnyExceptionPolicy(), cancellation.Token);
 
         await fake.WaitForTimersAsync(1).ConfigureAwait(false);
         await cancellation.CancelAsync().ConfigureAwait(false);
 
-        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
-        Assert.IsTrue(task.IsCanceled);
+        TaskCanceledException thrown = await Assert.ThrowsExactlyAsync<TaskCanceledException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
+        Assert.AreEqual(TaskStatus.Canceled, task.Status);
         Assert.AreEqual(cancellation.Token, thrown.CancellationToken);
         Assert.AreEqual(1, operation.Invocations);
     }
@@ -83,15 +86,15 @@ public class RetryTaskFactoryDelayTests
         RecordingFakeTimeProvider fake = TimeProviderFixture.Install(new RecordingFakeTimeProvider());
         TaskScheduler scheduler = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
         FlakyOperation operation = new(2);
-        var stopwatch = Stopwatch.StartNew();
 
         Task task = new RetryTaskFactory().StartNew(() => operation.Invoke(), CancellationToken.None, TaskCreationOptions.None, scheduler, new Linear(TimeSpan.FromHours(1), 3), new AnyExceptionPolicy());
 
         await fake.WaitForTimersAsync(1).ConfigureAwait(false);
 
-        // The scheduler runs one task at a time, so this runs only if no thread holds it during the delay.
+        // The scheduler runs one task at a time, so this runs only if no thread holds it during the delay. Time does
+        // not move until it has run.
         Task probe = Task.Factory.StartNew(() => { }, CancellationToken.None, TaskCreationOptions.None, scheduler);
-        await probe.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+        await probe.WaitAsync(Timeout).ConfigureAwait(false);
 
         fake.Advance(TimeSpan.FromHours(1));
         await fake.WaitForTimersAsync(2).ConfigureAwait(false);
@@ -99,7 +102,86 @@ public class RetryTaskFactoryDelayTests
 
         await task.WaitAsync(Timeout).ConfigureAwait(false);
         Assert.AreEqual(3, operation.Invocations);
-        Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
+    }
+
+    [TestMethod]
+    [DataRow(RetryTaskFactoryKind.RetryTaskFactory)]
+    [DataRow(RetryTaskFactoryKind.RetryTaskFactoryOfT)]
+    public async Task WhileARetryWaitsForItsDelay_NoThreadIsBlocked(RetryTaskFactoryKind factory)
+    {
+        // Every thread that does work for the operation runs with the execution context of the call to StartNew, so
+        // this counts the threads that are inside the operation's work. Time does not move until the count is zero, so
+        // a thread that blocked until the delay ended would hold the count above zero until the safety bound.
+        RecordingFakeTimeProvider fake = TimeProviderFixture.Install(new RecordingFakeTimeProvider());
+        FlakyOperation operation = new(1);
+        int threadsInside = 0;
+        AsyncLocal<object?> marker = new(args =>
+        {
+            if (args.ThreadContextChanged && args.PreviousValue is null && args.CurrentValue is not null)
+            {
+                Interlocked.Increment(ref threadsInside);
+            }
+            else if (args.ThreadContextChanged && args.PreviousValue is not null && args.CurrentValue is null)
+            {
+                Interlocked.Decrement(ref threadsInside);
+            }
+        });
+
+        Task task;
+        marker.Value = new object();
+        try
+        {
+            task = RetryTaskFactories.StartNew(factory, () => operation.Invoke(), new Linear(TimeSpan.FromHours(1), 3), new AnyExceptionPolicy());
+        }
+        finally
+        {
+            marker.Value = null;
+        }
+
+        await fake.WaitForTimersAsync(1).ConfigureAwait(false);
+        await WaitUntilAsync(() => Volatile.Read(ref threadsInside) == 0, "A thread is still inside the operation while it waits for its delay.").ConfigureAwait(false);
+
+        Assert.AreEqual(1, operation.Invocations);
+        Assert.IsFalse(task.IsCompleted);
+
+        fake.Advance(TimeSpan.FromHours(1));
+        await task.WaitAsync(Timeout).ConfigureAwait(false);
+        Assert.AreEqual(2, operation.Invocations);
+    }
+
+    [TestMethod]
+    [DataRow(RetryTaskFactoryKind.RetryTaskFactory)]
+    [DataRow(RetryTaskFactoryKind.RetryTaskFactoryOfT)]
+    public async Task TheStrategyIsGivenTheAttemptNumberTheFailureAndThePreviousDelayOfEachTry(RetryTaskFactoryKind factory)
+    {
+        TimeSpan[] delays = [TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(30)];
+        FlakyOperation operation = new(3);
+        List<RetryAttempt> attempts = [];
+        IRetryStrategy strategy = RetryStrategies.FromDelegate(a =>
+        {
+            lock (attempts)
+            {
+                attempts.Add(a);
+            }
+
+            return delays[a.AttemptNumber - 1];
+        });
+        RecordingRetryPolicy policy = new(true);
+
+        await RetryTaskFactories.StartNew(factory, () => operation.Invoke(), strategy, policy).WaitAsync(Timeout).ConfigureAwait(false);
+
+        Assert.AreEqual(4, operation.Invocations);
+        Assert.AreSequenceEqual(new[] { 1, 2, 3 }, attempts.Select(a => a.AttemptNumber).ToArray());
+        Assert.AreSequenceEqual(new[] { TimeSpan.Zero, delays[0], delays[1] }, attempts.Select(a => a.PreviousDelay).ToArray());
+        for (int i = 0; i < 3; i++)
+        {
+            // The strategy is given the AggregateException of the try's task; the policy is asked about the exception
+            // that the operation threw, which is inside it.
+            AggregateException exception = Assert.IsInstanceOfType<AggregateException>(attempts[i].Exception);
+            Assert.AreSame(operation.Thrown[i], Assert.ContainsSingle(exception.InnerExceptions));
+            Assert.AreSame(operation.Thrown[i], policy.Consulted[i]);
+            Assert.IsNull(attempts[i].Result);
+        }
     }
 
     [TestMethod]
@@ -185,5 +267,20 @@ public class RetryTaskFactoryDelayTests
         await Assert.ThrowsExactlyAsync<AggregateException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
         Assert.AreEqual(2, operation.Invocations);
         Assert.AreEqual(Period, Assert.ContainsSingle(this.time.Delays));
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, string message)
+    {
+        // A safety bound in real time, never the assertion: in a passing run the condition becomes true at once.
+        var bound = Stopwatch.StartNew();
+        while (!condition())
+        {
+            if (bound.Elapsed > Timeout)
+            {
+                Assert.Fail(message);
+            }
+
+            await Task.Delay(1).ConfigureAwait(false);
+        }
     }
 }

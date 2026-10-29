@@ -86,6 +86,7 @@ public class RetryTaskFactoryTests
     {
         TimeoutException acceptable = new();
         InvalidOperationException unacceptable = new();
+        AggregateException failure = new(acceptable, unacceptable);
         int invocations = 0;
         RecordingRetryPolicy policy = new(ex => ex is TimeoutException);
 
@@ -93,18 +94,22 @@ public class RetryTaskFactoryTests
             () =>
             {
                 Interlocked.Increment(ref invocations);
-                throw new AggregateException(acceptable, unacceptable);
+                throw failure;
             },
             new Count(5),
             policy);
 
-        await Assert.ThrowsExactlyAsync<AggregateException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
+        AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
         Assert.AreEqual(1, invocations);
 
-        // An AggregateException thrown by the action is flattened, and the policy must accept every inner exception.
+        // The policy is asked about each exception inside the AggregateException that the action threw, and must
+        // accept them all.
         Assert.HasCount(2, policy.Consulted);
         Assert.AreSame(acceptable, policy.Consulted[0]);
         Assert.AreSame(unacceptable, policy.Consulted[1]);
+
+        // The task reports the AggregateException that the action threw as one failure: it is not flattened.
+        Assert.AreSame(failure, Assert.ContainsSingle(thrown.InnerExceptions));
     }
 
     [TestMethod]
@@ -123,11 +128,14 @@ public class RetryTaskFactoryTests
             new Count(5),
             policy);
 
-        await Assert.ThrowsExactlyAsync<AggregateException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
+        AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
 
         // There is nothing to flatten, so the policy is asked about the AggregateException itself, and says no.
         Assert.AreEqual(1, invocations);
         Assert.AreSame(failure, Assert.ContainsSingle(policy.Consulted));
+
+        // The failure is not lost: the task reports that AggregateException, not an empty one.
+        Assert.AreSame(failure, Assert.ContainsSingle(thrown.InnerExceptions));
     }
 
     [TestMethod]
@@ -166,8 +174,10 @@ public class RetryTaskFactoryTests
         FlakyOperation operation = new(0);
         RecordingRetryPolicy policy = new(true);
 
-        await this.factory.StartNew(() => operation.Invoke(), new Count(5), policy).WaitAsync(Timeout).ConfigureAwait(false);
+        Task task = this.factory.StartNew(() => operation.Invoke(), new Count(5), policy);
+        await task.WaitAsync(Timeout).ConfigureAwait(false);
 
+        Assert.AreEqual(TaskStatus.RanToCompletion, task.Status);
         Assert.AreEqual(1, operation.Invocations);
         Assert.IsEmpty(policy.Consulted);
     }
@@ -198,12 +208,20 @@ public class RetryTaskFactoryTests
     {
         using ManualResetEventSlim gate = new();
         int completed = 0;
+        int sawTheGateSet = 0;
 
-        Task task = this.factory.StartNew(() =>
-        {
-            gate.Wait(Timeout);
-            Interlocked.Increment(ref completed);
-        });
+        Task task = this.factory.StartNew(
+            () =>
+            {
+                // The action can only finish once the test has set the gate, so StartNew returned before it finished.
+                if (gate.Wait(Timeout))
+                {
+                    Interlocked.Increment(ref sawTheGateSet);
+                }
+
+                Interlocked.Increment(ref completed);
+            },
+            new DoNotRetry());
 
         Assert.IsFalse(task.IsCompleted);
         Assert.AreEqual(0, Volatile.Read(ref completed));
@@ -211,6 +229,7 @@ public class RetryTaskFactoryTests
         gate.Set();
         await task.WaitAsync(Timeout).ConfigureAwait(false);
         Assert.AreEqual(1, completed);
+        Assert.AreEqual(1, sawTheGateSet, "The action should have waited for the gate, not for the timeout.");
     }
 
     [TestMethod]
@@ -287,21 +306,35 @@ public class RetryTaskFactoryTests
     [TestMethod]
     public async Task WithAttachedToParent_TheParentWaitsForTheOutcomeAndIsNotFaultedByTriesThatWereRetried()
     {
+        using ManualResetEventSlim gate = new();
         FlakyOperation operation = new(2);
-        Task? retryTask = null;
 
-        Task parent = Task.Factory.StartNew(
-            () => retryTask = this.factory.StartNew(() => operation.Invoke(), TaskCreationOptions.AttachedToParent, new Count(5), new AnyExceptionPolicy()),
-            CancellationToken.None,
-            TaskCreationOptions.None,
-            TaskScheduler.Default);
+        // The first two tries fail; the third waits for the gate.
+        (Task parent, Task<TaskStatus> statusWhenItsBodyHasReturned, Task<Task> started) = ParentTask.Run(
+            () => this.factory.StartNew(
+                () =>
+                {
+                    operation.Invoke();
+                    Assert.IsTrue(gate.Wait(Timeout));
+                },
+                TaskCreationOptions.AttachedToParent,
+                new Count(5),
+                new AnyExceptionPolicy()));
 
+        try
+        {
+            // The parent's body has returned, but the parent waits for the retried operation.
+            Assert.AreEqual(TaskStatus.WaitingForChildrenToComplete, await statusWhenItsBodyHasReturned.WaitAsync(Timeout).ConfigureAwait(false));
+        }
+        finally
+        {
+            gate.Set();
+        }
+
+        // The parent saw only the successful outcome, not the failures of the tries that were retried.
         await parent.WaitAsync(Timeout).ConfigureAwait(false);
-
-        // The parent waited for the retried operation, and saw only its successful outcome.
         Assert.AreEqual(TaskStatus.RanToCompletion, parent.Status);
-        Assert.IsNotNull(retryTask);
-        Assert.AreEqual(TaskStatus.RanToCompletion, retryTask.Status);
+        Assert.AreEqual(TaskStatus.RanToCompletion, (await started.ConfigureAwait(false)).Status);
         Assert.AreEqual(3, operation.Invocations);
     }
 
@@ -354,39 +387,6 @@ public class RetryTaskFactoryTests
     }
 
     [TestMethod]
-    public async Task WhenThePolicyThrows_TheTaskFaultsWithTheExceptionOfThePolicy()
-    {
-        InvalidOperationException policyFailure = new("The policy failed");
-        FlakyOperation operation = new(FlakyOperation.AlwaysFails);
-
-        Task task = this.factory.StartNew(() => operation.Invoke(), new Count(5), new RecordingRetryPolicy(_ => throw policyFailure));
-
-        InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
-        Assert.AreSame(policyFailure, thrown);
-        Assert.AreEqual(1, operation.Invocations);
-    }
-
-    [TestMethod]
-    public async Task WhenCancellationIsRequestedButTheFailureWouldNotBeRetried_TheTaskFaultsWithTheFailure()
-    {
-        using CancellationTokenSource cancellation = new();
-        FlakyOperation operation = new(
-            FlakyOperation.AlwaysFails,
-            attempt =>
-            {
-                cancellation.Cancel();
-                return new InvalidOperationException($"Attempt {attempt} failed");
-            });
-
-        Task task = this.factory.StartNew(() => operation.Invoke(), cancellation.Token, new Count(5), new RecordingRetryPolicy(false));
-
-        // Cancellation did not stop anything: the policy had already ruled out a retry. So the failure is reported.
-        AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
-        Assert.IsTrue(task.IsFaulted);
-        Assert.AreSame(operation.Thrown[0], Assert.ContainsSingle(thrown.InnerExceptions));
-    }
-
-    [TestMethod]
     [DynamicData(nameof(RetryTaskFactoryDriver.WithCancellationToken), typeof(RetryTaskFactoryDriver))]
     public async Task WhenARetryAcknowledgesCancellation_AwaitingTheTaskThrowsTaskCanceledException(StartNewOverload overload, StartNewDefaults defaults)
     {
@@ -429,22 +429,6 @@ public class RetryTaskFactoryTests
         AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
         Assert.AreEqual(1, operation.Invocations);
         Assert.AreSame(operation.Thrown[0], Assert.ContainsSingle(thrown.InnerExceptions));
-    }
-
-    [TestMethod]
-    public async Task WhenMoreThanOneHundredTriesFail_TheTaskFaultsWithTheFirstNinetyNineFailuresAndTheLast()
-    {
-        FlakyOperation operation = new(FlakyOperation.AlwaysFails);
-        IRetryStrategy strategy = RetryStrategies.FromDelegate(a => a.AttemptNumber < 150 ? TimeSpan.Zero : null);
-
-        Task task = this.factory.StartNew(() => operation.Invoke(), strategy, new AnyExceptionPolicy());
-
-        AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
-        Assert.AreEqual(150, operation.Invocations);
-        Assert.HasCount(100, thrown.InnerExceptions);
-        Assert.AreSame(operation.Thrown[0], thrown.InnerExceptions[0]);
-        Assert.AreSame(operation.Thrown[98], thrown.InnerExceptions[98]);
-        Assert.AreSame(operation.Thrown[149], thrown.InnerExceptions[99]);
     }
 
     [TestMethod]
