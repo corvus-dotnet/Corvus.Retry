@@ -1299,6 +1299,197 @@ public class HedgingTests
         Assert.AreSequenceEqual(new[] { TimeSpan.FromHours(1) }, this.fake.Delays);
     }
 
+    // RetryTimeoutException: when the total timeout expires between attempts, the inner exception is the exception of
+    // the last attempt.
+    [TestMethod]
+    public async Task WithHedging_WhenTheTotalTimeoutExpiresAfterAnAttemptFailed_TheInnerExceptionIsThatFailure()
+    {
+        TimeSpan totalTimeout = TimeSpan.FromSeconds(1);
+        var failure = new InvalidOperationException("Attempt 1 failed");
+        var callbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackCompletion = new TaskCompletionSource();
+        var op = new ScriptedOperation<string>(Fails<string>(failure), Succeeds("attempt 2"));
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
+            new HedgingOptions
+            {
+                OnHedging = _ =>
+                {
+                    callbackEntered.TrySetResult();
+                    return new ValueTask(callbackCompletion.Task);
+                },
+            },
+            o => o with { TotalTimeout = totalTimeout });
+
+        Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
+        await callbackEntered.Task.WaitAsync(WaitLimit).ConfigureAwait(false);
+        this.fake.Advance(totalTimeout);
+        callbackCompletion.SetResult();
+
+        RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(totalTimeout, thrown.Timeout);
+        Assert.AreSame(failure, thrown.InnerException);
+        Assert.AreEqual(1, op.Invocations);
+    }
+
+    [TestMethod]
+    public async Task WithHedging_WhenTheTotalTimeoutExpiresWhileTheNextAttemptRuns_TheInnerExceptionIsTheFailureOfTheAttemptBefore()
+    {
+        // The engine and the attempt in flight both see the total timeout, and either can see it first. Repeat the call
+        // so that both orders occur: the outcome must not depend on the order.
+        TimeSpan totalTimeout = TimeSpan.FromSeconds(1);
+        for (int i = 0; i < 50; i++)
+        {
+            var failure = new InvalidOperationException("Attempt 1 failed");
+            var op = new ScriptedOperation<string>(Fails<string>(failure), NeverCompletesAsync);
+            ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions(), o => o with { TotalTimeout = totalTimeout });
+
+            Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
+            await op.WhenInvokedAsync(2).ConfigureAwait(false);
+            this.fake.Advance(totalTimeout);
+
+            RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+            Assert.AreEqual(totalTimeout, thrown.Timeout);
+            Assert.AreSame(failure, thrown.InnerException, $"Iteration {i}");
+        }
+    }
+
+    [TestMethod]
+    public async Task WithHedging_WhenTheTotalTimeoutExpiresAfterAResultWasRejected_TheInnerExceptionIsNull()
+    {
+        TimeSpan totalTimeout = TimeSpan.FromSeconds(1);
+        var log = new List<string>();
+        var rejected = new Response(503, log);
+        var callbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackCompletion = new TaskCompletionSource();
+        var op = new ScriptedOperation<Response>(
+            Fails<Response>(new InvalidOperationException("Attempt 1 failed")),
+            _ => new ValueTask<Response>(rejected),
+            _ => new ValueTask<Response>(new Response(200, log)));
+        ReliabilityPipeline<Response> pipeline = this.NewPipeline<Response>(
+            new HedgingOptions
+            {
+                MaxHedgedAttempts = 2,
+                OnHedging = args =>
+                {
+                    if (args.AttemptNumber < 3)
+                    {
+                        return ValueTask.CompletedTask;
+                    }
+
+                    callbackEntered.TrySetResult();
+                    return new ValueTask(callbackCompletion.Task);
+                },
+            },
+            o => o with { TotalTimeout = totalTimeout, ShouldRetryResult = r => r.StatusCode >= 500 });
+
+        // Attempt 1 fails, and then attempt 2 returns a result that is a failure. That result is the last outcome.
+        Task<Response> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
+        await callbackEntered.Task.WaitAsync(WaitLimit).ConfigureAwait(false);
+        this.fake.Advance(totalTimeout);
+        callbackCompletion.SetResult();
+
+        RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.IsNull(thrown.InnerException);
+        Assert.IsTrue(rejected.Disposed);
+        Assert.AreEqual(2, op.Invocations);
+    }
+
+    // A caller who retries at once after a cancellation is not rejected by the test call of the cancelled call.
+    [TestMethod]
+    public async Task ACancellationByTheCaller_ReleasesTheTestCallOfAHalfOpenCircuitBeforeTheCallThrows()
+    {
+        CircuitBreaker breaker = await this.NewCircuitThatIsReadyForATestCallAsync().ConfigureAwait(false);
+        using CancellationTokenSource cts = new();
+        var gate = new TaskCompletionSource<string>();
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = Timeout.InfiniteTimeSpan }, o => o with { CircuitBreaker = breaker });
+
+        // The operation ignores its token, so it is still running when the call throws.
+        Task<string> call = pipeline.ExecuteAsync(_ => new ValueTask<string>(gate.Task), cts.Token).AsTask();
+        Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
+        await cts.CancelAsync().ConfigureAwait(false);
+
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
+        Assert.IsFalse(gate.Task.IsCompleted);
+
+        // The next call is the test call, with no wait.
+        Assert.AreEqual("success", await pipeline.ExecuteAsync(_ => new ValueTask<string>("success")).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.AreEqual(CircuitState.Closed, breaker.State);
+
+        // The abandoned operation ends later, and does not change the circuit.
+        gate.SetResult("late");
+        Assert.AreEqual(CircuitState.Closed, breaker.State);
+        Assert.AreEqual((0, 0), breaker.GetCounts());
+    }
+
+    [TestMethod]
+    public async Task WithHedging_WhenTheTotalTimeoutExpiresDuringTheTestCall_TheCircuitOpensBeforeTheCallThrows()
+    {
+        TimeSpan totalTimeout = TimeSpan.FromSeconds(1);
+        CircuitBreaker breaker = await this.NewCircuitThatIsReadyForATestCallAsync().ConfigureAwait(false);
+        var gate = new TaskCompletionSource<string>();
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
+            new HedgingOptions { Delay = Timeout.InfiniteTimeSpan },
+            o => o with { CircuitBreaker = breaker, TotalTimeout = totalTimeout });
+
+        // The operation ignores its token, so it is still running when the call throws.
+        Task<string> call = pipeline.ExecuteAsync(_ => new ValueTask<string>(gate.Task)).AsTask();
+        Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
+        this.fake.Advance(totalTimeout);
+
+        RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(totalTimeout, thrown.Timeout);
+        Assert.IsFalse(gate.Task.IsCompleted);
+
+        // The test call failed, so the circuit is open again, with no wait.
+        Assert.AreEqual(CircuitState.Open, breaker.State);
+        await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
+            () => pipeline.ExecuteAsync(_ => new ValueTask<string>("success")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        gate.SetResult("late");
+        Assert.AreEqual(CircuitState.Open, breaker.State);
+    }
+
+    // The exception that the call throws for a cancellation by the caller does not depend on whether the engine or an
+    // attempt sees the cancellation first.
+    [TestMethod]
+    public async Task WhenAnAttemptSeesTheCancellationByTheCallerFirst_TheCallThrowsAnOperationCanceledExceptionForTheCallersToken()
+    {
+        using CancellationTokenSource cts = new();
+        var op = new ScriptedOperation<string>(
+            ct =>
+            {
+                // The attempt sees the cancellation before the engine does.
+                cts.Cancel();
+                ct.ThrowIfCancellationRequested();
+                return new ValueTask<string>("attempt 1");
+            });
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions());
+
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+            () => pipeline.ExecuteAsync(op.InvokeAsync, cts.Token).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
+        Assert.AreEqual(1, op.Invocations);
+        Assert.IsEmpty(this.HedgingEvents);
+    }
+
+    // A circuit breaker that two failures opened, and whose break has ended, so that the next call is the test call.
+    private async Task<CircuitBreaker> NewCircuitThatIsReadyForATestCallAsync(Func<CircuitStateChange, ValueTask>? onStateChanged = null)
+    {
+        var breaker = new CircuitBreaker(new CircuitBreakerOptions { MinimumThroughput = 2, FailureRatio = 1, TimeProvider = this.fake, OnStateChanged = onStateChanged });
+        var opener = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new DoNotRetry(), CircuitBreaker = breaker, TimeProvider = this.fake });
+        for (int i = 0; i < 2; i++)
+        {
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+                () => opener.ExecuteAsync<int>(_ => throw new InvalidOperationException("Failure")).AsTask()).ConfigureAwait(false);
+        }
+
+        Assert.AreEqual(CircuitState.Open, breaker.State);
+        this.fake.Advance(new CircuitBreakerOptions().BreakDuration);
+        return breaker;
+    }
+
     // A pipeline with the fake time provider and hedging that records each call to OnHedging, unless the test sets
     // its own callback.
     private ReliabilityPipeline<T> NewPipeline<T>(HedgingOptions hedging, Func<ReliabilityPipelineOptions<T>, ReliabilityPipelineOptions<T>>? configure = null)

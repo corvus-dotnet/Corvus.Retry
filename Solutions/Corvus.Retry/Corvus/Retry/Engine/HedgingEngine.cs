@@ -29,6 +29,13 @@ using System.Threading.Tasks;
 /// and one for the attempt, and the last to release it disposes it.
 /// </para>
 /// <para>
+/// The attempt and the engine share the circuit breaker's permit of an attempt. Whichever of them comes first reports
+/// the call to the breaker, exactly once: the attempt when it has an outcome, or the engine when it abandons the
+/// attempt. The engine releases the permit of an abandoned attempt before the call returns or throws, so that a caller
+/// who retries at once can make the test call of a half-open circuit. When the total timeout stops the call, the engine
+/// reports each attempt in flight as a failure.
+/// </para>
+/// <para>
 /// The first attempt runs on the caller's thread until its first await. Each later attempt starts on the thread pool,
 /// so an attempt that blocks the thread does not stop the engine from starting the next attempt.
 /// </para>
@@ -95,8 +102,15 @@ internal static class HedgingEngine
     /// The result of the first attempt whose outcome is not a failure, or the last result if every attempt failed and
     /// the last outcome was a result.
     /// </returns>
-    /// <exception cref="OperationCanceledException">The caller's token was cancelled.</exception>
-    /// <exception cref="RetryTimeoutException">The total timeout expired.</exception>
+    /// <exception cref="OperationCanceledException">
+    /// The caller's token was cancelled. The exception is for <paramref name="caller"/>, whether the engine or an attempt
+    /// sees the cancellation first.
+    /// </exception>
+    /// <exception cref="RetryTimeoutException">
+    /// The total timeout expired. The inner exception is the exception of the last attempt that failed, or
+    /// <see langword="null"/> if no attempt has failed or the last outcome was a result that is a failure. It does not
+    /// depend on whether the engine or an attempt sees the timeout first.
+    /// </exception>
     /// <remarks>
     /// When every attempt fails and the last outcome is an exception, that exception is rethrown with its original stack
     /// trace. An exception that the policy of <paramref name="hedging"/> refuses is not a failure: it is rethrown at
@@ -156,7 +170,6 @@ internal static class HedgingEngine
         TaskCompletionSource? cancelSignal = null;
         CancellationTokenRegistration cancelRegistration = default;
 
-        Exception? lastException = null;
         T lastResult = default!;
         bool holdsResult = false;
 
@@ -185,7 +198,7 @@ internal static class HedgingEngine
                     {
                         // Only the caller's token and the total timeout can cancel the outer token.
                         caller.ThrowIfCancellationRequested();
-                        throw SetOutcome(outcome, new RetryTimeoutException(total));
+                        throw call.TotalTimeoutExpired();
                     }
 
                     // Make the timer and the cancellation signal only when the engine must wait, so that a call whose attempts
@@ -213,6 +226,8 @@ internal static class HedgingEngine
                         return completed.Result;
 
                     case AttemptOutcome.Rejected:
+                        // A result is now the last outcome, so a total timeout from now on has no inner exception.
+                        call.LastFailure = null;
                         if (call.CanStartNext)
                         {
                             StopDelay();
@@ -247,6 +262,8 @@ internal static class HedgingEngine
                             ExceptionDispatchInfo.Throw(SetOutcome(outcome, failure));
                         }
 
+                        call.LastFailure = failure;
+
                         if (call.CanStartNext)
                         {
                             StopDelay();
@@ -257,20 +274,25 @@ internal static class HedgingEngine
                         else
                         {
                             ReleaseLastResult();
-                            lastException = failure;
                         }
 
                         break;
 
-                    default:
-                        // A cancellation by the caller, the total timeout, or an exception from a callback stops the call.
-                        // Rethrow the exception with its original stack trace. An exception from a callback is not an
-                        // outcome of the attempts.
-                        if (completed.Outcome != AttemptOutcome.Stopped)
-                        {
-                            SetOutcome(outcome, completed.Exception!);
-                        }
+                    case AttemptOutcome.Cancelled:
+                        // Only the caller's token cancels an attempt whose outcome the engine reads. Throw for the
+                        // caller's token, as when the engine sees the cancellation first, so that the exception does not
+                        // depend on which side sees it first.
+                        caller.ThrowIfCancellationRequested();
+                        ExceptionDispatchInfo.Throw(completed.Exception!);
+                        break;
 
+                    case AttemptOutcome.TotalTimeout:
+                        // The same exception as when the engine sees the timeout first.
+                        throw call.TotalTimeoutExpired();
+
+                    default:
+                        // An exception from a callback stops the call. Rethrow it with its original stack trace. It is not
+                        // an outcome of the attempts.
                         ExceptionDispatchInfo.Throw(completed.Exception!);
                         break;
                 }
@@ -284,16 +306,24 @@ internal static class HedgingEngine
                         return lastResult;
                     }
 
-                    ExceptionDispatchInfo.Throw(SetOutcome(outcome, lastException!));
+                    ExceptionDispatchInfo.Throw(SetOutcome(outcome, call.LastFailure!));
                 }
             }
+        }
+        catch (RetryTimeoutException timeout) when (ReferenceEquals(timeout, call.TotalTimeoutException))
+        {
+            // The total timeout cut short each attempt in flight, so each is a failed call for the circuit breaker. Report
+            // them before the call throws: an attempt whose operation ignores its token might never report.
+            await call.ReportTotalTimeoutAsync(timeout).ConfigureAwait(continueOnCapturedContext);
+            throw;
         }
         finally
         {
             StopDelay();
             cancelRegistration.Dispose();
 
-            // Cancel the attempts that have not won, and do not wait for them.
+            // Cancel the attempts that have not won, and do not wait for them. This releases the breaker's permit of each
+            // of them before the call returns or throws.
             call.AbandonPendingAttempts();
 
             if (holdsResult)
@@ -308,7 +338,7 @@ internal static class HedgingEngine
         async ValueTask BeforeHedgedAttemptAsync(Exception? exception)
         {
             // Do not report an attempt that will not run.
-            ThrowIfStopped(caller, totalCts, total, outcome);
+            call.ThrowIfStopped();
             if (onHedging is not null)
             {
                 await onHedging(new HedgingEventArgs(call.NextAttemptNumber, exception)).ConfigureAwait(continueOnCapturedContext);
@@ -351,15 +381,6 @@ internal static class HedgingEngine
                 (lastResult as IDisposable)?.Dispose();
                 lastResult = default!;
             }
-        }
-    }
-
-    private static void ThrowIfStopped(CancellationToken caller, CancellationTokenSource? totalCts, TimeSpan total, CallOutcome? outcome)
-    {
-        caller.ThrowIfCancellationRequested();
-        if (totalCts is { IsCancellationRequested: true })
-        {
-            throw SetOutcome(outcome, new RetryTimeoutException(total));
         }
     }
 
@@ -457,6 +478,17 @@ internal static class HedgingEngine
 
         public CallOutcome? CallOutcome { get; }
 
+        /// <summary>
+        /// Gets or sets the exception of the last attempt whose outcome the engine read, or <see langword="null"/> if that
+        /// outcome was a result, or if the engine has read no outcome.
+        /// </summary>
+        public Exception? LastFailure { get; set; }
+
+        /// <summary>
+        /// Gets the exception that the engine made when the total timeout stopped the call, or <see langword="null"/>.
+        /// </summary>
+        public RetryTimeoutException? TotalTimeoutException { get; private set; }
+
         public bool CanStartNext => this.started < this.attempts.Length;
 
         public int NextAttemptNumber => this.started + 1;
@@ -472,7 +504,7 @@ internal static class HedgingEngine
         public void StartNext()
         {
             // Do not start an attempt that cannot run.
-            ThrowIfStopped(this.Caller, this.TotalCts, this.Total, this.CallOutcome);
+            this.ThrowIfStopped();
 
             int number = this.started + 1;
             Func<CancellationToken, ValueTask<T>> operation = this.generator?.Invoke(number) ?? this.primary;
@@ -507,6 +539,51 @@ internal static class HedgingEngine
             HedgedAttempt<T> completed = this.pending[index];
             this.pending.RemoveAt(index);
             return completed;
+        }
+
+        /// <summary>
+        /// Throws if the caller cancelled the call or the total timeout expired.
+        /// </summary>
+        public void ThrowIfStopped()
+        {
+            this.Caller.ThrowIfCancellationRequested();
+            if (this.TotalCts is { IsCancellationRequested: true })
+            {
+                throw this.TotalTimeoutExpired();
+            }
+        }
+
+        /// <summary>
+        /// Makes the exception for a total timeout that stops the call, and records it as the outcome of the call.
+        /// </summary>
+        /// <returns>The exception. Its inner exception is <see cref="LastFailure"/>.</returns>
+        public RetryTimeoutException TotalTimeoutExpired()
+        {
+            this.TotalTimeoutException = new RetryTimeoutException(this.Total, this.LastFailure);
+            SetOutcome(this.CallOutcome, this.TotalTimeoutException);
+            return this.TotalTimeoutException;
+        }
+
+        /// <summary>
+        /// Reports to the circuit breaker each attempt in flight that the total timeout cut short as a failed call, unless
+        /// the attempt reported its outcome first.
+        /// </summary>
+        /// <param name="timeout">The exception of the total timeout.</param>
+        /// <returns>A task that completes when the breaker has called its callback for each change of state.</returns>
+        public async ValueTask ReportTotalTimeoutAsync(RetryTimeoutException timeout)
+        {
+            if (this.CircuitBreaker is not CircuitBreaker breaker)
+            {
+                return;
+            }
+
+            foreach (HedgedAttempt<T> attempt in this.pending)
+            {
+                if (attempt.TryTakePermitToReport(out int probe))
+                {
+                    await breaker.NotifyAsync(breaker.OnFailure(timeout, probe)).ConfigureAwait(this.ContinueOnCapturedContext);
+                }
+            }
         }
 
         public Task[] GetTasksToWaitFor(Task? delay, Task? cancellation)
@@ -568,6 +645,12 @@ internal static class HedgingEngine
         private const int Completed = 1;
         private const int Abandoned = 2;
 
+        // The states of the breaker's permit of the attempt.
+        private const int NoPermit = 0;
+        private const int PermitHeld = 1;
+        private const int PermitReporting = 2;
+        private const int PermitReleased = 3;
+
         private readonly HedgedCall<T> call;
         private readonly CancellationTokenSource cts;
         private readonly CancellationTokenRegistration registration;
@@ -580,6 +663,13 @@ internal static class HedgingEngine
 
         // One reference for the engine and one for the attempt. The last to release disposes the source.
         private int references = 2;
+
+        // The breaker's permit of the attempt. The side that moves it from held to reporting reports the outcome of the
+        // call, so the breaker hears about the call at most once. Either side can release a permit that nobody reports:
+        // a release is idempotent, so both sides release it when it is released, which closes the window in which one side
+        // has claimed the release and the other has returned.
+        private int permit = NoPermit;
+        private int probe;
 
         public HedgedAttempt(HedgedCall<T> call)
         {
@@ -628,6 +718,11 @@ internal static class HedgingEngine
         {
             if (Interlocked.CompareExchange(ref this.state, Abandoned, Running) == Running)
             {
+                // An abandoned attempt is not a call. Release its permit before the cancellation, so that the attempt
+                // cannot report a call that the engine abandoned, and so that the next call can make the test call before
+                // this call returns. The engine does not wait for the operation.
+                this.ReleasePermit();
+
                 try
                 {
                     this.cts.Cancel();
@@ -643,6 +738,24 @@ internal static class HedgingEngine
                 // The attempt completed, but the engine did not read its outcome.
                 this.DisposeResult();
             }
+        }
+
+        /// <summary>
+        /// Takes the breaker's permit of the attempt to report the outcome of the call, if the attempt holds a permit that
+        /// neither side has reported or released.
+        /// </summary>
+        /// <param name="permitProbe">The number of the test call that the breaker gave, or 0.</param>
+        /// <returns><see langword="true"/> if the caller must report the call; otherwise <see langword="false"/>.</returns>
+        public bool TryTakePermitToReport(out int permitProbe)
+        {
+            if (Interlocked.CompareExchange(ref this.permit, PermitReporting, PermitHeld) == PermitHeld)
+            {
+                permitProbe = this.probe;
+                return true;
+            }
+
+            permitProbe = 0;
+            return false;
         }
 
         public void Release()
@@ -661,6 +774,7 @@ internal static class HedgingEngine
             HedgedCall<T> call = this.call;
             CircuitBreaker? breaker = call.CircuitBreaker;
             bool acquired = false;
+            bool reporting = false;
             int probe = 0;
             bool reported = false;
             try
@@ -676,6 +790,14 @@ internal static class HedgingEngine
                 if (breaker is not null)
                 {
                     acquired = breaker.TryAcquire(out probe, out BrokenCircuitException? rejection, out CircuitStateChange? change);
+                    if (acquired)
+                    {
+                        // From now on the engine can take the permit. The exchange is a full fence, so the engine sees the
+                        // permit, or this attempt sees below that the engine abandoned it.
+                        this.probe = probe;
+                        Interlocked.Exchange(ref this.permit, PermitHeld);
+                    }
+
                     if (change.HasValue)
                     {
                         await breaker.NotifyAsync(change).ConfigureAwait(call.ContinueOnCapturedContext);
@@ -686,6 +808,13 @@ internal static class HedgingEngine
                         // A rejected attempt is a failure for the hedging policy, but it is not a call for the breaker.
                         this.Exception = rejection;
                         this.Outcome = AttemptOutcome.Failed;
+                        return;
+                    }
+
+                    if (Volatile.Read(ref this.state) == Abandoned)
+                    {
+                        // The engine abandoned the attempt while it acquired the permit. Do not run the operation.
+                        this.Outcome = AttemptOutcome.Cancelled;
                         return;
                     }
                 }
@@ -706,8 +835,9 @@ internal static class HedgingEngine
                 {
                     bool rejected = call.IsFailure is { } isFailure && isFailure(this.Result);
                     this.Outcome = rejected ? AttemptOutcome.Rejected : AttemptOutcome.Succeeded;
-                    if (!acquired)
+                    if (!acquired || !(reporting = this.TryTakePermitToReport(out _)))
                     {
+                        // No breaker, or the engine abandoned the attempt and released the permit.
                         return;
                     }
 
@@ -742,8 +872,9 @@ internal static class HedgingEngine
                     }
 
                     this.Exception = failure;
-                    if (!acquired)
+                    if (!acquired || !(reporting = this.TryTakePermitToReport(out _)))
                     {
+                        // No breaker, or the engine released the permit, or reported the call for the total timeout.
                         return;
                     }
 
@@ -767,7 +898,15 @@ internal static class HedgingEngine
                 if (acquired && !reported)
                 {
                     // The attempt has no outcome for the breaker. If it was the test call, let another call make it.
-                    breaker!.Abandon(probe);
+                    if (reporting)
+                    {
+                        // The report threw, so the breaker has no outcome for the call.
+                        breaker!.Abandon(probe);
+                    }
+                    else
+                    {
+                        this.ReleasePermit();
+                    }
                 }
 
                 if (Interlocked.CompareExchange(ref this.state, Completed, Running) == Abandoned)
@@ -792,6 +931,19 @@ internal static class HedgingEngine
             }
 
             return cause;
+        }
+
+        /// <summary>
+        /// Releases the breaker's permit of the attempt without an outcome, unless a side is reporting the outcome.
+        /// </summary>
+        private void ReleasePermit()
+        {
+            int previous = Interlocked.CompareExchange(ref this.permit, PermitReleased, PermitHeld);
+            if (previous is PermitHeld or PermitReleased)
+            {
+                // The other side may release it too. The second release does nothing.
+                this.call.CircuitBreaker!.Abandon(this.probe);
+            }
         }
 
         private void DisposeResult()
