@@ -65,7 +65,8 @@ public sealed class CircuitBreaker
     private int windowCalls;
     private int windowFailures;
 
-    private CircuitState state;
+    // Changes are made under the lock. The field is volatile, so that TryAcquire can read it without the lock.
+    private volatile CircuitState state;
     private TimeSpan breakUntil;
     private bool probeInFlight;
 
@@ -207,13 +208,11 @@ public sealed class CircuitBreaker
         rejection = null;
         change = null;
 
-        // A closed circuit needs no time, so the usual case does not read the clock.
-        lock (this.sync)
+        // A closed circuit needs no time and no lock, so the usual case does not read the clock. The state can change
+        // after this read, as it can after the lock is released, so the result is the same as a read under the lock.
+        if (this.state == CircuitState.Closed)
         {
-            if (this.state == CircuitState.Closed)
-            {
-                return true;
-            }
+            return true;
         }
 
         // The time provider is the caller's code, so do not run it under the lock.

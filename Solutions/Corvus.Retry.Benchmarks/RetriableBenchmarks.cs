@@ -21,6 +21,8 @@ using Corvus.Retry.Strategies;
 /// delay, so the benchmarks measure the retry machinery and the exceptions, never a sleep.
 /// The "Token" category measures the overload whose operation takes a cancellation token, with and without a
 /// retry callback.
+/// The delegates and the strategy are created once, so the allocations are those of <see cref="Retriable"/> only.
+/// A strategy holds no state for a call, so one instance can serve every call.
 /// </remarks>
 [MemoryDiagnoser]
 [CategoriesColumn]
@@ -34,7 +36,18 @@ public class RetriableBenchmarks
     private static readonly Func<RetryEventArgs, ValueTask> NoOpOnRetry = _ => ValueTask.CompletedTask;
 
     private readonly AnyExceptionPolicy policy = new();
+    private readonly Count strategy = new(MaxTries);
+    private readonly Func<int> operation;
+    private readonly Func<Task<int>> operationAsync;
+    private readonly Func<CancellationToken, Task<int>> operationWithTokenAsync;
     private int remainingFailures;
+
+    public RetriableBenchmarks()
+    {
+        this.operation = this.Operation;
+        this.operationAsync = this.OperationAsync;
+        this.operationWithTokenAsync = this.OperationWithTokenAsync;
+    }
 
     /// <summary>
     /// Gets or sets the number of times the operation fails before it succeeds.
@@ -64,7 +77,7 @@ public class RetriableBenchmarks
     public int Retry()
     {
         this.remainingFailures = this.Failures;
-        return Retriable.Retry(this.Operation, CancellationToken.None, new Count(MaxTries), this.policy);
+        return Retriable.Retry(this.operation, CancellationToken.None, this.strategy, this.policy);
     }
 
     [Benchmark(Baseline = true)]
@@ -89,7 +102,7 @@ public class RetriableBenchmarks
     public Task<int> RetryAsync()
     {
         this.remainingFailures = this.Failures;
-        return Retriable.RetryAsync(this.OperationAsync, CancellationToken.None, new Count(MaxTries), this.policy);
+        return Retriable.RetryAsync(this.operationAsync, CancellationToken.None, this.strategy, this.policy);
     }
 
     [Benchmark(Baseline = true)]
@@ -115,7 +128,7 @@ public class RetriableBenchmarks
     public Task<int> RetryAsync_Token()
     {
         this.remainingFailures = this.Failures;
-        return Retriable.RetryAsync(this.OperationWithTokenAsync, CancellationToken.None, new Count(MaxTries), this.policy);
+        return Retriable.RetryAsync(this.operationWithTokenAsync, CancellationToken.None, this.strategy, this.policy);
     }
 
     [Benchmark]
@@ -123,7 +136,7 @@ public class RetriableBenchmarks
     public Task<int> RetryAsync_Token_OnRetry()
     {
         this.remainingFailures = this.Failures;
-        return Retriable.RetryAsync(this.OperationWithTokenAsync, CancellationToken.None, new Count(MaxTries), this.policy, false, NoOpOnRetry);
+        return Retriable.RetryAsync(this.operationWithTokenAsync, CancellationToken.None, this.strategy, this.policy, false, NoOpOnRetry);
     }
 
     private int Operation()

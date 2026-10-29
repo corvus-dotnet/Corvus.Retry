@@ -95,7 +95,8 @@ public class Backoff : IRetryStrategy
 
         // Calculate in milliseconds as a double, and limit the value before it becomes a TimeSpan, so that a long
         // sequence cannot overflow. A zero jitter is checked first, because an infinite power of 2 times 0 is not a number.
-        double increment = jitter == 0 ? 0 : (Math.Pow(2, attempt.AttemptNumber) - 1) * jitter;
+        // ScaleB gives the same exact power of 2 as Math.Pow, without the cost of a general power.
+        double increment = jitter == 0 ? 0 : (Math.ScaleB(1, attempt.AttemptNumber) - 1) * jitter;
         double delay = Math.Min(this.MinBackoff.TotalMilliseconds + increment, this.MaxBackoff.TotalMilliseconds);
 
         return RetryDelay.Clamp(TimeSpan.FromMilliseconds(Math.Truncate(Math.Min(delay, RetryDelay.MaxSupported.TotalMilliseconds))));

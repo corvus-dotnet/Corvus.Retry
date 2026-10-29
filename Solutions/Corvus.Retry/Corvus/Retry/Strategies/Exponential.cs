@@ -81,7 +81,8 @@ public class Exponential : IRetryStrategy
         }
         else
         {
-            delay = baseMilliseconds * Math.Pow(2, attempt.AttemptNumber - 1);
+            // ScaleB gives the same exact power of 2 as Math.Pow, without the cost of a general power.
+            delay = baseMilliseconds * Math.ScaleB(1, attempt.AttemptNumber - 1);
         }
 
         return RetryDelay.Clamp(delay, this.maxDelay);

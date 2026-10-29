@@ -29,6 +29,19 @@ public class ExponentialTests
     }
 
     [TestMethod]
+    public void WithoutJitter_EachDelayIsTheBaseDelayTimesTheExactPowerOfTwo()
+    {
+        var strategy = new Exponential(int.MaxValue, TimeSpan.FromMilliseconds(3));
+
+        // The range goes past the attempt where the power of 2 is infinite as a double.
+        for (int attempt = 1; attempt <= 1100; attempt++)
+        {
+            TimeSpan expected = RetryDelay.Clamp(3 * Math.Pow(2, attempt - 1), null);
+            Assert.AreEqual(expected, strategy.GetRetryDelay(new RetryAttempt(attempt, null, null, TimeSpan.Zero)), $"Attempt {attempt}");
+        }
+    }
+
+    [TestMethod]
     public void TheMaximumDelayApplies()
     {
         var strategy = new Exponential(6, TimeSpan.FromSeconds(1), maxDelay: TimeSpan.FromSeconds(3));

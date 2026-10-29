@@ -93,6 +93,12 @@ not do the steps in the guide, your project can fail to compile, or your retries
 - `Retriable` and `RetryTask` use `TimeProvider.System` for their delays.
 - The 2.x benchmark methods `Retry_WithDelay_Sleep` and `RetryAsync_WithDelay_SleepAsync` are now
   `Retry_WithDelay_ThreadSleep` and `RetryAsync_WithDelay_TaskDelay` in `DelayBenchmarks`.
+- `Retriable` allocates less memory than 2.x. With two failures, `Retry` allocates 520 B (2.x: 688 B). `RetryAsync`
+  allocates 1,776 B (2.x: 1,944 B).
+- A strategy allocates no memory for a call. For 9 retries, `Count` takes approximately 11 ns. 2.x took approximately
+  95 ns and 368 B, because each call needed a new strategy.
+- An asynchronous `Retriable` call that completes immediately takes approximately 3 ns to 22 ns more than in 2.x. The
+  cause is the retry loop, which now also examines the token, the timeouts and the callbacks.
 
 ### Removed
 
