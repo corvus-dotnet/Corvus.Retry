@@ -740,9 +740,10 @@ string body = await pipeline.ExecuteAsync(
 
 The folder [`Examples`](Examples) has fifteen demos, each a standalone [Spectre.Console](https://spectreconsole.net/) app in one file. Each demo shows one feature or one scenario, simulates the dependency it retries against, and renders what the library did: the attempts, the delays, the state of the circuit, or which hedged attempt won. The demos need only the .NET 10 SDK and no network access. Each demo uses the library source with `#:project`, thus it always uses the code in this repository.
 
-Run the interactive launcher, or run any demo directly, from the root of the repository:
+Run the interactive launcher, every demo in order, or any demo directly, from the root of the repository:
 
     dotnet run Examples/menu.cs
+    dotnet run Examples/menu.cs -- --all
     dotnet run Examples/http-client-resilience.cs
 
 See the [demos README](Examples/README.md) for the full list. Each demo takes between 2 and 13 seconds after the first build.

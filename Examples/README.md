@@ -48,6 +48,12 @@ jitter); the next six add one `ReliabilityPipeline` feature each; the last five 
 # interactive launcher
 dotnet run Examples/menu.cs
 
+# every demo in order, with a summary of exit codes (for scripts and CI)
+dotnet run Examples/menu.cs -- --all
+
+# one demo through the launcher
+dotnet run Examples/menu.cs -- circuit-breaker
+
 # or one at a time
 dotnet run Examples/retry-basics.cs
 dotnet run Examples/strategies.cs
@@ -67,5 +73,5 @@ dotnet run Examples/testing-with-fake-time.cs
 ```
 
 Output is styled when run in a terminal and degrades to plain text when redirected (piped to a file or
-another program), so the demos are safe to capture in scripts. The launcher is the one exception: it
-needs an interactive terminal for its menu.
+another program), so the demos are safe to capture in scripts. The launcher's menu needs an interactive
+terminal; without one it runs every demo, or the one you name, and exits with code 1 if any demo failed.
