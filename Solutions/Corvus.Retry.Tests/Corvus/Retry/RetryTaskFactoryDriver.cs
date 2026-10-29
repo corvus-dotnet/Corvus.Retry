@@ -18,9 +18,16 @@ using Corvus.Retry.Strategies;
 /// asserted across every overload with <c>[DynamicData]</c>.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Overloads that take no state run the operation with a <see langword="null"/> state. Overloads that take no
-/// cancellation token ignore the token. Overloads that take creation options and a scheduler are passed
-/// <see cref="TaskCreationOptions.None"/> and <see cref="TaskScheduler.Default"/>.
+/// cancellation token ignore the token. Overloads that take no creation options or no scheduler ignore those
+/// arguments; they use <see cref="TaskCreationOptions.None"/> and the ambient <see cref="TaskScheduler.Current"/>.
+/// </para>
+/// <para>
+/// A test that asserts the effect of the options or the scheduler passes values that differ from these defaults
+/// (<see cref="WithCreationOptions"/>, <see cref="WithScheduler"/>), and runs "the caller's scheduler" tests from
+/// inside a task on a scheduler that is not <see cref="TaskScheduler.Default"/>.
+/// </para>
 /// </remarks>
 public static class RetryTaskFactoryDriver
 {
@@ -47,6 +54,12 @@ public static class RetryTaskFactoryDriver
 
     public static IEnumerable<object[]> WithCancellationToken => Select(o => TakesCancellationToken(o.Overload));
 
+    public static IEnumerable<object[]> WithCreationOptions => Select(o => TakesCreationOptions(o.Overload));
+
+    public static IEnumerable<object[]> WithScheduler => Select(o => TakesScheduler(o.Overload));
+
+    public static IEnumerable<object[]> WithStrategyAndCancellationToken => Select(o => TakesStrategy(o.Defaults) && TakesCancellationToken(o.Overload));
+
     public static bool TakesStrategy(StartNewDefaults defaults) => defaults is StartNewDefaults.StrategyAndPolicy or StartNewDefaults.StrategyOnly;
 
     public static bool TakesPolicy(StartNewDefaults defaults) => defaults is StartNewDefaults.StrategyAndPolicy or StartNewDefaults.PolicyOnly;
@@ -63,6 +76,16 @@ public static class RetryTaskFactoryDriver
             or StartNewOverload.WithStateCancellationTokenOptionsAndScheduler
             or StartNewOverload.WithCancellationTokenOptionsAndScheduler;
 
+    public static bool TakesCreationOptions(StartNewOverload overload) =>
+        overload is StartNewOverload.WithCreationOptions
+            or StartNewOverload.WithStateAndCreationOptions
+            or StartNewOverload.WithStateCancellationTokenOptionsAndScheduler
+            or StartNewOverload.WithCancellationTokenOptionsAndScheduler;
+
+    public static bool TakesScheduler(StartNewOverload overload) =>
+        overload is StartNewOverload.WithStateCancellationTokenOptionsAndScheduler
+            or StartNewOverload.WithCancellationTokenOptionsAndScheduler;
+
     /// <summary>
     /// Calls one <see cref="RetryTaskFactory"/>.StartNew overload.
     /// </summary>
@@ -74,6 +97,10 @@ public static class RetryTaskFactoryDriver
     /// <param name="cancellationToken">The token, passed only to overloads that take it.</param>
     /// <param name="strategy">The strategy; required when <paramref name="defaults"/> takes one.</param>
     /// <param name="policy">The policy; required when <paramref name="defaults"/> takes one.</param>
+    /// <param name="options">The creation options, passed only to overloads that take them.</param>
+    /// <param name="scheduler">
+    /// The scheduler, passed only to overloads that take one. The default is <see cref="TaskScheduler.Default"/>.
+    /// </param>
     /// <returns>The task returned by the factory.</returns>
     public static Task StartNew(
         RetryTaskFactory factory,
@@ -83,12 +110,13 @@ public static class RetryTaskFactoryDriver
         object? state,
         CancellationToken cancellationToken,
         IRetryStrategy? strategy,
-        IRetryPolicy? policy)
+        IRetryPolicy? policy,
+        TaskCreationOptions options = TaskCreationOptions.None,
+        TaskScheduler? scheduler = null)
     {
         Action plain = () => action(null);
         CancellationToken ct = cancellationToken;
-        const TaskCreationOptions options = TaskCreationOptions.None;
-        TaskScheduler scheduler = TaskScheduler.Default;
+        scheduler ??= TaskScheduler.Default;
         IRetryStrategy s = RequireIf(TakesStrategy(defaults), strategy);
         IRetryPolicy p = RequireIf(TakesPolicy(defaults), policy);
 
@@ -143,6 +171,10 @@ public static class RetryTaskFactoryDriver
     /// <param name="cancellationToken">The token, passed only to overloads that take it.</param>
     /// <param name="strategy">The strategy; required when <paramref name="defaults"/> takes one.</param>
     /// <param name="policy">The policy; required when <paramref name="defaults"/> takes one.</param>
+    /// <param name="options">The creation options, passed only to overloads that take them.</param>
+    /// <param name="scheduler">
+    /// The scheduler, passed only to overloads that take one. The default is <see cref="TaskScheduler.Default"/>.
+    /// </param>
     /// <returns>The task returned by the factory.</returns>
     public static Task<T> StartNew<T>(
         RetryTaskFactory<T> factory,
@@ -152,12 +184,13 @@ public static class RetryTaskFactoryDriver
         object? state,
         CancellationToken cancellationToken,
         IRetryStrategy? strategy,
-        IRetryPolicy? policy)
+        IRetryPolicy? policy,
+        TaskCreationOptions options = TaskCreationOptions.None,
+        TaskScheduler? scheduler = null)
     {
         Func<T> plain = () => function(null);
         CancellationToken ct = cancellationToken;
-        const TaskCreationOptions options = TaskCreationOptions.None;
-        TaskScheduler scheduler = TaskScheduler.Default;
+        scheduler ??= TaskScheduler.Default;
         IRetryStrategy s = RequireIf(TakesStrategy(defaults), strategy);
         IRetryPolicy p = RequireIf(TakesPolicy(defaults), policy);
 
