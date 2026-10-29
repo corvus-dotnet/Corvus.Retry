@@ -136,8 +136,9 @@ public static class RetryStrategies
     /// <para>
     /// Otherwise, if <see cref="RetryAttempt.Result"/> is an <see cref="HttpResponseMessage"/> with a
     /// <c>Retry-After</c> header, the header gives the delay: the delta if there is one, or else the date minus the
-    /// current time. A date in the past gives a zero delay. If there is no header, the delay of the inner strategy
-    /// applies.
+    /// current time. A date in the past gives a zero delay. If <see cref="RetryAttempt.Exception"/> is a
+    /// <see cref="BrokenCircuitException"/> with a <see cref="BrokenCircuitException.RetryAfter"/>, that time gives the
+    /// delay. In all other cases, the delay of the inner strategy applies.
     /// </para>
     /// <para>The delay is limited to the longest delay that a timer supports.</para>
     /// </remarks>

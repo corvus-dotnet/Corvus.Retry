@@ -93,6 +93,32 @@ public class RetryAfterStrategyTests
     }
 
     [TestMethod]
+    public void WhenAnOpenCircuitRejectedTheAttempt_TheDelayIsTheRetryAfterOfTheRejection()
+    {
+        IRetryStrategy strategy = RetryStrategies.RetryAfter(RetryStrategies.Constant(3, InnerDelay), this.timeProvider);
+        BrokenCircuitException rejection = new("The circuit is open.", TimeSpan.FromSeconds(3));
+
+        Assert.AreEqual(TimeSpan.FromSeconds(3), strategy.GetRetryDelay(new RetryAttempt(1, rejection, null, TimeSpan.Zero)));
+    }
+
+    [TestMethod]
+    public void WhenTheRejectionHasNoRetryAfter_TheDelayIsTheInnerDelay()
+    {
+        IRetryStrategy strategy = RetryStrategies.RetryAfter(RetryStrategies.Constant(3, InnerDelay), this.timeProvider);
+
+        Assert.AreEqual(InnerDelay, strategy.GetRetryDelay(new RetryAttempt(1, new BrokenCircuitException("Half-open", (TimeSpan?)null), null, TimeSpan.Zero)));
+        Assert.AreEqual(InnerDelay, strategy.GetRetryDelay(new RetryAttempt(1, new IsolatedCircuitException(), null, TimeSpan.Zero)));
+    }
+
+    [TestMethod]
+    public void WhenTheInnerStrategyRefusesARetry_ItRefusesARetryForARejectionByTheCircuit()
+    {
+        IRetryStrategy strategy = RetryStrategies.RetryAfter(RetryStrategies.Constant(0, InnerDelay), this.timeProvider);
+
+        Assert.IsNull(strategy.GetRetryDelay(new RetryAttempt(1, new BrokenCircuitException("Open", TimeSpan.FromSeconds(3)), null, TimeSpan.Zero)));
+    }
+
+    [TestMethod]
     public void WhenTheInnerStrategyRefusesARetry_ItRefusesARetryEvenWithAHeader()
     {
         using HttpResponseMessage response = Response(new RetryConditionHeaderValue(TimeSpan.FromSeconds(5)));

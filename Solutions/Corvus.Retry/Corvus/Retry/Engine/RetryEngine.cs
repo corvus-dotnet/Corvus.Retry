@@ -46,15 +46,29 @@ internal static class RetryEngine
     /// than zero and not greater than <see cref="RetryDelay.MaxSupported"/>.
     /// </param>
     /// <param name="onRetry">A callback that the engine awaits before each delay, or <see langword="null"/>.</param>
+    /// <param name="circuitBreaker">
+    /// The circuit breaker that permits each attempt and counts its outcome, or <see langword="null"/>. It is inside the
+    /// retry loop and outside the attempt timeout.
+    /// </param>
     /// <param name="continueOnCapturedContext">Determines whether to continue on the captured context after each await.</param>
     /// <returns>The result of the first attempt that succeeds, or the last result that the operation marks as a failure.</returns>
     /// <exception cref="OperationCanceledException">The caller's token was cancelled.</exception>
     /// <exception cref="RetryTimeoutException">
     /// The total timeout expired, or the last attempt timed out and was not retried.
     /// </exception>
+    /// <exception cref="BrokenCircuitException">
+    /// The circuit breaker rejected the last attempt, and the strategy or the policy refused a retry.
+    /// </exception>
     /// <remarks>
+    /// <para>
     /// When the strategy or the policy refuses a retry, the exception of the last attempt is rethrown with its
-    /// original stack trace. An exception from <paramref name="onRetry"/> stops the call.
+    /// original stack trace. An exception from <paramref name="onRetry"/>, or from the state change callback of the
+    /// circuit breaker, stops the call.
+    /// </para>
+    /// <para>
+    /// An attempt that the circuit breaker rejects is a failure for the strategy and the policy, but it is not a call for
+    /// the breaker. A cancellation by the caller is not reported to the breaker as a call.
+    /// </para>
     /// </remarks>
     internal static async ValueTask<T> RunAsync<TOp, T>(
         TOp operation,
@@ -65,6 +79,7 @@ internal static class RetryEngine
         TimeSpan? attemptTimeout,
         TimeSpan? totalTimeout,
         Func<RetryEventArgs, ValueTask>? onRetry,
+        CircuitBreaker? circuitBreaker,
         bool continueOnCapturedContext)
         where TOp : struct, IRetryOperation<T>
     {
@@ -88,79 +103,156 @@ internal static class RetryEngine
                 caller.ThrowIfCancellationRequested();
                 ThrowIfTotalTimeoutExpired(totalCts, total);
 
-                // The attempt timeout is linked to the outer token, so that the total timeout also cancels the attempt.
-                CancellationTokenSource? attemptCts = null;
-                CancellationTokenRegistration attemptRegistration = default;
-                CancellationToken token = outer;
-                if (attemptTimeout is TimeSpan timeout)
-                {
-                    attemptCts = new CancellationTokenSource(timeout, timeProvider);
-                    attemptRegistration = outer.UnsafeRegister(CancelSource, attemptCts);
-                    token = attemptCts.Token;
-                }
-
                 T result = default!;
                 Exception? failure = null;
                 TimeSpan delay = TimeSpan.Zero;
-                try
+
+                // The circuit breaker is outside the attempt timeout, so a rejected attempt starts no timer.
+                bool acquired = false;
+                bool probe = false;
+                if (circuitBreaker is not null)
                 {
-                    result = await operation.InvokeAsync(token).ConfigureAwait(continueOnCapturedContext);
-                }
-                catch (Exception exception)
-                {
-                    failure = exception;
-                    if (exception is OperationCanceledException cancellation)
+                    acquired = circuitBreaker.TryAcquire(out probe, out BrokenCircuitException? rejection, out CircuitStateChange? change);
+                    if (change.HasValue)
                     {
-                        switch (Classify(caller, totalCts, attemptCts))
+                        try
                         {
-                            case CancellationCause.Caller:
-                                throw;
-
-                            case CancellationCause.TotalTimeout:
-                                throw new RetryTimeoutException(total, cancellation);
-
-                            case CancellationCause.AttemptTimeout:
-                                failure = new RetryTimeoutException(attemptTimeout.GetValueOrDefault(), cancellation);
-                                break;
-
-                            default:
-                                // The operation cancelled itself. The strategy and the policy decide, as for any exception.
-                                break;
+                            await circuitBreaker.NotifyAsync(change).ConfigureAwait(continueOnCapturedContext);
+                        }
+                        catch
+                        {
+                            // The attempt does not run, so let another call make the test call.
+                            circuitBreaker.Abandon(probe);
+                            throw;
                         }
                     }
 
-                    // The policy is not consulted when the strategy has no retries left.
-                    if (strategy.GetRetryDelay(new RetryAttempt(attempt, failure, null, previousDelay)) is not TimeSpan retryDelay
+                    failure = rejection;
+                }
+
+                if (failure is not null)
+                {
+                    // A rejected attempt is a failure for the strategy and the policy, but it is not a call for the breaker.
+                    if (strategy.GetRetryDelay(new RetryAttempt(attempt, failure, null, previousDelay)) is not TimeSpan rejectedDelay
                         || !policy.CanRetry(failure))
                     {
-                        if (ReferenceEquals(failure, exception))
-                        {
-                            // Rethrow from inside the catch block so that the exception keeps its original stack trace.
-                            throw;
-                        }
-
                         throw failure;
                     }
 
-                    delay = RetryDelay.Clamp(retryDelay);
+                    delay = RetryDelay.Clamp(rejectedDelay);
                 }
-                finally
+                else
                 {
-                    // Dispose the registration first, so that the outer token cannot cancel a disposed source.
-                    attemptRegistration.Dispose();
-                    attemptCts?.Dispose();
-                }
-
-                if (failure is null)
-                {
-                    // When the strategy has no retries left for a result that is a failure, the caller gets that result.
-                    if (!operation.IsFailure(result)
-                        || strategy.GetRetryDelay(new RetryAttempt(attempt, null, result, previousDelay)) is not TimeSpan retryDelay)
+                    // The attempt timeout is linked to the outer token, so that the total timeout also cancels the attempt.
+                    CancellationTokenSource? attemptCts = null;
+                    CancellationTokenRegistration attemptRegistration = default;
+                    CancellationToken token = outer;
+                    if (attemptTimeout is TimeSpan timeout)
                     {
-                        return result;
+                        attemptCts = new CancellationTokenSource(timeout, timeProvider);
+                        attemptRegistration = outer.UnsafeRegister(CancelSource, attemptCts);
+                        token = attemptCts.Token;
                     }
 
-                    delay = RetryDelay.Clamp(retryDelay);
+                    try
+                    {
+                        result = await operation.InvokeAsync(token).ConfigureAwait(continueOnCapturedContext);
+                    }
+                    catch (Exception exception)
+                    {
+                        failure = exception;
+                        if (exception is OperationCanceledException cancellation)
+                        {
+                            switch (Classify(caller, totalCts, attemptCts))
+                            {
+                                case CancellationCause.Caller:
+                                    // A cancellation by the caller is not a call and not a failure.
+                                    if (acquired)
+                                    {
+                                        circuitBreaker!.Abandon(probe);
+                                    }
+
+                                    throw;
+
+                                case CancellationCause.TotalTimeout:
+                                    failure = new RetryTimeoutException(total, cancellation);
+                                    if (acquired)
+                                    {
+                                        await circuitBreaker!.NotifyAsync(circuitBreaker.OnFailure(failure, probe)).ConfigureAwait(continueOnCapturedContext);
+                                    }
+
+                                    throw failure;
+
+                                case CancellationCause.AttemptTimeout:
+                                    failure = new RetryTimeoutException(attemptTimeout.GetValueOrDefault(), cancellation);
+                                    break;
+
+                                default:
+                                    // The operation cancelled itself. The strategy and the policy decide, as for any exception.
+                                    break;
+                            }
+                        }
+
+                        if (acquired)
+                        {
+                            await circuitBreaker!.NotifyAsync(circuitBreaker.OnFailure(failure, probe)).ConfigureAwait(continueOnCapturedContext);
+                        }
+
+                        // The policy is not consulted when the strategy has no retries left.
+                        if (strategy.GetRetryDelay(new RetryAttempt(attempt, failure, null, previousDelay)) is not TimeSpan retryDelay
+                            || !policy.CanRetry(failure))
+                        {
+                            if (ReferenceEquals(failure, exception))
+                            {
+                                // Rethrow from inside the catch block so that the exception keeps its original stack trace.
+                                throw;
+                            }
+
+                            throw failure;
+                        }
+
+                        delay = RetryDelay.Clamp(retryDelay);
+                    }
+                    finally
+                    {
+                        // Dispose the registration first, so that the outer token cannot cancel a disposed source.
+                        attemptRegistration.Dispose();
+                        attemptCts?.Dispose();
+                    }
+
+                    if (failure is null)
+                    {
+                        bool resultIsFailure;
+                        if (acquired)
+                        {
+                            try
+                            {
+                                resultIsFailure = operation.IsFailure(result);
+                            }
+                            catch
+                            {
+                                // The result has no outcome for the breaker, so do not count it.
+                                circuitBreaker!.Abandon(probe);
+                                throw;
+                            }
+
+                            CircuitStateChange? change = resultIsFailure ? circuitBreaker!.OnFailure(null, probe) : circuitBreaker!.OnSuccess(probe);
+                            await circuitBreaker.NotifyAsync(change).ConfigureAwait(continueOnCapturedContext);
+                        }
+                        else
+                        {
+                            resultIsFailure = operation.IsFailure(result);
+                        }
+
+                        // When the strategy has no retries left for a result that is a failure, the caller gets that result.
+                        if (!resultIsFailure
+                            || strategy.GetRetryDelay(new RetryAttempt(attempt, null, result, previousDelay)) is not TimeSpan retryDelay)
+                        {
+                            return result;
+                        }
+
+                        delay = RetryDelay.Clamp(retryDelay);
+                    }
                 }
 
                 // Do not report a retry that will not run.

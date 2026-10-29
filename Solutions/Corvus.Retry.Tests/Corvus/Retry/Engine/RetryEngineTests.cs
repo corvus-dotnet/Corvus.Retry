@@ -382,7 +382,7 @@ public class RetryEngineTests
         RecordingFakeTimeProvider fake = new();
 
         ValueTask<string> call = RetryEngine.RunAsync<TestOperation<string>, string>(
-            new(_ => new ValueTask<string>("done")), CancellationToken.None, new Count(3), AnyExceptionPolicy.Default, fake, null, null, null, false);
+            new(_ => new ValueTask<string>("done")), CancellationToken.None, new Count(3), AnyExceptionPolicy.Default, fake, null, null, null, null, false);
 
         Assert.IsTrue(call.IsCompletedSuccessfully);
         Assert.AreEqual("done", call.Result);
@@ -449,6 +449,7 @@ public class RetryEngineTests
                 Assert.IsFalse(((DisposableResult)args.Result!).Disposed);
                 return ValueTask.CompletedTask;
             },
+            null,
             false).ConfigureAwait(false);
 
         Assert.HasCount(3, results);
@@ -548,6 +549,7 @@ public class RetryEngineTests
             attemptTimeout,
             totalTimeout,
             onRetry,
+            null,
             false).AsTask();
     }
 

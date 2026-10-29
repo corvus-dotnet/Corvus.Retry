@@ -31,6 +31,7 @@ public sealed class RetryPipeline
     private readonly TimeSpan? attemptTimeout;
     private readonly TimeSpan? totalTimeout;
     private readonly Func<RetryEventArgs, ValueTask>? onRetry;
+    private readonly CircuitBreaker? circuitBreaker;
     private readonly bool continueOnCapturedContext;
 
     /// <summary>
@@ -58,6 +59,7 @@ public sealed class RetryPipeline
         this.attemptTimeout = options.AttemptTimeout;
         this.totalTimeout = options.TotalTimeout;
         this.onRetry = options.OnRetry;
+        this.circuitBreaker = options.CircuitBreaker;
         this.continueOnCapturedContext = options.ContinueOnCapturedContext;
     }
 
@@ -98,6 +100,7 @@ public sealed class RetryPipeline
             this.attemptTimeout,
             this.totalTimeout,
             this.onRetry,
+            this.circuitBreaker,
             this.continueOnCapturedContext);
     }
 
@@ -137,6 +140,7 @@ public sealed class RetryPipeline
             this.attemptTimeout,
             this.totalTimeout,
             this.onRetry,
+            this.circuitBreaker,
             this.continueOnCapturedContext);
 
         // A call that completed synchronously needs no task. Otherwise the task carries the outcome of the call.

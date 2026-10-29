@@ -411,13 +411,13 @@ public static class Retriable
     private static Task<T> RunAsync<TOp, T>(TOp operation, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext, Func<RetryEventArgs, ValueTask>? onRetry)
         where TOp : struct, IRetryOperation<T>
     {
-        return RetryEngine.RunAsync<TOp, T>(operation, cancellationToken, strategy, policy, RetryDefaults.TimeProvider, null, null, onRetry, continueOnCapturedContext).AsTask();
+        return RetryEngine.RunAsync<TOp, T>(operation, cancellationToken, strategy, policy, RetryDefaults.TimeProvider, null, null, onRetry, null, continueOnCapturedContext).AsTask();
     }
 
     private static Task RunAsync<TOp>(TOp operation, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext, Func<RetryEventArgs, ValueTask>? onRetry)
         where TOp : struct, IRetryOperation<Unit>
     {
-        ValueTask<Unit> run = RetryEngine.RunAsync<TOp, Unit>(operation, cancellationToken, strategy, policy, RetryDefaults.TimeProvider, null, null, onRetry, continueOnCapturedContext);
+        ValueTask<Unit> run = RetryEngine.RunAsync<TOp, Unit>(operation, cancellationToken, strategy, policy, RetryDefaults.TimeProvider, null, null, onRetry, null, continueOnCapturedContext);
 
         // A call that completed synchronously needs no task of its own. Otherwise the engine's task is returned as it is.
         return run.IsCompletedSuccessfully ? Task.CompletedTask : run.AsTask();

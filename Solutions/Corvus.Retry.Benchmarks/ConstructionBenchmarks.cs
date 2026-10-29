@@ -29,6 +29,7 @@ public class ConstructionBenchmarks
     private static readonly Func<TimeoutException, bool> IsTimeoutTransient = static ex => ex.Message.Length > 0;
     private static readonly RetryPipelineOptions PipelineOptions = new() { Strategy = SharedStrategy, AttemptTimeout = TimeSpan.FromSeconds(5) };
     private static readonly RetryPipelineOptions<int> PipelineOptionsOfT = new() { Strategy = SharedStrategy, ShouldRetryResult = static r => r < 0 };
+    private static readonly CircuitBreakerOptions BreakerOptions = new() { MinimumThroughput = 10, FailureRatio = 0.5 };
 
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("Strategies")]
@@ -178,4 +179,8 @@ public class ConstructionBenchmarks
     [Benchmark]
     [BenchmarkCategory("Other")]
     public RetryPipeline<int> RetryPipelineOfT() => new(PipelineOptionsOfT);
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public CircuitBreaker CircuitBreaker() => new(BreakerOptions);
 }

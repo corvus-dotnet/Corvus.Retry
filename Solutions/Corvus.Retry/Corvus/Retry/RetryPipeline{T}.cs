@@ -28,6 +28,7 @@ public sealed class RetryPipeline<T>
     private readonly TimeSpan? attemptTimeout;
     private readonly TimeSpan? totalTimeout;
     private readonly Func<RetryEventArgs, ValueTask>? onRetry;
+    private readonly CircuitBreaker? circuitBreaker;
     private readonly bool continueOnCapturedContext;
     private readonly Func<T, bool>? shouldRetryResult;
 
@@ -56,6 +57,7 @@ public sealed class RetryPipeline<T>
         this.attemptTimeout = options.AttemptTimeout;
         this.totalTimeout = options.TotalTimeout;
         this.onRetry = options.OnRetry;
+        this.circuitBreaker = options.CircuitBreaker;
         this.continueOnCapturedContext = options.ContinueOnCapturedContext;
         this.shouldRetryResult = options.ShouldRetryResult;
     }
@@ -98,6 +100,7 @@ public sealed class RetryPipeline<T>
             this.attemptTimeout,
             this.totalTimeout,
             this.onRetry,
+            this.circuitBreaker,
             this.continueOnCapturedContext);
     }
 }

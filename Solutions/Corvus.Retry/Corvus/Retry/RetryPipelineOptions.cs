@@ -90,6 +90,21 @@ public record RetryPipelineOptions
     public Func<RetryEventArgs, ValueTask>? OnRetry { get; init; }
 
     /// <summary>
+    /// Gets the circuit breaker that permits each attempt, or <see langword="null"/> for no circuit breaker.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The breaker is inside the retry loop and outside the attempt timeout: it counts each attempt as one call, and an
+    /// attempt timeout as a failure. Many pipelines can share one breaker.
+    /// </para>
+    /// <para>
+    /// When the breaker rejects an attempt, the attempt fails with a <see cref="BrokenCircuitException"/>. The strategy
+    /// and the policy decide whether to retry it, as for any exception.
+    /// </para>
+    /// </remarks>
+    public CircuitBreaker? CircuitBreaker { get; init; }
+
+    /// <summary>
     /// Gets the time provider for the delays and the timeouts.
     /// </summary>
     /// <remarks>The default is <see cref="TimeProvider.System"/>. A test can use a fake time provider.</remarks>
