@@ -62,11 +62,44 @@ public class AggregatePolicyTests
     }
 
     [TestMethod]
+    [DataRow(0)]
+    [DataRow(1)]
+    [DataRow(2)]
+    public void WhereverTheRefusingPolicyIs_ItRefusesAndTheLaterPoliciesAreNotAsked(int refusingIndex)
+    {
+        RecordingRetryPolicy[] children = [new(true), new(true), new(true)];
+        children[refusingIndex] = new RecordingRetryPolicy(false);
+        var policy = new AggregatePolicy();
+        policy.Policies.AddRange(children);
+
+        Assert.IsFalse(policy.CanRetry(new InvalidOperationException()));
+
+        for (int i = 0; i < children.Length; i++)
+        {
+            Assert.HasCount(i <= refusingIndex ? 1 : 0, children[i].Consulted, $"Policy {i}");
+        }
+    }
+
+    [TestMethod]
+    public void EveryPolicyIsAskedAboutTheSameExceptionInstance()
+    {
+        InvalidOperationException failure = new();
+        RecordingRetryPolicy first = new(true);
+        RecordingRetryPolicy second = new(true);
+        var policy = new AggregatePolicy { Policies = { first, second } };
+
+        Assert.IsTrue(policy.CanRetry(failure));
+
+        Assert.AreSame(failure, Assert.ContainsSingle(first.Consulted));
+        Assert.AreSame(failure, Assert.ContainsSingle(second.Consulted));
+    }
+
+    [TestMethod]
     public void ValidateArguments()
     {
         var policy = new AggregatePolicy();
 
-        Assert.ThrowsExactly<ArgumentNullException>(() => policy.CanRetry(null!));
+        Assert.AreEqual("exception", Assert.ThrowsExactly<ArgumentNullException>(() => policy.CanRetry(null!)).ParamName);
     }
 
     private static IEnumerable<IRetryPolicy> MakePolicies(int count, bool result)

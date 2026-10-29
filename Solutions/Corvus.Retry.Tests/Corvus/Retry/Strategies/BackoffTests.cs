@@ -14,7 +14,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 /// </summary>
 /// <remarks>
 /// After failed attempt n the delay is
-/// <c>min(MinBackoff + (2^n - 1) * r, MaxBackoff)</c>, where r is a random whole number of milliseconds
+/// <c>min(MinBackoff + (2^n - 1) * r, MaxBackoff)</c>, where r is a random time
 /// in <c>[0.8 * DeltaBackoff, 1.2 * DeltaBackoff)</c>. The bounds below are therefore deterministic.
 /// </remarks>
 [TestClass]
@@ -108,14 +108,21 @@ public class BackoffTests
         Assert.AreEqual(strategy.DefaultMinBackoff, strategy.MinBackoff);
         Assert.AreEqual(strategy.DefaultMaxBackoff, strategy.MaxBackoff);
 
-        List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 5);
-
-        for (int i = 0; i < 4; i++)
+        for (int iteration = 0; iteration < Iterations; iteration++)
         {
-            Assert.IsNotNull(delays[i]);
-        }
+            List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 5);
 
-        Assert.IsNull(delays[4]);
+            // r lies in [1.6 s, 2.4 s), so delay n lies in 1 s + (2^n - 1) * [1.6 s, 2.4 s], limited to 30 s.
+            for (int n = 1; n <= 4; n++)
+            {
+                int factor = (1 << n) - 1;
+                TimeSpan lower = TimeSpan.FromMilliseconds(Math.Min(1000 + (factor * 1600), 30_000));
+                TimeSpan upper = TimeSpan.FromMilliseconds(Math.Min(1000 + (factor * 2400), 30_000));
+                Assert.IsInRange(lower, upper, delays[n - 1]!.Value);
+            }
+
+            Assert.IsNull(delays[4]);
+        }
     }
 
     [TestMethod]
@@ -125,8 +132,31 @@ public class BackoffTests
 
         List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 2);
 
-        Assert.IsNotNull(delays[0]);
+        // 1 s + r, where r lies in [0.8 s, 1.2 s).
+        Assert.IsInRange(TimeSpan.FromMilliseconds(1800), TimeSpan.FromMilliseconds(2200), delays[0]!.Value);
         Assert.IsNull(delays[1]);
+    }
+
+    [TestMethod]
+    public void ManyDelaysForTheSameAttemptAreSpreadAcrossTheBand()
+    {
+        var strategy = new Backoff(2, TimeSpan.FromMilliseconds(1000));
+
+        List<TimeSpan> delays = JitterSamples.Take(strategy, new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero));
+
+        JitterSamples.AssertSpreadAcrossTheBand(delays, TimeSpan.FromMilliseconds(1800), TimeSpan.FromMilliseconds(2200));
+    }
+
+    [TestMethod]
+    public async Task WhenThreadsShareOneInstance_TheFirstDelaysOfConcurrentCallersAreNotAllEqual()
+    {
+        // The 2.0 defect (4976848): callers that failed at the same time got the same jitter, and retried together.
+        var strategy = new Backoff(2, TimeSpan.FromMilliseconds(1000));
+
+        List<List<TimeSpan?>> sequences = await StrategyDriver.FailTimesConcurrentlyAsync(strategy, 1).ConfigureAwait(false);
+
+        List<TimeSpan> firstDelays = sequences.ConvertAll(sequence => sequence[0]!.Value);
+        JitterSamples.AssertSpreadAcrossTheBand(firstDelays, TimeSpan.FromMilliseconds(1800), TimeSpan.FromMilliseconds(2200));
     }
 
     [TestMethod]
@@ -166,6 +196,121 @@ public class BackoffTests
             AssertWithinJitterBand(sequence);
             Assert.IsNull(sequence[3]);
         }
+    }
+
+    [TestMethod]
+    [DataRow(1)]
+    [DataRow(4)]
+    public void WhenTheDeltaIsAFewMilliseconds_TheJitterStaysWithinTwentyPercent(int deltaMilliseconds)
+    {
+        // Before 3.0 the jitter was a whole number of milliseconds, so a delta of 1 ms always gave 0 (-100%), and a
+        // delta of 4 ms always gave 3 ms.
+        TimeSpan delta = TimeSpan.FromMilliseconds(deltaMilliseconds);
+        var strategy = new Backoff(2, delta) { MinBackoff = TimeSpan.Zero, MaxBackoff = TimeSpan.MaxValue };
+
+        List<TimeSpan> delays = JitterSamples.Take(strategy, new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero));
+
+        // With a zero MinBackoff, the first delay is r itself.
+        JitterSamples.AssertSpreadAcrossTheBand(delays, delta * 0.8, delta * 1.2);
+    }
+
+    [TestMethod]
+    public void WhenTheDeltaIsLongerThanInt32MaxValueMilliseconds_TheJitterStaysWithinTwentyPercent()
+    {
+        // Before 3.0 both bounds of the jitter saturated at int.MaxValue ms (about 24.86 days), below the band.
+        var strategy = new Backoff(3, TimeSpan.FromDays(40)) { MinBackoff = TimeSpan.Zero, MaxBackoff = TimeSpan.MaxValue };
+
+        List<TimeSpan> delays = JitterSamples.Take(strategy, new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero));
+
+        // The band [32 d, 48 d] lies below the longest supported delay (about 49.7 days), so the cap does not apply.
+        JitterSamples.AssertSpreadAcrossTheBand(delays, TimeSpan.FromDays(32), TimeSpan.FromDays(48));
+    }
+
+    [TestMethod]
+    [DataRow(-1)] // Timeout.InfiniteTimeSpan is -1 ms, so it is rejected too.
+    [DataRow(-100_000)]
+    public void WhenMinBackoffIsNegative_TheInitialiserThrows(int milliseconds)
+    {
+        ArgumentOutOfRangeException ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+            () => new Backoff(3, TimeSpan.FromSeconds(1)) { MinBackoff = TimeSpan.FromMilliseconds(milliseconds) });
+
+        Assert.AreEqual("MinBackoff", ex.ParamName);
+    }
+
+    [TestMethod]
+    [DataRow(-1)] // Timeout.InfiniteTimeSpan is -1 ms, so it is rejected too.
+    [DataRow(-100_000)]
+    public void WhenMaxBackoffIsNegative_TheInitialiserThrows(int milliseconds)
+    {
+        ArgumentOutOfRangeException ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+            () => new Backoff(3, TimeSpan.FromSeconds(1)) { MaxBackoff = TimeSpan.FromMilliseconds(milliseconds) });
+
+        Assert.AreEqual("MaxBackoff", ex.ParamName);
+    }
+
+    [TestMethod]
+    public void WhenMinBackoffIsGreaterThanMaxBackoff_GetRetryDelayThrows()
+    {
+        // The initialiser cannot check the pair, because the caller sets the bounds in any order (see
+        // TheBoundsCanBeSetInEitherOrder), so the first call checks it.
+        var strategy = new Backoff(3, TimeSpan.FromSeconds(1)) { MinBackoff = TimeSpan.FromSeconds(10), MaxBackoff = TimeSpan.FromSeconds(2) };
+
+        ArgumentException ex = Assert.ThrowsExactly<ArgumentException>(
+            () => strategy.GetRetryDelay(new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero)));
+
+        Assert.AreEqual("MinBackoff", ex.ParamName);
+    }
+
+    [TestMethod]
+    public void WhenOnlyMinBackoffIsSetAboveTheDefaultMaxBackoff_GetRetryDelayThrows()
+    {
+        var strategy = new Backoff(3, TimeSpan.FromSeconds(1)) { MinBackoff = TimeSpan.FromSeconds(60) };
+
+        ArgumentException ex = Assert.ThrowsExactly<ArgumentException>(
+            () => strategy.GetRetryDelay(new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero)));
+
+        Assert.AreEqual("MinBackoff", ex.ParamName);
+    }
+
+    [TestMethod]
+    public void WhenMinBackoffIsGreaterThanMaxBackoff_GetRetryDelayThrowsEvenWhenNoRetriesRemain()
+    {
+        var strategy = new Backoff(1, TimeSpan.FromSeconds(1)) { MinBackoff = TimeSpan.FromSeconds(10), MaxBackoff = TimeSpan.FromSeconds(2) };
+
+        ArgumentException ex = Assert.ThrowsExactly<ArgumentException>(
+            () => strategy.GetRetryDelay(new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero)));
+
+        Assert.AreEqual("MinBackoff", ex.ParamName);
+    }
+
+    [TestMethod]
+    public void TheBoundsCanBeSetInEitherOrder()
+    {
+        // Each initialiser on its own moves MinBackoff above the default MaxBackoff of 30 s.
+        TimeSpan min = TimeSpan.FromSeconds(60);
+        TimeSpan max = TimeSpan.FromSeconds(120);
+        var minFirst = new Backoff(2, TimeSpan.Zero) { MinBackoff = min, MaxBackoff = max };
+        var maxFirst = new Backoff(2, TimeSpan.Zero) { MaxBackoff = max, MinBackoff = min };
+
+        Assert.AreSequenceEqual(new TimeSpan?[] { min, null }, StrategyDriver.FailTimes(minFirst, 2));
+        Assert.AreSequenceEqual(new TimeSpan?[] { min, null }, StrategyDriver.FailTimes(maxFirst, 2));
+    }
+
+    [TestMethod]
+    public void WhenMinBackoffEqualsMaxBackoff_EveryDelayIsThatValue()
+    {
+        TimeSpan bound = TimeSpan.FromSeconds(5);
+        var strategy = new Backoff(4, TimeSpan.FromSeconds(1)) { MinBackoff = bound, MaxBackoff = bound };
+
+        Assert.AreSequenceEqual(new TimeSpan?[] { bound, bound, bound, null }, StrategyDriver.FailTimes(strategy, 4));
+    }
+
+    [TestMethod]
+    public void ZeroBoundsAreAccepted()
+    {
+        var strategy = new Backoff(2, TimeSpan.FromSeconds(1)) { MinBackoff = TimeSpan.Zero, MaxBackoff = TimeSpan.Zero };
+
+        Assert.AreSequenceEqual(new TimeSpan?[] { TimeSpan.Zero, null }, StrategyDriver.FailTimes(strategy, 2));
     }
 
     [TestMethod]

@@ -26,6 +26,6 @@ public class DoNotRetryPolicyTests
     {
         var policy = new DoNotRetryPolicy();
 
-        Assert.ThrowsExactly<ArgumentNullException>(() => policy.CanRetry(null!));
+        Assert.AreEqual("exception", Assert.ThrowsExactly<ArgumentNullException>(() => policy.CanRetry(null!)).ParamName);
     }
 }

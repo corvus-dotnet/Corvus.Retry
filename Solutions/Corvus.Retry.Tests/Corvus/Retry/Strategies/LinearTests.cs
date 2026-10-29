@@ -88,18 +88,45 @@ public class LinearTests
     }
 
     [TestMethod]
+    public void WithJitter_ManyDelaysForTheSameAttemptAreSpreadAcrossTheBand()
+    {
+        var strategy = new Linear(TimeSpan.FromSeconds(1), 2, null, useJitter: true);
+
+        List<TimeSpan> delays = JitterSamples.Take(strategy, new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero));
+
+        JitterSamples.AssertSpreadAcrossTheBand(delays, TimeSpan.FromMilliseconds(750), TimeSpan.FromMilliseconds(1250));
+    }
+
+    [TestMethod]
     public void WithJitter_TheMaximumDelayAppliesAfterTheJitter()
     {
-        var strategy = new Linear(TimeSpan.FromSeconds(1), 6, TimeSpan.FromSeconds(1), useJitter: true);
+        // The band is [750 ms, 1250 ms], and the maximum cuts its upper half.
+        TimeSpan maxDelay = TimeSpan.FromSeconds(1);
+        var strategy = new Linear(TimeSpan.FromSeconds(1), 2, maxDelay, useJitter: true);
 
-        for (int iteration = 0; iteration < 50; iteration++)
-        {
-            foreach (TimeSpan? delay in StrategyDriver.FailTimes(strategy, 5))
-            {
-                Assert.IsNotNull(delay);
-                Assert.IsInRange(TimeSpan.FromMilliseconds(750), TimeSpan.FromSeconds(1), delay.Value);
-            }
-        }
+        List<TimeSpan> delays = JitterSamples.Take(strategy, new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero));
+
+        JitterSamples.AssertLimitedByTheMaximum(delays, TimeSpan.FromMilliseconds(750), maxDelay);
+    }
+
+    [TestMethod]
+    public void AMaximumDelayOfTimeSpanMaxValueLimitsOnlyToTheLongestSupportedDelay()
+    {
+        Assert.AreSequenceEqual(
+            new TimeSpan?[] { TimeSpan.FromSeconds(1), null },
+            StrategyDriver.FailTimes(new Linear(TimeSpan.FromSeconds(1), 2, TimeSpan.MaxValue), 2));
+        Assert.AreSequenceEqual(
+            new TimeSpan?[] { RetryDelay.MaxSupported, null },
+            StrategyDriver.FailTimes(new Linear(TimeSpan.FromDays(60), 2, TimeSpan.MaxValue), 2));
+    }
+
+    [TestMethod]
+    public void IntMaxValueTriesDoesNotOverflow()
+    {
+        var strategy = new Linear(TimeSpan.FromSeconds(1), int.MaxValue);
+
+        Assert.AreEqual(TimeSpan.FromSeconds(1), strategy.GetRetryDelay(new RetryAttempt(int.MaxValue - 1, null, null, TimeSpan.FromSeconds(1))));
+        Assert.IsNull(strategy.GetRetryDelay(new RetryAttempt(int.MaxValue, null, null, TimeSpan.FromSeconds(1))));
     }
 
     [TestMethod]

@@ -20,6 +20,9 @@ using System;
 /// decorrelated jitter. It spreads the retries of many callers that failed at the same time.
 /// </para>
 /// <para>
+/// With or without jitter, a maximum delay that is shorter than the base delay makes every delay the maximum delay.
+/// </para>
+/// <para>
 /// Every delay is also limited to the longest delay that a timer supports. This holds no state for a call, so one
 /// instance can be shared.
 /// </para>

@@ -107,18 +107,51 @@ public class IncrementalTests
     }
 
     [TestMethod]
+    public void WithJitter_ManyDelaysForTheSameAttemptAreSpreadAcrossTheBand()
+    {
+        // After attempt 2 the delay without jitter is 2 s, so the band is [1.5 s, 2.5 s].
+        var strategy = new Incremental(3, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), null, useJitter: true);
+
+        List<TimeSpan> delays = JitterSamples.Take(strategy, new RetryAttempt(2, new InvalidOperationException(), null, TimeSpan.FromSeconds(1)));
+
+        JitterSamples.AssertSpreadAcrossTheBand(delays, TimeSpan.FromMilliseconds(1500), TimeSpan.FromMilliseconds(2500));
+    }
+
+    [TestMethod]
     public void WithJitter_TheMaximumDelayAppliesAfterTheJitter()
     {
-        var strategy = new Incremental(6, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), useJitter: true);
+        TimeSpan maxDelay = TimeSpan.FromSeconds(2);
+        var strategy = new Incremental(6, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), maxDelay, useJitter: true);
 
-        for (int iteration = 0; iteration < 50; iteration++)
+        // Attempt 1: the band [0.75 s, 1.25 s] lies below the maximum.
+        JitterSamples.AssertSpreadAcrossTheBand(
+            JitterSamples.Take(strategy, new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero)),
+            TimeSpan.FromMilliseconds(750),
+            TimeSpan.FromMilliseconds(1250));
+
+        // Attempt 2: the maximum cuts the band [1.5 s, 2.5 s].
+        JitterSamples.AssertLimitedByTheMaximum(
+            JitterSamples.Take(strategy, new RetryAttempt(2, new InvalidOperationException(), null, TimeSpan.FromSeconds(1))),
+            TimeSpan.FromMilliseconds(1500),
+            maxDelay);
+
+        // Attempts 3 to 5: the whole band lies above the maximum.
+        for (int attempt = 3; attempt <= 5; attempt++)
         {
-            foreach (TimeSpan? delay in StrategyDriver.FailTimes(strategy, 5))
+            foreach (TimeSpan delay in JitterSamples.Take(strategy, new RetryAttempt(attempt, new InvalidOperationException(), null, maxDelay)))
             {
-                Assert.IsNotNull(delay);
-                Assert.IsLessThanOrEqualTo(TimeSpan.FromSeconds(2), delay.Value);
+                Assert.AreEqual(maxDelay, delay);
             }
         }
+    }
+
+    [TestMethod]
+    public void AMaximumDelayOfTimeSpanMaxValueLimitsOnlyToTheLongestSupportedDelay()
+    {
+        var strategy = new Incremental(int.MaxValue, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), TimeSpan.MaxValue);
+
+        Assert.AreEqual(TimeSpan.FromSeconds(3), strategy.GetRetryDelay(new RetryAttempt(3, null, null, TimeSpan.FromSeconds(2))));
+        Assert.AreEqual(RetryDelay.MaxSupported, strategy.GetRetryDelay(new RetryAttempt(int.MaxValue - 1, null, null, TimeSpan.FromSeconds(2))));
     }
 
     [TestMethod]
