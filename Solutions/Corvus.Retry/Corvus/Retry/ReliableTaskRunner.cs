@@ -383,7 +383,8 @@ public sealed class ReliableTaskRunner : IAsyncDisposable
     {
         try
         {
-            // The policy and the strategy see the exceptions the operation actually threw, as RetryTask passes them.
+            // The policy sees the inner exceptions of the run. The strategy sees the run's AggregateException, or the
+            // OperationCanceledException of a run that cancelled itself, as RetryTask passes them.
             AggregateException? failure = run.Exception;
             Exception exception = failure is not null ? failure : GetCancellation(run);
 
