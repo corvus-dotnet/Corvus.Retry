@@ -215,7 +215,9 @@ public sealed class ReliabilityPipeline<T>
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // The caller cancelled, so the fallback does not apply.
+            // The caller cancelled, so the fallback does not apply. The engine never makes a cancellation by the caller
+            // the outcome, but the outcome can be a cancellation that the operation caused itself, when the caller
+            // cancels after the attempt, for example while the engine awaits the state change callback of the breaker.
             throw;
         }
         catch (Exception ex) when (ReferenceEquals(ex, outcome.Exception))

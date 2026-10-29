@@ -418,6 +418,86 @@ public class ReliabilityPipelineTests
         }
     }
 
+    // REQ-08
+    [TestMethod]
+    public async Task TwoCallsThatOverlapOnOnePipelineEachGetTheirOwnAttemptsCallbacksAndFallback()
+    {
+        RecordingFakeTimeProvider fake = new();
+        var opA = new FlakyOperation(FlakyOperation.AlwaysFails, attempt => new InvalidOperationException($"A attempt {attempt} failed"));
+        var opB = new FlakyOperation(FlakyOperation.AlwaysFails, attempt => new InvalidOperationException($"B attempt {attempt} failed"));
+        var firstAttemptOfAInFlight = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var retries = new List<RetryEventArgs>();
+        var fallbacks = new List<FallbackArgs<string>>();
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new Count(3),
+            TotalTimeout = OneHour,
+            TimeProvider = fake,
+            OnRetry = args =>
+            {
+                lock (retries)
+                {
+                    retries.Add(args);
+                }
+
+                return ValueTask.CompletedTask;
+            },
+            Fallback = new FallbackOptions<string>
+            {
+                Action = args =>
+                {
+                    lock (fallbacks)
+                    {
+                        fallbacks.Add(args);
+                    }
+
+                    return new ValueTask<string>($"fallback for {args.Exception!.Message}");
+                },
+            },
+        });
+
+        // The first attempt of call A stays in flight until the test releases it. Its other attempts fail synchronously.
+        ValueTask<string> OperationA(CancellationToken cancellationToken)
+        {
+            try
+            {
+                return new ValueTask<string>(opA.Invoke());
+            }
+            catch (InvalidOperationException ex) when (opA.Invocations == 1)
+            {
+                firstAttemptOfAInFlight.SetResult();
+                return DeferredValueTask.FromException<string>(ex, releaseA.Task);
+            }
+        }
+
+        Task<string> callA = pipeline.ExecuteAsync(OperationA).AsTask();
+        await firstAttemptOfAInFlight.Task.WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        // Call B runs from start to end while call A is in flight.
+        string resultB = await pipeline.ExecuteAsync(_ => new ValueTask<string>(opB.Invoke())).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
+        Assert.IsFalse(callA.IsCompleted);
+        Assert.AreEqual(1, opA.Invocations);
+        releaseA.SetResult();
+        string resultA = await callA.WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual("fallback for B attempt 3 failed", resultB);
+        Assert.AreEqual("fallback for A attempt 3 failed", resultA);
+        Assert.AreEqual(3, opA.Invocations);
+        Assert.AreEqual(3, opB.Invocations);
+
+        // Each call has its own total timeout.
+        Assert.AreSequenceEqual(new[] { OneHour, OneHour }, fake.Delays);
+
+        // Each call's callbacks receive that call's own exceptions and attempt numbers.
+        Assert.AreSequenceEqual(
+            new[] { (opB.Thrown[0], 1), (opB.Thrown[1], 2), (opA.Thrown[0], 1), (opA.Thrown[1], 2) },
+            retries.Select(r => (r.LastException!, r.AttemptNumber)).ToArray());
+        Assert.HasCount(2, fallbacks);
+        Assert.AreSame(opB.LastThrown, fallbacks[0].Exception);
+        Assert.AreSame(opA.LastThrown, fallbacks[1].Exception);
+    }
+
     // REQ-12
     [TestMethod]
     public async Task TheCallbackGetsTheAttemptNumbersInOrderAndTheDelayStartsOnlyWhenTheCallbackCompletes()

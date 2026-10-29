@@ -13,13 +13,6 @@ using System.Threading;
 /// </summary>
 internal sealed class ThreadPoolSynchronizationContext : SynchronizationContext
 {
-    private int posts;
-
-    /// <summary>
-    /// Gets the number of callbacks posted so far.
-    /// </summary>
-    public int Posts => Volatile.Read(ref this.posts);
-
     /// <summary>
     /// Calls a function with this context as the current context, and then restores the previous context.
     /// </summary>
@@ -43,7 +36,6 @@ internal sealed class ThreadPoolSynchronizationContext : SynchronizationContext
     /// <inheritdoc/>
     public override void Post(SendOrPostCallback d, object? state)
     {
-        Interlocked.Increment(ref this.posts);
         ThreadPool.UnsafeQueueUserWorkItem(
             static s =>
             {

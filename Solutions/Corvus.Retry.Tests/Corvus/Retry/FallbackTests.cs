@@ -476,6 +476,46 @@ public class FallbackTests
     }
 
     [TestMethod]
+    public async Task WhenTheCallerCancelsAfterALastAttemptThatCancelledItself_TheFallbackDoesNotApply()
+    {
+        using CancellationTokenSource cts = new();
+        var op = new FlakyOperation(FlakyOperation.AlwaysFails, attempt => new OperationCanceledException($"Attempt {attempt} cancelled itself"));
+        var calls = new List<FallbackArgs<string>>();
+        var stateChangeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseStateChange = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        {
+            Strategy = new Count(2),
+            CircuitBreaker = new CircuitBreaker(new CircuitBreakerOptions
+            {
+                // The failure of the second attempt opens the circuit, and the pipeline awaits the callback.
+                MinimumThroughput = 2,
+                FailureRatio = 1,
+                OnStateChanged = change =>
+                {
+                    stateChangeStarted.SetResult();
+                    return new ValueTask(releaseStateChange.Task);
+                },
+            }),
+            Fallback = RecordingFallback(calls),
+        });
+
+        Task<string> call = pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke()), cts.Token).AsTask();
+
+        // The last attempt cancelled itself before the caller cancelled, so the engine makes that cancellation the
+        // outcome of the attempts. The caller cancels while the pipeline awaits the callback.
+        await stateChangeStarted.Task.WaitAsync(WaitLimit).ConfigureAwait(false);
+        await cts.CancelAsync().ConfigureAwait(false);
+        releaseStateChange.SetResult();
+
+        // The fallback never applies once the caller has cancelled. The caller gets the outcome of the attempts.
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreSame(op.LastThrown, thrown);
+        Assert.AreEqual(2, op.Invocations);
+        Assert.IsEmpty(calls);
+    }
+
+    [TestMethod]
     public async Task ATokenThatIsAlreadyCancelled_ThrowsTheOperationCanceledExceptionAndDoesNotCallTheFallback()
     {
         using CancellationTokenSource cts = new();
