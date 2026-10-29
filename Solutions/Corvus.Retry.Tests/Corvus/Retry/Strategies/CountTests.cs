@@ -47,6 +47,15 @@ public class CountTests
     }
 
     [TestMethod]
+    public void IntMaxValueTriesDoesNotOverflow()
+    {
+        var strategy = new Count(int.MaxValue);
+
+        Assert.AreEqual(TimeSpan.Zero, strategy.GetRetryDelay(new RetryAttempt(int.MaxValue - 1, new InvalidOperationException(), null, TimeSpan.Zero)));
+        Assert.IsNull(strategy.GetRetryDelay(new RetryAttempt(int.MaxValue, new InvalidOperationException(), null, TimeSpan.Zero)));
+    }
+
+    [TestMethod]
     public void ItNeverDelaysBetweenRetries()
     {
         List<TimeSpan?> delays = StrategyDriver.FailTimes(new Count(4), 3);

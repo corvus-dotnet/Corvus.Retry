@@ -132,15 +132,23 @@ public static class RetryStrategies
     /// <returns>A strategy that uses the header.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="inner"/> is <see langword="null"/>.</exception>
     /// <remarks>
-    /// <para>The strategy calls the inner strategy first. If the inner strategy returns <see langword="null"/>, it returns <see langword="null"/>.</para>
+    /// <para>
+    /// The strategy calls the inner strategy first, with the attempt unchanged. If the inner strategy returns
+    /// <see langword="null"/>, it returns <see langword="null"/>.
+    /// </para>
     /// <para>
     /// Otherwise, if <see cref="RetryAttempt.Result"/> is an <see cref="HttpResponseMessage"/> with a
     /// <c>Retry-After</c> header, the header gives the delay: the delta if there is one, or else the date minus the
     /// current time. A date in the past gives a zero delay. If <see cref="RetryAttempt.Exception"/> is a
     /// <see cref="BrokenCircuitException"/> with a <see cref="BrokenCircuitException.RetryAfter"/>, that time gives the
-    /// delay. In all other cases, the delay of the inner strategy applies.
+    /// delay. When an attempt has both, the header applies. In all other cases, the delay of the inner strategy
+    /// applies.
     /// </para>
-    /// <para>The delay is limited to the longest delay that a timer supports.</para>
+    /// <para>
+    /// A delay from the header or from the rejection is not limited by a maximum delay of the inner strategy: the
+    /// server's or the circuit's time applies. Every delay is limited to the range that a timer supports: a negative
+    /// time gives a zero delay, and a time longer than about 49.7 days gives the longest supported delay.
+    /// </para>
     /// </remarks>
     public static IRetryStrategy RetryAfter(IRetryStrategy inner, TimeProvider? timeProvider = null)
     {

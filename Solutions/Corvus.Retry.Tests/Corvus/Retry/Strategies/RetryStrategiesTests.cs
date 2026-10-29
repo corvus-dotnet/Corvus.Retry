@@ -6,6 +6,8 @@ namespace Corvus.Retry.Strategies;
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
@@ -17,6 +19,29 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 public class RetryStrategiesTests
 {
     private static readonly TimeSpan OneSecond = TimeSpan.FromSeconds(1);
+
+    // Each key is the strategy and the parameter (after the last '.') that receives Timeout.InfiniteTimeSpan.
+    private static readonly Dictionary<string, Action> InfiniteDelays = new()
+    {
+        ["Linear.periodicity"] = () => _ = new Linear(Timeout.InfiniteTimeSpan, 3),
+        ["Linear.maxDelay"] = () => _ = new Linear(OneSecond, 3, Timeout.InfiniteTimeSpan),
+        ["Incremental.initialDelay"] = () => _ = new Incremental(3, Timeout.InfiniteTimeSpan, OneSecond),
+        ["Incremental.step"] = () => _ = new Incremental(3, OneSecond, Timeout.InfiniteTimeSpan),
+        ["Incremental.maxDelay"] = () => _ = new Incremental(3, OneSecond, OneSecond, Timeout.InfiniteTimeSpan),
+        ["Exponential.baseDelay"] = () => _ = new Exponential(3, Timeout.InfiniteTimeSpan),
+        ["Exponential.maxDelay"] = () => _ = new Exponential(3, OneSecond, Timeout.InfiniteTimeSpan),
+        ["Backoff.deltaBackoff"] = () => _ = new Backoff(3, Timeout.InfiniteTimeSpan),
+        ["Backoff.MinBackoff"] = () => _ = new Backoff(3, OneSecond) { MinBackoff = Timeout.InfiniteTimeSpan },
+        ["Backoff.MaxBackoff"] = () => _ = new Backoff(3, OneSecond) { MaxBackoff = Timeout.InfiniteTimeSpan },
+        ["RetryStrategies.Constant.delay"] = () => RetryStrategies.Constant(3, Timeout.InfiniteTimeSpan),
+        ["RetryStrategies.Constant.maxDelay"] = () => RetryStrategies.Constant(3, OneSecond, Timeout.InfiniteTimeSpan),
+        ["RetryStrategies.Linear.delay"] = () => RetryStrategies.Linear(3, Timeout.InfiniteTimeSpan),
+        ["RetryStrategies.Linear.maxDelay"] = () => RetryStrategies.Linear(3, OneSecond, Timeout.InfiniteTimeSpan),
+        ["RetryStrategies.Exponential.baseDelay"] = () => RetryStrategies.Exponential(3, Timeout.InfiniteTimeSpan),
+        ["RetryStrategies.Exponential.maxDelay"] = () => RetryStrategies.Exponential(3, OneSecond, Timeout.InfiniteTimeSpan),
+    };
+
+    public static IEnumerable<object[]> InfiniteDelayCases => InfiniteDelays.Keys.Select(key => new object[] { key });
 
     [TestMethod]
     public void ConstantWithZeroRetriesGivesOneAttempt()
@@ -116,26 +141,70 @@ public class RetryStrategiesTests
     }
 
     [TestMethod]
-    public void TheMaximumDelayAppliesAfterTheJitter()
+    public void ConstantWithJitter_ManyDelaysForTheSameAttemptAreSpreadAcrossTheBand()
+    {
+        IRetryStrategy strategy = RetryStrategies.Constant(1, OneSecond, useJitter: true);
+
+        List<TimeSpan> delays = JitterSamples.Take(strategy, new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero));
+
+        JitterSamples.AssertSpreadAcrossTheBand(delays, TimeSpan.FromMilliseconds(750), TimeSpan.FromMilliseconds(1250));
+    }
+
+    [TestMethod]
+    public void LinearWithJitter_ManyDelaysForTheSameAttemptAreSpreadAcrossTheBand()
+    {
+        // Before retry 2 the delay without jitter is 2 s, so the band is [1.5 s, 2.5 s].
+        IRetryStrategy strategy = RetryStrategies.Linear(2, OneSecond, useJitter: true);
+
+        List<TimeSpan> delays = JitterSamples.Take(strategy, new RetryAttempt(2, new InvalidOperationException(), null, OneSecond));
+
+        JitterSamples.AssertSpreadAcrossTheBand(delays, TimeSpan.FromMilliseconds(1500), TimeSpan.FromMilliseconds(2500));
+    }
+
+    [TestMethod]
+    public void TheMaximumDelayAppliesAfterTheJitterToConstant()
+    {
+        // The band [750 ms, 1250 ms] is cut at 900 ms.
+        TimeSpan maxDelay = TimeSpan.FromMilliseconds(900);
+        IRetryStrategy strategy = RetryStrategies.Constant(5, OneSecond, maxDelay, useJitter: true);
+
+        List<TimeSpan> delays = JitterSamples.Take(strategy, new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero));
+
+        JitterSamples.AssertLimitedByTheMaximum(delays, TimeSpan.FromMilliseconds(750), maxDelay);
+    }
+
+    [TestMethod]
+    public void TheMaximumDelayAppliesAfterTheJitterToLinear()
     {
         TimeSpan maxDelay = TimeSpan.FromMilliseconds(900);
-        IRetryStrategy[] strategies =
-        [
-            RetryStrategies.Constant(5, OneSecond, maxDelay, useJitter: true),
-            RetryStrategies.Linear(5, OneSecond, maxDelay, useJitter: true),
-            RetryStrategies.Exponential(5, OneSecond, maxDelay, useJitter: true),
-        ];
+        IRetryStrategy strategy = RetryStrategies.Linear(5, OneSecond, maxDelay, useJitter: true);
 
-        foreach (IRetryStrategy strategy in strategies)
+        // Retry 1: the band [750 ms, 1250 ms] is cut at 900 ms.
+        JitterSamples.AssertLimitedByTheMaximum(
+            JitterSamples.Take(strategy, new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero)),
+            TimeSpan.FromMilliseconds(750),
+            maxDelay);
+
+        // Retries 2 to 5: the whole band lies above the maximum.
+        for (int attempt = 2; attempt <= 5; attempt++)
         {
-            for (int iteration = 0; iteration < 50; iteration++)
+            foreach (TimeSpan delay in JitterSamples.Take(strategy, new RetryAttempt(attempt, new InvalidOperationException(), null, maxDelay)))
             {
-                foreach (TimeSpan? delay in StrategyDriver.FailTimes(strategy, 5))
-                {
-                    Assert.IsNotNull(delay);
-                    Assert.IsLessThanOrEqualTo(maxDelay, delay.Value);
-                }
+                Assert.AreEqual(maxDelay, delay);
             }
+        }
+    }
+
+    [TestMethod]
+    public void TheMaximumDelayAppliesAfterTheJitterToExponential()
+    {
+        // Every jittered delay is at least the base delay, which is longer than the maximum.
+        TimeSpan maxDelay = TimeSpan.FromMilliseconds(900);
+        IRetryStrategy strategy = RetryStrategies.Exponential(5, OneSecond, maxDelay, useJitter: true);
+
+        for (int iteration = 0; iteration < 50; iteration++)
+        {
+            Assert.AreSequenceEqual(new TimeSpan?[] { maxDelay, maxDelay, maxDelay, maxDelay, maxDelay, null }, StrategyDriver.FailTimes(strategy, 6));
         }
     }
 
@@ -149,24 +218,51 @@ public class RetryStrategiesTests
     }
 
     [TestMethod]
+    public void IntMaxValueRetriesDoesNotOverflowForLinearOrExponential()
+    {
+        // Both share the conversion from retries to tries with Constant. Their delays at this attempt are limited
+        // to the longest supported delay.
+        IRetryStrategy linear = RetryStrategies.Linear(int.MaxValue, OneSecond);
+        IRetryStrategy exponential = RetryStrategies.Exponential(int.MaxValue, OneSecond);
+
+        Assert.AreEqual(RetryDelay.MaxSupported, linear.GetRetryDelay(new RetryAttempt(int.MaxValue - 1, null, null, OneSecond)));
+        Assert.IsNull(linear.GetRetryDelay(new RetryAttempt(int.MaxValue, null, null, OneSecond)));
+        Assert.AreEqual(RetryDelay.MaxSupported, exponential.GetRetryDelay(new RetryAttempt(int.MaxValue - 1, null, null, OneSecond)));
+        Assert.IsNull(exponential.GetRetryDelay(new RetryAttempt(int.MaxValue, null, null, OneSecond)));
+    }
+
+    [TestMethod]
+    public void OneRetryGivesTwoAttempts()
+    {
+        Assert.AreSequenceEqual(Seconds(1, null), StrategyDriver.FailTimes(RetryStrategies.Constant(1, OneSecond), 2));
+        Assert.AreSequenceEqual(Seconds(1, null), StrategyDriver.FailTimes(RetryStrategies.Linear(1, OneSecond), 2));
+        Assert.AreSequenceEqual(Seconds(1, null), StrategyDriver.FailTimes(RetryStrategies.Exponential(1, OneSecond), 2));
+    }
+
+    [TestMethod]
     public void FromDelegateReturnsTheDelegateValueAndANullValueStopsTheRetries()
     {
         List<RetryAttempt> seen = [];
+        List<Exception> thrown = [];
         IRetryStrategy strategy = RetryStrategies.FromDelegate(attempt =>
         {
             seen.Add(attempt);
             return attempt.AttemptNumber < 3 ? TimeSpan.FromSeconds(attempt.AttemptNumber * 10) : null;
         });
 
-        List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 3);
+        List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 3, attempt =>
+        {
+            InvalidOperationException failure = new($"Failure {attempt}");
+            thrown.Add(failure);
+            return failure;
+        });
 
         Assert.AreSequenceEqual(Seconds(10, 20, null), delays);
         Assert.HasCount(3, seen);
-        Assert.AreEqual(1, seen[0].AttemptNumber);
-        Assert.AreEqual(TimeSpan.Zero, seen[0].PreviousDelay);
-        Assert.AreEqual(2, seen[1].AttemptNumber);
-        Assert.AreEqual(TimeSpan.FromSeconds(10), seen[1].PreviousDelay);
-        Assert.IsInstanceOfType<InvalidOperationException>(seen[2].Exception);
+        Assert.AreEqual(new RetryAttempt(1, thrown[0], null, TimeSpan.Zero), seen[0]);
+        Assert.AreEqual(new RetryAttempt(2, thrown[1], null, TimeSpan.FromSeconds(10)), seen[1]);
+        Assert.AreEqual(new RetryAttempt(3, thrown[2], null, TimeSpan.FromSeconds(20)), seen[2]);
+        Assert.AreSame(thrown[2], seen[2].Exception);
     }
 
     [TestMethod]
@@ -208,6 +304,17 @@ public class RetryStrategiesTests
         Assert.AreEqual("maxDelay", Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => RetryStrategies.Constant(1, OneSecond, negative)).ParamName);
         Assert.AreEqual("maxDelay", Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => RetryStrategies.Linear(1, OneSecond, negative)).ParamName);
         Assert.AreEqual("maxDelay", Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => RetryStrategies.Exponential(1, OneSecond, negative)).ParamName);
+    }
+
+    [TestMethod]
+    [DynamicData(nameof(InfiniteDelayCases))]
+    public void WhenADelayParameterIsInfinite_ItIsRejectedWithTheParameterName(string parameter)
+    {
+        // Timeout.InfiniteTimeSpan (-1 ms) is the most likely way to write "no limit"; it is negative, so it is
+        // rejected rather than taken as no limit. Use null for no maximum delay.
+        ArgumentOutOfRangeException ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(InfiniteDelays[parameter]);
+
+        Assert.AreEqual(parameter[(parameter.LastIndexOf('.') + 1)..], ex.ParamName);
     }
 
     [TestMethod]

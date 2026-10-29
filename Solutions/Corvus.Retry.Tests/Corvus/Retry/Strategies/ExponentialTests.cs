@@ -33,10 +33,13 @@ public class ExponentialTests
     {
         var strategy = new Exponential(int.MaxValue, TimeSpan.FromMilliseconds(3));
 
-        // The range goes past the attempt where the power of 2 is infinite as a double.
+        // The range goes past the attempt where the power of 2 is infinite as a double. The cap is stated literally,
+        // rather than through the production helper, so that a change to the helper cannot change the oracle.
+        TimeSpan cap = TimeSpan.FromMilliseconds(0xFFFFFFFE);
         for (int attempt = 1; attempt <= 1100; attempt++)
         {
-            TimeSpan expected = RetryDelay.Clamp(3 * Math.Pow(2, attempt - 1), null);
+            double milliseconds = 3 * Math.Pow(2, attempt - 1);
+            TimeSpan expected = milliseconds < 0xFFFFFFFE ? TimeSpan.FromMilliseconds(milliseconds) : cap;
             Assert.AreEqual(expected, strategy.GetRetryDelay(new RetryAttempt(attempt, null, null, TimeSpan.Zero)), $"Attempt {attempt}");
         }
     }
@@ -87,9 +90,67 @@ public class ExponentialTests
         List<TimeSpan?> delays = StrategyDriver.FailTimes(new Exponential(3, TimeSpan.FromSeconds(1), useJitter: true), 3);
 
         Assert.HasCount(3, delays);
-        Assert.IsNotNull(delays[0]);
-        Assert.IsNotNull(delays[1]);
+        Assert.IsInRange(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3), delays[0]!.Value);
+        Assert.IsInRange(TimeSpan.FromSeconds(1), delays[0]!.Value * 3, delays[1]!.Value);
         Assert.IsNull(delays[2]);
+    }
+
+    [TestMethod]
+    public void WithJitter_ManyDelaysForTheSameAttemptAreSpreadAcrossTheBand()
+    {
+        // Before the first retry, previous is the base delay, so the band is [base, 3 * base].
+        var strategy = new Exponential(3, TimeSpan.FromSeconds(1), useJitter: true);
+
+        List<TimeSpan> delays = JitterSamples.Take(strategy, new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero));
+
+        JitterSamples.AssertSpreadAcrossTheBand(delays, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3));
+    }
+
+    [TestMethod]
+    public void WithJitter_ALongerPreviousDelayAllowsALongerNextDelay()
+    {
+        // PreviousDelay is the only input that changes. Only a strategy that uses it can return more than 3 * base.
+        TimeSpan baseDelay = TimeSpan.FromMilliseconds(100);
+        var strategy = new Exponential(10, baseDelay, useJitter: true);
+
+        List<TimeSpan> afterLong = JitterSamples.Take(strategy, new RetryAttempt(5, new InvalidOperationException(), null, TimeSpan.FromSeconds(10)));
+        List<TimeSpan> first = JitterSamples.Take(strategy, new RetryAttempt(5, new InvalidOperationException(), null, TimeSpan.Zero));
+
+        foreach (TimeSpan delay in afterLong)
+        {
+            Assert.IsInRange(baseDelay, TimeSpan.FromSeconds(30), delay);
+        }
+
+        Assert.Contains(d => d > baseDelay * 3, afterLong);
+
+        // A zero PreviousDelay means that previous is the base delay.
+        foreach (TimeSpan delay in first)
+        {
+            Assert.IsInRange(baseDelay, baseDelay * 3, delay);
+        }
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public void WhenTheMaximumDelayIsShorterThanTheBaseDelay_EveryDelayIsTheMaximum(bool useJitter)
+    {
+        TimeSpan maxDelay = TimeSpan.FromMilliseconds(500);
+        var strategy = new Exponential(4, TimeSpan.FromSeconds(1), maxDelay, useJitter);
+
+        for (int iteration = 0; iteration < 50; iteration++)
+        {
+            Assert.AreSequenceEqual(new TimeSpan?[] { maxDelay, maxDelay, maxDelay, null }, StrategyDriver.FailTimes(strategy, 4));
+        }
+    }
+
+    [TestMethod]
+    public void AMaximumDelayOfTimeSpanMaxValueLimitsOnlyToTheLongestSupportedDelay()
+    {
+        var strategy = new Exponential(int.MaxValue, TimeSpan.FromSeconds(1), TimeSpan.MaxValue);
+
+        Assert.AreEqual(TimeSpan.FromSeconds(4), strategy.GetRetryDelay(new RetryAttempt(3, null, null, TimeSpan.FromSeconds(2))));
+        Assert.AreEqual(RetryDelay.MaxSupported, strategy.GetRetryDelay(new RetryAttempt(5000, null, null, TimeSpan.FromSeconds(2))));
     }
 
     [TestMethod]
@@ -114,10 +175,15 @@ public class ExponentialTests
     {
         var strategy = new Exponential(int.MaxValue, TimeSpan.FromDays(40), useJitter: true);
 
-        TimeSpan? delay = strategy.GetRetryDelay(new RetryAttempt(2, null, null, RetryDelay.MaxSupported));
+        // random(40 d, 3 * 49.7 d) is limited to 49.7 d, which most samples reach; none may exceed it.
+        List<TimeSpan> delays = JitterSamples.Take(strategy, new RetryAttempt(2, null, null, RetryDelay.MaxSupported));
 
-        Assert.IsNotNull(delay);
-        Assert.IsInRange(TimeSpan.FromDays(40), RetryDelay.MaxSupported, delay.Value);
+        foreach (TimeSpan delay in delays)
+        {
+            Assert.IsInRange(TimeSpan.FromDays(40), TimeSpan.FromMilliseconds(0xFFFFFFFE), delay);
+        }
+
+        Assert.Contains(d => d == TimeSpan.FromMilliseconds(0xFFFFFFFE), delays);
     }
 
     [TestMethod]

@@ -69,4 +69,27 @@ internal static class JitterSamples
         Assert.Contains(d => d > middle, samples, $"No sample was above the middle of the band, {middle}.");
         Assert.IsGreaterThanOrEqualTo(MinimumDistinctValues, samples.Distinct().Count());
     }
+
+    /// <summary>
+    /// Asserts that every sample lies from <paramref name="lower"/> to <paramref name="maximum"/>, that some samples
+    /// equal the maximum, and that the samples below the maximum are spread (at least
+    /// <see cref="MinimumDistinctValues"/> distinct values).
+    /// </summary>
+    /// <param name="samples">The samples, for a band that the maximum cuts.</param>
+    /// <param name="lower">The lower bound of the band, inclusive.</param>
+    /// <param name="maximum">The maximum delay.</param>
+    /// <remarks>
+    /// A strategy that returned <see cref="TimeSpan.Zero"/>, or always the maximum, would pass a check of
+    /// <c>d &lt;= maximum</c> alone.
+    /// </remarks>
+    public static void AssertLimitedByTheMaximum(IReadOnlyList<TimeSpan> samples, TimeSpan lower, TimeSpan maximum)
+    {
+        foreach (TimeSpan sample in samples)
+        {
+            Assert.IsInRange(lower, maximum, sample);
+        }
+
+        Assert.Contains(d => d == maximum, samples, $"No sample was limited to the maximum, {maximum}.");
+        Assert.IsGreaterThanOrEqualTo(MinimumDistinctValues, samples.Where(d => d < maximum).Distinct().Count());
+    }
 }

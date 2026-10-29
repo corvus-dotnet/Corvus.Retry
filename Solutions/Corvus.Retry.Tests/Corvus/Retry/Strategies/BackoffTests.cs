@@ -108,14 +108,21 @@ public class BackoffTests
         Assert.AreEqual(strategy.DefaultMinBackoff, strategy.MinBackoff);
         Assert.AreEqual(strategy.DefaultMaxBackoff, strategy.MaxBackoff);
 
-        List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 5);
-
-        for (int i = 0; i < 4; i++)
+        for (int iteration = 0; iteration < Iterations; iteration++)
         {
-            Assert.IsNotNull(delays[i]);
-        }
+            List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 5);
 
-        Assert.IsNull(delays[4]);
+            // r lies in [1.6 s, 2.4 s), so delay n lies in 1 s + (2^n - 1) * [1.6 s, 2.4 s], limited to 30 s.
+            for (int n = 1; n <= 4; n++)
+            {
+                int factor = (1 << n) - 1;
+                TimeSpan lower = TimeSpan.FromMilliseconds(Math.Min(1000 + (factor * 1600), 30_000));
+                TimeSpan upper = TimeSpan.FromMilliseconds(Math.Min(1000 + (factor * 2400), 30_000));
+                Assert.IsInRange(lower, upper, delays[n - 1]!.Value);
+            }
+
+            Assert.IsNull(delays[4]);
+        }
     }
 
     [TestMethod]
@@ -125,8 +132,31 @@ public class BackoffTests
 
         List<TimeSpan?> delays = StrategyDriver.FailTimes(strategy, 2);
 
-        Assert.IsNotNull(delays[0]);
+        // 1 s + r, where r lies in [0.8 s, 1.2 s).
+        Assert.IsInRange(TimeSpan.FromMilliseconds(1800), TimeSpan.FromMilliseconds(2200), delays[0]!.Value);
         Assert.IsNull(delays[1]);
+    }
+
+    [TestMethod]
+    public void ManyDelaysForTheSameAttemptAreSpreadAcrossTheBand()
+    {
+        var strategy = new Backoff(2, TimeSpan.FromMilliseconds(1000));
+
+        List<TimeSpan> delays = JitterSamples.Take(strategy, new RetryAttempt(1, new InvalidOperationException(), null, TimeSpan.Zero));
+
+        JitterSamples.AssertSpreadAcrossTheBand(delays, TimeSpan.FromMilliseconds(1800), TimeSpan.FromMilliseconds(2200));
+    }
+
+    [TestMethod]
+    public async Task WhenThreadsShareOneInstance_TheFirstDelaysOfConcurrentCallersAreNotAllEqual()
+    {
+        // The 2.0 defect (4976848): callers that failed at the same time got the same jitter, and retried together.
+        var strategy = new Backoff(2, TimeSpan.FromMilliseconds(1000));
+
+        List<List<TimeSpan?>> sequences = await StrategyDriver.FailTimesConcurrentlyAsync(strategy, 1).ConfigureAwait(false);
+
+        List<TimeSpan> firstDelays = sequences.ConvertAll(sequence => sequence[0]!.Value);
+        JitterSamples.AssertSpreadAcrossTheBand(firstDelays, TimeSpan.FromMilliseconds(1800), TimeSpan.FromMilliseconds(2200));
     }
 
     [TestMethod]
