@@ -1,4 +1,4 @@
-// <copyright file="RetryPipeline.cs" company="Endjin Limited">
+// <copyright file="ReliabilityPipeline.cs" company="Endjin Limited">
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
@@ -12,7 +12,7 @@ using Corvus.Retry.Policies;
 using Corvus.Retry.Strategies;
 
 /// <summary>
-/// Runs operations, and retries them when they fail, with the settings of a <see cref="RetryPipelineOptions"/>.
+/// Runs operations, and retries them when they fail, with the settings of a <see cref="ReliabilityPipelineOptions"/>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -20,15 +20,15 @@ using Corvus.Retry.Strategies;
 /// calls at the same time.
 /// </para>
 /// <para>
-/// To retry a result that is a failure, use <see cref="RetryPipeline{T}"/>.
+/// To retry a result that is a failure, use <see cref="ReliabilityPipeline{T}"/>.
 /// </para>
 /// <para>
-/// When <see cref="RetryPipelineOptions.Hedging"/> is set, hedging replaces the retries: the pipeline starts more
+/// When <see cref="ReliabilityPipelineOptions.Hedging"/> is set, hedging replaces the retries: the pipeline starts more
 /// attempts in parallel, and the first attempt that succeeds wins. When every attempt fails, the call throws the last
 /// exception.
 /// </para>
 /// </remarks>
-public sealed class RetryPipeline
+public sealed class ReliabilityPipeline
 {
     private readonly IRetryStrategy strategy;
     private readonly IRetryPolicy policy;
@@ -41,31 +41,31 @@ public sealed class RetryPipeline
     private readonly HedgingOptions? hedging;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="RetryPipeline"/> class.
+    /// Initializes a new instance of the <see cref="ReliabilityPipeline"/> class.
     /// </summary>
     /// <param name="options">The settings of the pipeline.</param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="options"/>, <see cref="RetryPipelineOptions.Policy"/>,
-    /// <see cref="RetryPipelineOptions.TimeProvider"/> or the <see cref="HedgingOptions.Policy"/> of
-    /// <see cref="RetryPipelineOptions.Hedging"/> is <see langword="null"/>.
+    /// <paramref name="options"/>, <see cref="ReliabilityPipelineOptions.Policy"/>,
+    /// <see cref="ReliabilityPipelineOptions.TimeProvider"/> or the <see cref="HedgingOptions.Policy"/> of
+    /// <see cref="ReliabilityPipelineOptions.Hedging"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
-    /// <see cref="RetryPipelineOptions.AttemptTimeout"/> or <see cref="RetryPipelineOptions.TotalTimeout"/> is not
+    /// <see cref="ReliabilityPipelineOptions.AttemptTimeout"/> or <see cref="ReliabilityPipelineOptions.TotalTimeout"/> is not
     /// greater than zero, or is greater than the longest time that a timer supports; or the
     /// <see cref="HedgingOptions.MaxHedgedAttempts"/> or the <see cref="HedgingOptions.Delay"/> of
-    /// <see cref="RetryPipelineOptions.Hedging"/> is out of range.
+    /// <see cref="ReliabilityPipelineOptions.Hedging"/> is out of range.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// <see cref="RetryPipelineOptions.Hedging"/> and <see cref="RetryPipelineOptions.Strategy"/> are both set.
+    /// <see cref="ReliabilityPipelineOptions.Hedging"/> and <see cref="ReliabilityPipelineOptions.Strategy"/> are both set.
     /// </exception>
     /// <remarks>
     /// The <see cref="ArgumentException.ParamName"/> of each exception is the name of the property that is not correct.
     /// </remarks>
-    public RetryPipeline(RetryPipelineOptions options)
+    public ReliabilityPipeline(ReliabilityPipelineOptions options)
     {
-        RetryPipelineOptions.Validate(options);
+        ReliabilityPipelineOptions.Validate(options);
 
-        this.strategy = options.Strategy ?? RetryPipelineOptions.DefaultStrategy;
+        this.strategy = options.Strategy ?? ReliabilityPipelineOptions.DefaultStrategy;
         this.policy = options.Policy;
         this.timeProvider = options.TimeProvider;
         this.attemptTimeout = options.AttemptTimeout;

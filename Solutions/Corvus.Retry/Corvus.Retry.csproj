@@ -11,7 +11,7 @@
 
   <PropertyGroup>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
-    <PackageDescription>Retry support for synchronous and asynchronous operations: an immutable retry pipeline (RetryPipeline) with attempt and total timeouts, result retries, a fallback, a circuit breaker and hedging; Retriable and RetryTask; and a self-restarting host for long-running tasks (ReliableTaskRunner). Pluggable retry policies and strategies, and TimeProvider for all delays.</PackageDescription>
+    <PackageDescription>Retry support for synchronous and asynchronous operations: an immutable reliability pipeline (ReliabilityPipeline) with attempt and total timeouts, result retries, a fallback, a circuit breaker and hedging; Retriable and RetryTask; and a self-restarting host for long-running tasks (ReliableTaskRunner). Pluggable retry policies and strategies, and TimeProvider for all delays.</PackageDescription>
     <PackageTags>retry;resilience;transient-fault-handling;timeout;circuit-breaker;fallback;hedging;backoff;corvus;endjin</PackageTags>
     <PackageReadmeFile>PackageReadme.md</PackageReadmeFile>
     <PackageReleaseNotes>Version 3.0 is not compatible with 2.x. See https://github.com/corvus-dotnet/Corvus.Retry/blob/main/CHANGELOG.md for the changes in each release, and https://github.com/corvus-dotnet/Corvus.Retry/blob/main/Documentation/Migrating-from-2.x-to-3.0.md for the migration guide.</PackageReleaseNotes>

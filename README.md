@@ -13,7 +13,7 @@ If you use version 2.x, read the [migration guide from 2.x to 3.0](Documentation
 
 The library has four types that retry an operation:
 
-### `RetryPipeline`
+### `ReliabilityPipeline`
 A pipeline holds all the retry settings in one immutable object. It adds timeouts, result retries, a fallback, a circuit breaker and hedging to the retries.
 ### `Retriable`
 `Retriable` puts retries around a synchronous or an asynchronous operation, with a small set of parameters.
@@ -24,16 +24,16 @@ A pipeline holds all the retry settings in one immutable object. It adds timeout
 
 ## Usage
 
-### `RetryPipeline`
+### `ReliabilityPipeline`
 
-Make one `RetryPipeline` and keep it in a field. A pipeline is immutable, and many threads can use it at the same time. Each call has its own state.
+Make one `ReliabilityPipeline` and keep it in a field. A pipeline is immutable, and many threads can use it at the same time. Each call has its own state.
 
 ```csharp
 using Corvus.Retry;
 using Corvus.Retry.Policies;
 using Corvus.Retry.Strategies;
 
-RetryPipeline pipeline = new(new RetryPipelineOptions
+ReliabilityPipeline pipeline = new(new ReliabilityPipelineOptions
 {
     Strategy = RetryStrategies.Exponential(retries: 3, baseDelay: TimeSpan.FromMilliseconds(200), useJitter: true),
     Policy = RetryPolicies.TransientHttp,
@@ -49,7 +49,7 @@ The operation receives a cancellation token. The pipeline cancels this token whe
 
 #### Options
 
-`RetryPipelineOptions` is an immutable record. Use a `with` expression to make a changed copy. The constructor of the pipeline examines the options, and keeps their values.
+`ReliabilityPipelineOptions` is an immutable record. Use a `with` expression to make a changed copy. The constructor of the pipeline examines the options, and keeps their values.
 
 | Property | Default | Description |
 |----------|---------|-------------|
@@ -63,7 +63,7 @@ The operation receives a cancellation token. The pipeline cancels this token whe
 | `TimeProvider` | `TimeProvider.System` | The source of the time for the delays and the timeouts. |
 | `ContinueOnCapturedContext` | `false` | If `true`, the pipeline continues on the captured context after each `await`. |
 
-`RetryPipelineOptions<T>` adds these properties for a `RetryPipeline<T>`:
+`ReliabilityPipelineOptions<T>` adds these properties for a `ReliabilityPipeline<T>`:
 
 | Property | Default | Description |
 |----------|---------|-------------|
@@ -93,7 +93,7 @@ The two timeouts are cooperative. The pipeline cancels the token, and then waits
 When the caller cancels the token, the call throws an `OperationCanceledException`. The pipeline does not retry this exception, and does not give it to the policy. The token also stops a delay immediately.
 
 ```csharp
-RetryPipeline pipeline = new(new RetryPipelineOptions
+ReliabilityPipeline pipeline = new(new ReliabilityPipelineOptions
 {
     Strategy = RetryStrategies.Constant(retries: 5, delay: TimeSpan.FromSeconds(1)),
     Policy = RetryPolicies.TransientHttp,
@@ -144,7 +144,7 @@ The pipeline awaits `OnRetry` before each delay. The callback receives a `RetryE
 The pipeline does not call `OnRetry` for the last failure. An exception from the callback stops the call.
 
 ```csharp
-RetryPipeline pipeline = new(new RetryPipelineOptions
+ReliabilityPipeline pipeline = new(new ReliabilityPipelineOptions
 {
     Strategy = RetryStrategies.Linear(retries: 3, delay: TimeSpan.FromSeconds(1)),
     OnRetry = args =>
@@ -157,7 +157,7 @@ RetryPipeline pipeline = new(new RetryPipelineOptions
 
 #### Retry a result
 
-`RetryPipeline<T>` can also retry a result. If `ShouldRetryResult` returns `true`, the pipeline uses the result as a failure. The strategy, the callback and the delay then apply. The policy applies only to exceptions.
+`ReliabilityPipeline<T>` can also retry a result. If `ShouldRetryResult` returns `true`, the pipeline uses the result as a failure. The strategy, the callback and the delay then apply. The policy applies only to exceptions.
 
 - Before the next attempt, the pipeline disposes a rejected result that implements `IDisposable`. It does this after the callback.
 - If no retries remain, the pipeline returns the last result. It does not throw an exception.
@@ -165,7 +165,7 @@ RetryPipeline pipeline = new(new RetryPipelineOptions
 `RetryStrategies.RetryAfter` uses the `Retry-After` header of an `HttpResponseMessage` result for the delay:
 
 ```csharp
-RetryPipeline<HttpResponseMessage> pipeline = new(new RetryPipelineOptions<HttpResponseMessage>
+ReliabilityPipeline<HttpResponseMessage> pipeline = new(new ReliabilityPipelineOptions<HttpResponseMessage>
 {
     Strategy = RetryStrategies.RetryAfter(RetryStrategies.Exponential(retries: 3, baseDelay: TimeSpan.FromSeconds(1))),
     Policy = RetryPolicies.TransientHttp,
@@ -184,7 +184,7 @@ The pipeline applies its parts in this sequence, from the outermost part to the 
 
 ```text
 ExecuteAsync(operation, cancellationToken)
- └─ 1. Fallback                    RetryPipelineOptions<T>.Fallback
+ └─ 1. Fallback                    ReliabilityPipelineOptions<T>.Fallback
      └─ 2. Total timeout           TotalTimeout
          └─ 3. Retry, or hedging   Strategy, Policy, OnRetry, ShouldRetryResult; or Hedging
              └─ 4. Circuit breaker CircuitBreaker
@@ -200,7 +200,7 @@ Each part is optional. If an option is `null`, the pipeline does not use that pa
 
 #### Fallback
 
-A fallback gives a value when the pipeline fails. It applies only to `RetryPipeline<T>`.
+A fallback gives a value when the pipeline fails. It applies only to `ReliabilityPipeline<T>`.
 
 | `FallbackOptions<T>` property | Default | Description |
 |-------------------------------|---------|-------------|
@@ -210,7 +210,7 @@ A fallback gives a value when the pipeline fails. It applies only to `RetryPipel
 | `OnFallback` | `null` | A callback that the pipeline awaits before it calls `Action`. |
 
 ```csharp
-RetryPipeline<string> pipeline = new(new RetryPipelineOptions<string>
+ReliabilityPipeline<string> pipeline = new(new ReliabilityPipelineOptions<string>
 {
     Strategy = RetryStrategies.Constant(retries: 2, delay: TimeSpan.FromMilliseconds(500)),
     TotalTimeout = TimeSpan.FromSeconds(5),
@@ -259,7 +259,7 @@ CircuitBreaker breaker = new(new CircuitBreakerOptions
     },
 });
 
-RetryPipeline pipeline = new(new RetryPipelineOptions
+ReliabilityPipeline pipeline = new(new ReliabilityPipelineOptions
 {
     Strategy = RetryStrategies.RetryAfter(RetryStrategies.Constant(retries: 3, delay: TimeSpan.FromSeconds(1))),
     Policy = RetryPolicies.TransientHttp.Or(RetryPolicies.Handle<BrokenCircuitException>()),
@@ -301,7 +301,7 @@ Hedging starts more attempts in parallel when an attempt is slow or fails. The f
 | `OnHedging` | `null` | A callback that the pipeline awaits before it starts each attempt after the first. |
 
 ```csharp
-RetryPipeline<string> pipeline = new(new RetryPipelineOptions<string>
+ReliabilityPipeline<string> pipeline = new(new ReliabilityPipelineOptions<string>
 {
     Hedging = new HedgingOptions { MaxHedgedAttempts = 2, Delay = TimeSpan.FromMilliseconds(300) },
     AttemptTimeout = TimeSpan.FromSeconds(5),
@@ -380,7 +380,7 @@ The overloads that have a cancellation token obey these rules:
 
 `Retriable` awaits `onRetry` before each delay. The synchronous `Retry` overloads wait for the callback. An exception from the callback stops the call.
 
-`Retriable` has no timeouts and no result retries. For these functions, use `RetryPipeline`.
+`Retriable` has no timeouts and no result retries. For these functions, use `ReliabilityPipeline`.
 
 ### Policy and Strategy
 
@@ -450,7 +450,7 @@ IRetryPolicy policy = RetryPolicies.Handle<HttpRequestException>(ex => ex.Status
 
 `RetryPolicies.TransientHttp` refuses a `TaskCanceledException`, a `TimeoutException` that is not a `RetryTimeoutException`, and a `BrokenCircuitException`.
 
-`RetryPolicies.IsTransientHttpResponse(response)` returns `true` for a status of 408, 429, or 500 or more. Use it as `ShouldRetryResult` in a `RetryPipeline<HttpResponseMessage>`.
+`RetryPolicies.IsTransientHttpResponse(response)` returns `true` for a status of 408, 429, or 500 or more. Use it as `ShouldRetryResult` in a `ReliabilityPipeline<HttpResponseMessage>`.
 
 ##### Custom policy
 To make a custom policy, implement the `IRetryPolicy` interface and its `bool CanRetry(Exception exception)` method.
@@ -549,7 +549,7 @@ IRetryStrategy strategy = RetryStrategies.FromDelegate(
 #### `TimeProvider`
 The library uses `TimeProvider` for all delays and all timeouts.
 
-- `RetryPipeline` and `CircuitBreaker` get the `TimeProvider` from their options. A test can set a fake time provider, for example `FakeTimeProvider` from the `Microsoft.Extensions.TimeProvider.Testing` package. Then the test controls the time of the retries.
+- `ReliabilityPipeline` and `CircuitBreaker` get the `TimeProvider` from their options. A test can set a fake time provider, for example `FakeTimeProvider` from the `Microsoft.Extensions.TimeProvider.Testing` package. Then the test controls the time of the retries.
 - `RetryStrategies.RetryAfter` has an optional `timeProvider` parameter for a `Retry-After` header with a date.
 - `Retriable` and `RetryTask` use `TimeProvider.System`. They have no parameter for a different time provider.
 
@@ -606,7 +606,7 @@ This table gives the Corvus.Retry 3.0 item for each Polly 8 item:
 
 | Polly 8 | Corvus.Retry 3.0 |
 |---|---|
-| `ResiliencePipeline`, built one time | `RetryPipeline` and `RetryPipelineOptions`, built one time |
+| `ResiliencePipeline`, built one time | `ReliabilityPipeline` and `ReliabilityPipelineOptions`, built one time |
 | `ExecuteAsync(ct => …, token)` | `ExecuteAsync(ct => …, token)`, with the same `ValueTask` signature |
 | `AddTimeout` in `AddRetry` | `AttemptTimeout` |
 | `AddTimeout` around `AddRetry` | `TotalTimeout` |
@@ -619,15 +619,15 @@ This table gives the Corvus.Retry 3.0 item for each Polly 8 item:
 | `UseJitter` | `useJitter`. For exponential delays, Corvus uses decorrelated jitter. The first delay is between `base` and `3 × base`. |
 | `DelayGenerator` | `RetryStrategies.FromDelegate`, or `RetryStrategies.RetryAfter` for the `Retry-After` header |
 | `PredicateBuilder().Handle<T>()` | `RetryPolicies.Handle<T>().Or<T2>()` |
-| `PredicateBuilder<T>().HandleResult(…)` | `RetryPipelineOptions<T>.ShouldRetryResult` |
+| `PredicateBuilder<T>().HandleResult(…)` | `ReliabilityPipelineOptions<T>.ShouldRetryResult` |
 | `HandleInner<T>()` | `RetryPolicies.HandleInner<T>()` |
 | `HttpClientResiliencePredicates.IsTransient` | `RetryPolicies.TransientHttp` and `RetryPolicies.IsTransientHttpResponse` |
-| `AddFallback` | `RetryPipelineOptions<T>.Fallback` |
-| `AddCircuitBreaker` | `RetryPipelineOptions.CircuitBreaker`, with one shared `CircuitBreaker` |
+| `AddFallback` | `ReliabilityPipelineOptions<T>.Fallback` |
+| `AddCircuitBreaker` | `ReliabilityPipelineOptions.CircuitBreaker`, with one shared `CircuitBreaker` |
 | `BrokenCircuitException`, `IsolatedCircuitException` | `BrokenCircuitException`, `IsolatedCircuitException` |
 | `CircuitBreakerManualControl` | `CircuitBreaker.Isolate()` and `CircuitBreaker.Close()` |
-| `AddHedging` | `RetryPipelineOptions.Hedging` |
-| `ActionGenerator` (hedging) | `RetryPipelineOptions<T>.HedgingActionGenerator` |
+| `AddHedging` | `ReliabilityPipelineOptions.Hedging` |
+| `ActionGenerator` (hedging) | `ReliabilityPipelineOptions<T>.HedgingActionGenerator` |
 | `OnRetry`, `AttemptNumber` starts at 0 | `OnRetry`, `AttemptNumber` starts at 1 |
 | `TimeProvider` | `TimeProvider` |
 
@@ -669,7 +669,7 @@ This is the equivalent Corvus.Retry pipeline:
 
 ```csharp
 // Corvus.Retry 3.0
-RetryPipeline pipeline = new(new RetryPipelineOptions
+ReliabilityPipeline pipeline = new(new ReliabilityPipelineOptions
 {
     TotalTimeout = TimeSpan.FromSeconds(30),
     Strategy = RetryStrategies.Exponential(retries: 3, baseDelay: TimeSpan.FromMilliseconds(200), useJitter: true),
@@ -691,7 +691,7 @@ string body = await pipeline.ExecuteAsync(
 
 The folder `Examples` has samples. Each sample is a .NET 10 file-based app. Each sample uses the library source with `#:project`, thus it always uses the code in this repository. To run a sample, use one of these commands from the root of the repository:
 
-    dotnet run Examples/RetryPipelineSample.cs
+    dotnet run Examples/ReliabilityPipelineSample.cs
     dotnet run Examples/RetriableSample.cs
     dotnet run Examples/ReliableTaskRunnerSample.cs
     dotnet run Examples/RetryTaskSample.cs
@@ -704,9 +704,9 @@ The samples use the .NET 10 SDK. `RetriableSample` sends pings to `endjin.com`, 
 
 | Class | Public API that it measures | Baseline |
 |-------|-----------------------------|----------|
-| `RetryPipelineBenchmarks` | `RetryPipeline.ExecuteAsync` (with a result and with no result) and `RetryPipeline<T>.ExecuteAsync`, with no options, each timeout, the two timeouts, `ContinueOnCapturedContext`, `OnRetry`, two failures, and a result retry | A hand-written retry loop |
+| `ReliabilityPipelineBenchmarks` | `ReliabilityPipeline.ExecuteAsync` (with a result and with no result) and `ReliabilityPipeline<T>.ExecuteAsync`, with no options, each timeout, the two timeouts, `ContinueOnCapturedContext`, `OnRetry`, two failures, and a result retry | A hand-written retry loop |
 | `CircuitBreakerBenchmarks` | A pipeline with a `CircuitBreaker`: a closed circuit, a failure, a rejection by an open or isolated circuit, and the test call of a half-open circuit | The same pipeline without a breaker |
-| `FallbackBenchmarks` | A `RetryPipeline<T>` with `Fallback`, when the operation succeeds, throws an exception, or returns a rejected result | The same pipeline without a fallback |
+| `FallbackBenchmarks` | A `ReliabilityPipeline<T>` with `Fallback`, when the operation succeeds, throws an exception, or returns a rejected result | The same pipeline without a fallback |
 | `HedgingBenchmarks` | A pipeline with `Hedging`: a success, a failure that starts a hedged attempt, and two attempts in parallel | The same operation through a pipeline that retries |
 | `RetriableOverloadBenchmarks` | All the `Retriable.Retry` and `RetryAsync` overloads, with the token overloads and `onRetry`, when the first attempt succeeds | `Retry(func)`, `RetryAsync(func)` and the first token overload |
 | `RetriableBenchmarks` | `Retry`, `RetryAsync` and the token overload (with and without `onRetry`), with 0 and 2 failures before a success | A hand-written retry loop |
@@ -717,7 +717,7 @@ The samples use the .NET 10 SDK. `RetriableSample` sends pings to `endjin.com`, 
 | `PolicyBenchmarks` | `CanRetry` of `AnyExceptionPolicy`, `DoNotRetryPolicy`, the `RetryPolicies` methods, the extension members and `TransientHttp`, and `IsTransientHttpResponse` | The first item of each category |
 | `AggregatePolicyBenchmarks` | `AggregatePolicy.CanRetry` with 1, 4 and 16 child policies | One policy |
 | `DelayBenchmarks` | The delay of `Retriable.Retry` (`Thread.Sleep`) and of `Retriable.RetryAsync` (`Task.Delay` with `TimeProvider.System`) | The same retry with no delay |
-| `ConstructionBenchmarks` | The public constructors and factory methods: the strategies, the `RetryStrategies` methods, the policies, the `RetryPolicies` methods and the extension members, `RetryEventArgs`, the exceptions, the event and attempt records, the options records, the two factories, the pipelines and `CircuitBreaker` | `new Count()`, `new AnyExceptionPolicy()`, `new RetryEventArgs(...)` and `new RetryPipelineOptions()` |
+| `ConstructionBenchmarks` | The public constructors and factory methods: the strategies, the `RetryStrategies` methods, the policies, the `RetryPolicies` methods and the extension members, `RetryEventArgs`, the exceptions, the event and attempt records, the options records, the two factories, the pipelines and `CircuitBreaker` | `new Count()`, `new AnyExceptionPolicy()`, `new RetryEventArgs(...)` and `new ReliabilityPipelineOptions()` |
 
 No benchmark waits for time to pass. The strategies calculate delays, but the benchmarks do not wait for them. `DelayBenchmarks` uses a delay of one tick, which becomes 0 ms. Each pipeline timeout is too long to expire. The benchmarks call the `StartNew` overloads through the `RetryTaskFactoryDriver` of the test project. Thus, if a new overload has no benchmark, a test fails.
 
@@ -725,7 +725,7 @@ To run the benchmarks in Release, use this command from the root of the reposito
 
     dotnet run -c Release --project Solutions/Corvus.Retry.Benchmarks -- --filter "*"
 
-A full run has many cases and takes more than one hour. Use `--filter` to select benchmarks (for example `"*RetryPipeline*"`), and `--job short` for a fast run. BenchmarkDotNet writes the results to `BenchmarkDotNet.Artifacts`. The times change between sessions. Thus, compare the ratios from one run, not the absolute times from different runs. The build compiles the benchmarks, but does not run them.
+A full run has many cases and takes more than one hour. Use `--filter` to select benchmarks (for example `"*ReliabilityPipeline*"`), and `--job short` for a fast run. BenchmarkDotNet writes the results to `BenchmarkDotNet.Artifacts`. The times change between sessions. Thus, compare the ratios from one run, not the absolute times from different runs. The build compiles the benchmarks, but does not run them.
 
 [Performance of Corvus.Retry 3.0](Documentation/Performance.md) gives the results, a comparison with version 2.0, and the causes of the slower results.
 

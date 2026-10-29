@@ -14,7 +14,7 @@ them.
   `Task<T>`, which a hand-written `async` retry loop also allocates.
 - An asynchronous `Retriable` call that completes immediately takes 3 ns to 22 ns more than in 2.0.
 - `RetryTask` and `ReliableTaskRunner.StopAsync` are slower than in 2.0, because of changes to their behavior.
-- A `RetryPipeline` with no options adds approximately 26 ns to a call, and allocates no memory.
+- A `ReliabilityPipeline` with no options adds approximately 26 ns to a call, and allocates no memory.
 
 ## Test environment
 
@@ -34,7 +34,7 @@ them.
    tests ran between the two runs.
 2. We ran the benchmark classes for the hot paths again with the default job, one version after the other. These
    classes are `RetriableBenchmarks`, `RetriableOverloadBenchmarks`, `StrategyBenchmarks`, `PolicyBenchmarks`,
-   `RetryTaskBenchmarks` and `RetryPipelineBenchmarks`. The two versions used the same benchmark code.
+   `RetryTaskBenchmarks` and `ReliabilityPipelineBenchmarks`. The two versions used the same benchmark code.
 3. After the changes that this document describes in [Changes from the analysis](#changes-from-the-analysis), we ran
    the benchmarks that these changes affect again. Each run used the same job as the run before the change.
 
@@ -91,15 +91,15 @@ The last column gives a benchmark in the same class, for comparison.
 | Pipeline, `AttemptTimeout` and `TotalTimeout` | 189 ns, 432 B | |
 | Pipeline, 2 failures | 4.01 µs, 432 B | Hand-written loop: 3.85 µs, 432 B |
 | Pipeline, 2 failures, with `OnRetry` | 528 B | The 96 B more are two `RetryEventArgs` objects. |
-| `RetryPipeline<T>`, one result retry | 47 ns, 24 B | The 24 B is a boxed `int` in `RetryAttempt.Result`. |
+| `ReliabilityPipeline<T>`, one result retry | 47 ns, 24 B | The 24 B is a boxed `int` in `RetryAttempt.Result`. |
 | Circuit breaker, closed circuit, success | 76.6 ns, 0 B | No circuit breaker: 23.1 ns |
 | Circuit breaker, closed circuit, failure | 9.3 µs, 1,480 B | No circuit breaker: 9.0 µs, 1,480 B |
 | Circuit breaker, open or isolated circuit (the call is rejected) | 5.6 µs, 920 B | |
 | Fallback, set but not used | 40.8 ns, 0 B | No fallback: 24.2 ns |
 | Fallback, used for a result | 55.1 ns, 0 B | No fallback: 26.1 ns |
 | Fallback, used for an exception | 9.45 µs, 1,480 B | No fallback: 9.09 µs, 1,480 B |
-| Hedging, the first attempt succeeds | 103.5 ns, 472 B | Retry pipeline: 26.2 ns, 0 B |
-| Hedging, the first attempt fails and the second succeeds | 3.05 µs, 824 B | Retry pipeline: 2.38 µs, 216 B |
+| Hedging, the first attempt succeeds | 103.5 ns, 472 B | Pipeline with retries: 26.2 ns, 0 B |
+| Hedging, the first attempt fails and the second succeeds | 3.05 µs, 824 B | Pipeline with retries: 2.38 µs, 216 B |
 | Hedging, delay of zero, two attempts | 267 ns, 608 B | |
 | Hedging, delay of zero, the attempt that loses is cancelled | 5.89 µs, 2,300 B | |
 | `ReliableTaskRunner.Run` and `DisposeAsync` | 2.28 µs, 1,040 B | |

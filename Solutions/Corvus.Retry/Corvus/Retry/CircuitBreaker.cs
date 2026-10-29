@@ -16,7 +16,7 @@ using Corvus.Retry.Policies;
 /// <remarks>
 /// <para>
 /// One instance holds the state of the circuit. Many pipelines and many threads can use the same instance: set it as
-/// the <see cref="RetryPipelineOptions.CircuitBreaker"/> of each pipeline. The pipeline asks the breaker for permission
+/// the <see cref="ReliabilityPipelineOptions.CircuitBreaker"/> of each pipeline. The pipeline asks the breaker for permission
 /// before each attempt, so each retry is one call.
 /// </para>
 /// <para>
@@ -30,7 +30,7 @@ using Corvus.Retry.Policies;
 /// </para>
 /// <para>
 /// A failure is an exception that <see cref="CircuitBreakerOptions.Policy"/> accepts, or a result that
-/// <see cref="RetryPipelineOptions{T}.ShouldRetryResult"/> rejects. A cancellation by the caller is not a call and not
+/// <see cref="ReliabilityPipelineOptions{T}.ShouldRetryResult"/> rejects. A cancellation by the caller is not a call and not
 /// a failure. A call that the breaker rejects is not a call.
 /// </para>
 /// <para>

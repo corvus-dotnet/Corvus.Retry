@@ -24,7 +24,7 @@ We will use `TimeProvider` for all delays and all timeouts.
 
 - We will delete `ISleepService` and `SleepService`.
 - `Retriable` and `RetryTaskFactory` have no options object. They read the internal property `RetryDefaults.TimeProvider` for each call. The default value is `TimeProvider.System`.
-- `RetryPipeline` and `CircuitBreaker` get the `TimeProvider` from their options. They do not read `RetryDefaults.TimeProvider`.
+- `ReliabilityPipeline` and `CircuitBreaker` get the `TimeProvider` from their options. They do not read `RetryDefaults.TimeProvider`.
 - An asynchronous delay uses `Task.Delay(delay, timeProvider, token)`.
 - A synchronous delay waits for a timer from `TimeProvider`. If the token cannot be cancelled and the provider is `TimeProvider.System`, the delay uses `Thread.Sleep`.
 - A zero delay does not create a timer.
@@ -33,7 +33,7 @@ We will use `TimeProvider` for all delays and all timeouts.
 ## Consequences
 
 - One abstraction controls delays, timeouts and time measurements. This abstraction is part of .NET.
-- A caller of `RetryPipeline` can give a `TimeProvider` in the options. Thus, the tests of an application can control the time of its retries.
+- A caller of `ReliabilityPipeline` can give a `TimeProvider` in the options. Thus, the tests of an application can control the time of its retries.
 - The tests of this project do not wait for the system clock.
 - When we delete `ISleepService`, we make a breaking change. But only the tests of this project used it.
 - `RetryDefaults.TimeProvider` is a value for the full process. A test that changes it must not run in parallel with other tests. The test must set the value back to `TimeProvider.System` when it ends.

@@ -13,7 +13,7 @@ using Corvus.Retry.Time;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
-/// In a <see cref="RetryPipeline"/>, the circuit breaker is inside the retry loop and outside the attempt timeout: the
+/// In a <see cref="ReliabilityPipeline"/>, the circuit breaker is inside the retry loop and outside the attempt timeout: the
 /// strategy and the policy receive a <see cref="BrokenCircuitException"/> as the failure of a rejected attempt, the
 /// breaker counts each retry as one call, a rejected attempt starts no attempt timer, and
 /// <see cref="RetryStrategies.RetryAfter(IRetryStrategy, TimeProvider?)"/> waits for the end of the break.
@@ -32,7 +32,7 @@ public class CircuitBreakerPipelineTests
         CircuitBreaker breaker = this.NewOpenBreaker();
         var policy = new RecordingRetryPolicy(true);
         int invocations = 0;
-        var pipeline = new RetryPipeline(new RetryPipelineOptions { Strategy = new Count(3), Policy = policy, CircuitBreaker = breaker, TimeProvider = this.fake });
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(3), Policy = policy, CircuitBreaker = breaker, TimeProvider = this.fake });
 
         BrokenCircuitException thrown = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
             () => pipeline.ExecuteAsync(_ => new ValueTask<int>(Interlocked.Increment(ref invocations))).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
@@ -52,7 +52,7 @@ public class CircuitBreakerPipelineTests
     {
         CircuitBreaker breaker = this.NewOpenBreaker();
         RetryEventArgs? args = null;
-        var pipeline = new RetryPipeline(new RetryPipelineOptions
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
         {
             Strategy = new Count(2),
             CircuitBreaker = breaker,
@@ -77,7 +77,7 @@ public class CircuitBreakerPipelineTests
     {
         CircuitBreaker breaker = this.NewOpenBreaker();
         int rejections = 0;
-        var pipeline = new RetryPipeline(new RetryPipelineOptions
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
         {
             Strategy = new Count(3),
             Policy = RetryPolicies.TransientHttp,
@@ -101,7 +101,7 @@ public class CircuitBreakerPipelineTests
     {
         CircuitBreaker breaker = this.NewBreaker();
         var op = new FlakyOperation(2);
-        var pipeline = new RetryPipeline(new RetryPipelineOptions { Strategy = new Count(3), CircuitBreaker = breaker, TimeProvider = this.fake });
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(3), CircuitBreaker = breaker, TimeProvider = this.fake });
 
         string result = await pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
 
@@ -114,7 +114,7 @@ public class CircuitBreakerPipelineTests
     {
         CircuitBreaker breaker = this.NewBreaker();
         int invocations = 0;
-        var pipeline = new RetryPipeline<int>(new RetryPipelineOptions<int>
+        var pipeline = new ReliabilityPipeline<int>(new ReliabilityPipelineOptions<int>
         {
             Strategy = new Count(3),
             ShouldRetryResult = static r => r < 3,
@@ -133,7 +133,7 @@ public class CircuitBreakerPipelineTests
     {
         CircuitBreaker breaker = this.NewBreaker(minimumThroughput: 2, failureRatio: 1);
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
-        var pipeline = new RetryPipeline(new RetryPipelineOptions { Strategy = new Count(4), CircuitBreaker = breaker, TimeProvider = this.fake });
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(4), CircuitBreaker = breaker, TimeProvider = this.fake });
 
         await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
             () => pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
@@ -148,7 +148,7 @@ public class CircuitBreakerPipelineTests
     {
         CircuitBreaker breaker = this.NewBreaker();
         breaker.Isolate();
-        var pipeline = new RetryPipeline(new RetryPipelineOptions
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
         {
             Strategy = new DoNotRetry(),
             AttemptTimeout = TimeSpan.FromSeconds(1),
@@ -167,7 +167,7 @@ public class CircuitBreakerPipelineTests
     {
         CircuitBreaker breaker = this.NewOpenBreaker();
         int invocations = 0;
-        var pipeline = new RetryPipeline(new RetryPipelineOptions
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
         {
             Strategy = RetryStrategies.RetryAfter(RetryStrategies.Constant(1, TimeSpan.FromMilliseconds(100)), this.fake),
             CircuitBreaker = breaker,
@@ -190,7 +190,7 @@ public class CircuitBreakerPipelineTests
         CircuitBreaker breaker = this.NewBreaker();
         using CancellationTokenSource cts = new();
         int invocations = 0;
-        var pipeline = new RetryPipeline(new RetryPipelineOptions { Strategy = new Count(3), CircuitBreaker = breaker, TimeProvider = this.fake });
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(3), CircuitBreaker = breaker, TimeProvider = this.fake });
 
         Task<string> call = pipeline.ExecuteAsync(
             async ct =>

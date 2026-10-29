@@ -1,4 +1,4 @@
-// <copyright file="RetryPipeline{T}.cs" company="Endjin Limited">
+// <copyright file="ReliabilityPipeline{T}.cs" company="Endjin Limited">
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
@@ -13,7 +13,7 @@ using Corvus.Retry.Strategies;
 
 /// <summary>
 /// Runs operations that return a <typeparamref name="T"/>, and retries them when they throw an exception or return a
-/// result that is a failure, with the settings of a <see cref="RetryPipelineOptions{T}"/>. A fallback can give a value
+/// result that is a failure, with the settings of a <see cref="ReliabilityPipelineOptions{T}"/>. A fallback can give a value
 /// when the retries fail.
 /// </summary>
 /// <typeparam name="T">The type of the result of the operation.</typeparam>
@@ -23,12 +23,12 @@ using Corvus.Retry.Strategies;
 /// calls at the same time.
 /// </para>
 /// <para>
-/// When <see cref="RetryPipelineOptions.Hedging"/> is set, hedging replaces the retries: the pipeline starts more
+/// When <see cref="ReliabilityPipelineOptions.Hedging"/> is set, hedging replaces the retries: the pipeline starts more
 /// attempts in parallel, and the first outcome that is not a failure wins. When every attempt fails, the call throws
 /// the last exception or returns the last result. The fallback applies to that outcome.
 /// </para>
 /// </remarks>
-public sealed class RetryPipeline<T>
+public sealed class ReliabilityPipeline<T>
 {
     private readonly IRetryStrategy strategy;
     private readonly IRetryPolicy policy;
@@ -44,33 +44,33 @@ public sealed class RetryPipeline<T>
     private readonly Func<int, Func<CancellationToken, ValueTask<T>>?>? hedgingActionGenerator;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="RetryPipeline{T}"/> class.
+    /// Initializes a new instance of the <see cref="ReliabilityPipeline{T}"/> class.
     /// </summary>
     /// <param name="options">The settings of the pipeline.</param>
     /// <exception cref="ArgumentNullException">
-    /// <paramref name="options"/>, <see cref="RetryPipelineOptions.Policy"/>,
-    /// <see cref="RetryPipelineOptions.TimeProvider"/>, the <see cref="FallbackOptions{T}.Action"/> or the
-    /// <see cref="FallbackOptions{T}.Policy"/> of <see cref="RetryPipelineOptions{T}.Fallback"/>, or the
-    /// <see cref="HedgingOptions.Policy"/> of <see cref="RetryPipelineOptions.Hedging"/> is <see langword="null"/>.
+    /// <paramref name="options"/>, <see cref="ReliabilityPipelineOptions.Policy"/>,
+    /// <see cref="ReliabilityPipelineOptions.TimeProvider"/>, the <see cref="FallbackOptions{T}.Action"/> or the
+    /// <see cref="FallbackOptions{T}.Policy"/> of <see cref="ReliabilityPipelineOptions{T}.Fallback"/>, or the
+    /// <see cref="HedgingOptions.Policy"/> of <see cref="ReliabilityPipelineOptions.Hedging"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
-    /// <see cref="RetryPipelineOptions.AttemptTimeout"/> or <see cref="RetryPipelineOptions.TotalTimeout"/> is not
+    /// <see cref="ReliabilityPipelineOptions.AttemptTimeout"/> or <see cref="ReliabilityPipelineOptions.TotalTimeout"/> is not
     /// greater than zero, or is greater than the longest time that a timer supports; or the
     /// <see cref="HedgingOptions.MaxHedgedAttempts"/> or the <see cref="HedgingOptions.Delay"/> of
-    /// <see cref="RetryPipelineOptions.Hedging"/> is out of range.
+    /// <see cref="ReliabilityPipelineOptions.Hedging"/> is out of range.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// <see cref="RetryPipelineOptions.Hedging"/> and <see cref="RetryPipelineOptions.Strategy"/> are both set.
+    /// <see cref="ReliabilityPipelineOptions.Hedging"/> and <see cref="ReliabilityPipelineOptions.Strategy"/> are both set.
     /// </exception>
     /// <remarks>
     /// The <see cref="ArgumentException.ParamName"/> of each exception is the name of the property that is not correct.
     /// </remarks>
-    public RetryPipeline(RetryPipelineOptions<T> options)
+    public ReliabilityPipeline(ReliabilityPipelineOptions<T> options)
     {
-        RetryPipelineOptions.Validate(options);
+        ReliabilityPipelineOptions.Validate(options);
         ValidateFallback(options.Fallback);
 
-        this.strategy = options.Strategy ?? RetryPipelineOptions.DefaultStrategy;
+        this.strategy = options.Strategy ?? ReliabilityPipelineOptions.DefaultStrategy;
         this.policy = options.Policy;
         this.timeProvider = options.TimeProvider;
         this.attemptTimeout = options.AttemptTimeout;
@@ -106,7 +106,7 @@ public sealed class RetryPipeline<T>
     /// with its original stack trace. When the strategy refuses to retry a result, the call returns that result.
     /// </para>
     /// <para>
-    /// When <see cref="RetryPipelineOptions{T}.Fallback"/> is set, the fallback receives that exception or that result.
+    /// When <see cref="ReliabilityPipelineOptions{T}.Fallback"/> is set, the fallback receives that exception or that result.
     /// It does not receive a cancellation that the caller caused. An exception from the fallback stops the call.
     /// </para>
     /// <para>
@@ -156,12 +156,12 @@ public sealed class RetryPipeline<T>
 
         if (fallback.Action is null)
         {
-            throw new ArgumentNullException(nameof(RetryPipelineOptions<T>.Fallback), "The Action of the fallback must not be null.");
+            throw new ArgumentNullException(nameof(ReliabilityPipelineOptions<T>.Fallback), "The Action of the fallback must not be null.");
         }
 
         if (fallback.Policy is null)
         {
-            throw new ArgumentNullException(nameof(RetryPipelineOptions<T>.Fallback), "The Policy of the fallback must not be null.");
+            throw new ArgumentNullException(nameof(ReliabilityPipelineOptions<T>.Fallback), "The Policy of the fallback must not be null.");
         }
     }
 

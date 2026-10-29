@@ -340,7 +340,7 @@ await RunExampleAsync(async () =>
 //
 // There are several strategies provided out-of-the-box: `Count`, `DoNotRetry`, `Linear`, `Incremental`, `Backoff` and
 // `Exponential`, and the `RetryStrategies` factory methods (`Constant`, `Linear`, `Exponential`, `FromDelegate` and
-// `RetryAfter`), which count retries rather than attempts. RetryPipelineSample.cs shows some of them.
+// `RetryAfter`), which count retries rather than attempts. ReliabilityPipelineSample.cs shows some of them.
 //
 // #### `Count`
 //

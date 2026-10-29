@@ -12,7 +12,7 @@ using BenchmarkDotNet.Configs;
 using Corvus.Retry.Strategies;
 
 /// <summary>
-/// The cost of a hedged call through a <see cref="RetryPipeline{T}"/>, compared with the same operation through a
+/// The cost of a hedged call through a <see cref="ReliabilityPipeline{T}"/>, compared with the same operation through a
 /// pipeline that retries.
 /// </summary>
 /// <remarks>
@@ -35,18 +35,18 @@ public class HedgingBenchmarks
 {
     private const int Result = 42;
 
-    private readonly RetryPipeline<int> retryPipeline = new(new RetryPipelineOptions<int> { Strategy = new Count(2) });
-    private readonly RetryPipeline<int> hedgingPipeline = new(new RetryPipelineOptions<int>
+    private readonly ReliabilityPipeline<int> retryPipeline = new(new ReliabilityPipelineOptions<int> { Strategy = new Count(2) });
+    private readonly ReliabilityPipeline<int> hedgingPipeline = new(new ReliabilityPipelineOptions<int>
     {
         Hedging = new HedgingOptions { Delay = TimeSpan.FromMinutes(1) },
     });
 
-    private readonly RetryPipeline<int> parallelPipeline = new(new RetryPipelineOptions<int>
+    private readonly ReliabilityPipeline<int> parallelPipeline = new(new ReliabilityPipelineOptions<int>
     {
         Hedging = new HedgingOptions { Delay = TimeSpan.Zero },
     });
 
-    private readonly RetryPipeline<int> parallelLoserPipeline;
+    private readonly ReliabilityPipeline<int> parallelLoserPipeline;
 
     private readonly Func<CancellationToken, ValueTask<int>> operation;
     private readonly Func<CancellationToken, ValueTask<int>> flakyOperation;
@@ -59,7 +59,7 @@ public class HedgingBenchmarks
         this.flakyOperation = this.FlakyOperation;
 
         // The first attempt waits until its token is cancelled. The second attempt wins at once.
-        this.parallelLoserPipeline = new(new RetryPipelineOptions<int>
+        this.parallelLoserPipeline = new(new ReliabilityPipelineOptions<int>
         {
             Hedging = new HedgingOptions { Delay = TimeSpan.Zero },
             HedgingActionGenerator = static attempt => attempt == 1 ? WaitUntilCancelledAsync : null,

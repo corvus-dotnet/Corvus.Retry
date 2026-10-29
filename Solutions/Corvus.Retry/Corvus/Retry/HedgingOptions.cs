@@ -16,9 +16,9 @@ using Corvus.Retry.Policies;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Hedging replaces the retry part of a pipeline. When <see cref="RetryPipelineOptions.Hedging"/> is set,
-/// <see cref="RetryPipelineOptions.Strategy"/> must be <see langword="null"/>, and the pipeline does not call
-/// <see cref="RetryPipelineOptions.OnRetry"/>.
+/// Hedging replaces the retry part of a pipeline. When <see cref="ReliabilityPipelineOptions.Hedging"/> is set,
+/// <see cref="ReliabilityPipelineOptions.Strategy"/> must be <see langword="null"/>, and the pipeline does not call
+/// <see cref="ReliabilityPipelineOptions.OnRetry"/>.
 /// </para>
 /// <para>
 /// The operation must be idempotent. It must also be safe when two or more attempts run at the same time.

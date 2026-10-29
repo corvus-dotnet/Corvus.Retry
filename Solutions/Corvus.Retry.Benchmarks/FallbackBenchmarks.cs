@@ -12,7 +12,7 @@ using BenchmarkDotNet.Configs;
 using Corvus.Retry.Strategies;
 
 /// <summary>
-/// The cost of a fallback in a <see cref="RetryPipeline{T}"/> that makes one attempt, compared with the same pipeline
+/// The cost of a fallback in a <see cref="ReliabilityPipeline{T}"/> that makes one attempt, compared with the same pipeline
 /// without a fallback.
 /// </summary>
 /// <remarks>
@@ -32,8 +32,8 @@ public class FallbackBenchmarks
     private const int RejectedResult = -1;
     private const int FallbackResult = 0;
 
-    private readonly RetryPipeline<int> noFallbackPipeline;
-    private readonly RetryPipeline<int> fallbackPipeline;
+    private readonly ReliabilityPipeline<int> noFallbackPipeline;
+    private readonly ReliabilityPipeline<int> fallbackPipeline;
     private readonly Func<CancellationToken, ValueTask<int>> operation;
     private readonly Func<CancellationToken, ValueTask<int>> failingOperation;
     private readonly Func<CancellationToken, ValueTask<int>> rejectedOperation;
@@ -45,8 +45,8 @@ public class FallbackBenchmarks
         this.failingOperation = static _ => throw new InvalidOperationException("Failure");
         this.rejectedOperation = static _ => new ValueTask<int>(RejectedResult);
 
-        this.noFallbackPipeline = new RetryPipeline<int>(new RetryPipelineOptions<int> { Strategy = new DoNotRetry() });
-        this.fallbackPipeline = new RetryPipeline<int>(new RetryPipelineOptions<int>
+        this.noFallbackPipeline = new ReliabilityPipeline<int>(new ReliabilityPipelineOptions<int> { Strategy = new DoNotRetry() });
+        this.fallbackPipeline = new ReliabilityPipeline<int>(new ReliabilityPipelineOptions<int>
         {
             Strategy = new DoNotRetry(),
             Fallback = new FallbackOptions<int>

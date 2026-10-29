@@ -1,4 +1,4 @@
-// <copyright file="RetryPipelineOptionsTests.cs" company="Endjin Limited">
+// <copyright file="ReliabilityPipelineOptionsTests.cs" company="Endjin Limited">
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
@@ -13,19 +13,19 @@ using Corvus.Retry.Time;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
-/// <see cref="RetryPipelineOptions"/> holds all the settings of a pipeline, has documented defaults, makes changed
+/// <see cref="ReliabilityPipelineOptions"/> holds all the settings of a pipeline, has documented defaults, makes changed
 /// copies with a <see langword="with"/> expression, and is checked by the constructor of each pipeline, which names
 /// the property that is not correct.
 /// </summary>
 [TestClass]
-public class RetryPipelineOptionsTests
+public class ReliabilityPipelineOptionsTests
 {
     private static readonly TimeSpan WaitLimit = TimeSpan.FromSeconds(10);
 
     [TestMethod]
     public void TheDefaultsAreTheDocumentedValues()
     {
-        var options = new RetryPipelineOptions<int>();
+        var options = new ReliabilityPipelineOptions<int>();
 
         Assert.IsNull(options.Strategy);
         Assert.AreSame(AnyExceptionPolicy.Default, options.Policy);
@@ -41,12 +41,12 @@ public class RetryPipelineOptionsTests
     public void AWithExpressionMakesAChangedCopyAndKeepsTheOriginal()
     {
         Func<int, bool> shouldRetryResult = r => r < 0;
-        var original = new RetryPipelineOptions<int> { Strategy = new Count(3), ShouldRetryResult = shouldRetryResult };
+        var original = new ReliabilityPipelineOptions<int> { Strategy = new Count(3), ShouldRetryResult = shouldRetryResult };
 
-        RetryPipelineOptions copy = original with { AttemptTimeout = TimeSpan.FromSeconds(1) };
+        ReliabilityPipelineOptions copy = original with { AttemptTimeout = TimeSpan.FromSeconds(1) };
 
         // The copy has the type of the original, even through a reference to the base type.
-        var typedCopy = Assert.IsInstanceOfType<RetryPipelineOptions<int>>(copy);
+        var typedCopy = Assert.IsInstanceOfType<ReliabilityPipelineOptions<int>>(copy);
         Assert.AreSame(original.Strategy, typedCopy.Strategy);
         Assert.AreSame(shouldRetryResult, typedCopy.ShouldRetryResult);
         Assert.AreEqual(TimeSpan.FromSeconds(1), typedCopy.AttemptTimeout);
@@ -58,7 +58,7 @@ public class RetryPipelineOptionsTests
     public async Task AReferencePipelineWithExponentialDelaysWithJitterAndAnAttemptTimeoutUsesOptionsOnly()
     {
         RecordingFakeTimeProvider fake = new();
-        var pipeline = new RetryPipeline(new RetryPipelineOptions
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
         {
             Strategy = RetryStrategies.Exponential(3, TimeSpan.FromMilliseconds(200), useJitter: true),
             AttemptTimeout = TimeSpan.FromSeconds(5),
@@ -83,7 +83,7 @@ public class RetryPipelineOptionsTests
     public async Task AReferencePipelineWithATotalTimeoutAConstantDelayAndAnAttemptTimeoutUsesOptionsOnly()
     {
         RecordingFakeTimeProvider fake = new();
-        var pipeline = new RetryPipeline(new RetryPipelineOptions
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
         {
             TotalTimeout = TimeSpan.FromSeconds(30),
             Strategy = RetryStrategies.Constant(5, TimeSpan.FromSeconds(1)),
@@ -104,14 +104,14 @@ public class RetryPipelineOptionsTests
 
     // REQ-09
     [TestMethod]
-    [DataRow(nameof(RetryPipelineOptions.AttemptTimeout), "zero")]
-    [DataRow(nameof(RetryPipelineOptions.AttemptTimeout), "negative")]
-    [DataRow(nameof(RetryPipelineOptions.AttemptTimeout), "infinite")]
-    [DataRow(nameof(RetryPipelineOptions.AttemptTimeout), "too long")]
-    [DataRow(nameof(RetryPipelineOptions.TotalTimeout), "zero")]
-    [DataRow(nameof(RetryPipelineOptions.TotalTimeout), "negative")]
-    [DataRow(nameof(RetryPipelineOptions.TotalTimeout), "infinite")]
-    [DataRow(nameof(RetryPipelineOptions.TotalTimeout), "too long")]
+    [DataRow(nameof(ReliabilityPipelineOptions.AttemptTimeout), "zero")]
+    [DataRow(nameof(ReliabilityPipelineOptions.AttemptTimeout), "negative")]
+    [DataRow(nameof(ReliabilityPipelineOptions.AttemptTimeout), "infinite")]
+    [DataRow(nameof(ReliabilityPipelineOptions.AttemptTimeout), "too long")]
+    [DataRow(nameof(ReliabilityPipelineOptions.TotalTimeout), "zero")]
+    [DataRow(nameof(ReliabilityPipelineOptions.TotalTimeout), "negative")]
+    [DataRow(nameof(ReliabilityPipelineOptions.TotalTimeout), "infinite")]
+    [DataRow(nameof(ReliabilityPipelineOptions.TotalTimeout), "too long")]
     public void TheConstructorsRejectATimeoutThatIsOutOfRange(string property, string value)
     {
         TimeSpan timeout = value switch
@@ -122,14 +122,14 @@ public class RetryPipelineOptionsTests
             _ => RetryDelay.MaxSupported + TimeSpan.FromMilliseconds(1),
         };
 
-        RetryPipelineOptions WithTimeout(RetryPipelineOptions options) => property == nameof(RetryPipelineOptions.AttemptTimeout)
+        ReliabilityPipelineOptions WithTimeout(ReliabilityPipelineOptions options) => property == nameof(ReliabilityPipelineOptions.AttemptTimeout)
             ? options with { AttemptTimeout = timeout }
             : options with { TotalTimeout = timeout };
 
         ArgumentOutOfRangeException thrown = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
-            () => new RetryPipeline(WithTimeout(new RetryPipelineOptions())));
+            () => new ReliabilityPipeline(WithTimeout(new ReliabilityPipelineOptions())));
         ArgumentOutOfRangeException thrownOfT = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
-            () => new RetryPipeline<int>((RetryPipelineOptions<int>)WithTimeout(new RetryPipelineOptions<int>())));
+            () => new ReliabilityPipeline<int>((ReliabilityPipelineOptions<int>)WithTimeout(new ReliabilityPipelineOptions<int>())));
 
         Assert.AreEqual(property, thrown.ParamName);
         Assert.AreEqual(property, thrownOfT.ParamName);
@@ -138,18 +138,18 @@ public class RetryPipelineOptionsTests
 
     // REQ-09
     [TestMethod]
-    [DataRow(nameof(RetryPipelineOptions.Policy))]
-    [DataRow(nameof(RetryPipelineOptions.TimeProvider))]
+    [DataRow(nameof(ReliabilityPipelineOptions.Policy))]
+    [DataRow(nameof(ReliabilityPipelineOptions.TimeProvider))]
     public void TheConstructorsRejectANullProperty(string property)
     {
-        RetryPipelineOptions WithNull(RetryPipelineOptions options) => property == nameof(RetryPipelineOptions.Policy)
+        ReliabilityPipelineOptions WithNull(ReliabilityPipelineOptions options) => property == nameof(ReliabilityPipelineOptions.Policy)
             ? options with { Policy = null! }
             : options with { TimeProvider = null! };
 
         ArgumentNullException thrown = Assert.ThrowsExactly<ArgumentNullException>(
-            () => new RetryPipeline(WithNull(new RetryPipelineOptions())));
+            () => new ReliabilityPipeline(WithNull(new ReliabilityPipelineOptions())));
         ArgumentNullException thrownOfT = Assert.ThrowsExactly<ArgumentNullException>(
-            () => new RetryPipeline<int>((RetryPipelineOptions<int>)WithNull(new RetryPipelineOptions<int>())));
+            () => new ReliabilityPipeline<int>((ReliabilityPipelineOptions<int>)WithNull(new ReliabilityPipelineOptions<int>())));
 
         Assert.AreEqual(property, thrown.ParamName);
         Assert.AreEqual(property, thrownOfT.ParamName);
@@ -159,8 +159,8 @@ public class RetryPipelineOptionsTests
     [TestMethod]
     public void TheConstructorsRejectNullOptions()
     {
-        ArgumentNullException thrown = Assert.ThrowsExactly<ArgumentNullException>(() => new RetryPipeline(null!));
-        ArgumentNullException thrownOfT = Assert.ThrowsExactly<ArgumentNullException>(() => new RetryPipeline<int>(null!));
+        ArgumentNullException thrown = Assert.ThrowsExactly<ArgumentNullException>(() => new ReliabilityPipeline(null!));
+        ArgumentNullException thrownOfT = Assert.ThrowsExactly<ArgumentNullException>(() => new ReliabilityPipeline<int>(null!));
 
         Assert.AreEqual("options", thrown.ParamName);
         Assert.AreEqual("options", thrownOfT.ParamName);
@@ -173,7 +173,7 @@ public class RetryPipelineOptionsTests
     {
         TimeSpan timeout = value == "one tick" ? TimeSpan.FromTicks(1) : RetryDelay.MaxSupported;
 
-        _ = new RetryPipeline(new RetryPipelineOptions { AttemptTimeout = timeout, TotalTimeout = timeout });
-        _ = new RetryPipeline<int>(new RetryPipelineOptions<int> { AttemptTimeout = timeout, TotalTimeout = timeout });
+        _ = new ReliabilityPipeline(new ReliabilityPipelineOptions { AttemptTimeout = timeout, TotalTimeout = timeout });
+        _ = new ReliabilityPipeline<int>(new ReliabilityPipelineOptions<int> { AttemptTimeout = timeout, TotalTimeout = timeout });
     }
 }

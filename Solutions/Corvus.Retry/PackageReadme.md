@@ -7,7 +7,7 @@ This package targets `net10.0`. If your project targets `netstandard2.0` or a di
 
 ## Usage
 
-`RetryPipeline` holds all the retry settings in one immutable object. Make one pipeline and keep it in a field. The
+`ReliabilityPipeline` holds all the retry settings in one immutable object. Make one pipeline and keep it in a field. The
 pipeline gives a cancellation token to the operation, and cancels it when the caller cancels or a timeout expires:
 
 ```csharp
@@ -15,7 +15,7 @@ using Corvus.Retry;
 using Corvus.Retry.Policies;
 using Corvus.Retry.Strategies;
 
-RetryPipeline pipeline = new(new RetryPipelineOptions
+ReliabilityPipeline pipeline = new(new ReliabilityPipelineOptions
 {
     Strategy = RetryStrategies.Exponential(retries: 3, baseDelay: TimeSpan.FromMilliseconds(200), useJitter: true),
     Policy = RetryPolicies.TransientHttp,
@@ -28,7 +28,7 @@ string body = await pipeline.ExecuteAsync(
     cancellationToken);
 ```
 
-A pipeline can also retry a result (`RetryPipeline<T>`), and can have a fallback, a circuit breaker and hedging.
+A pipeline can also retry a result (`ReliabilityPipeline<T>`), and can have a fallback, a circuit breaker and hedging.
 
 `Retriable` puts retries around a synchronous or an asynchronous operation:
 

@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 using Corvus.Retry.Policies;
 
 /// <summary>
-/// The settings of the fallback of a <see cref="RetryPipeline{T}"/>: the value that the pipeline gives when all the
+/// The settings of the fallback of a <see cref="ReliabilityPipeline{T}"/>: the value that the pipeline gives when all the
 /// other parts of the pipeline fail.
 /// </summary>
 /// <typeparam name="T">The type of the result of the operation.</typeparam>

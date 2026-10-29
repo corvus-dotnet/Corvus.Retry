@@ -1,4 +1,4 @@
-// <copyright file="RetryPipelineOfTTests.cs" company="Endjin Limited">
+// <copyright file="ReliabilityPipelineOfTTests.cs" company="Endjin Limited">
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
@@ -17,12 +17,12 @@ using Corvus.Retry.Time;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
-/// A <see cref="RetryPipeline{T}"/> treats a result that <see cref="RetryPipelineOptions{T}.ShouldRetryResult"/>
+/// A <see cref="ReliabilityPipeline{T}"/> treats a result that <see cref="ReliabilityPipelineOptions{T}.ShouldRetryResult"/>
 /// rejects as a failure: the strategy, the callback and the delay apply, the policy does not, the rejected result is
 /// disposed after the callback, and the last result is returned when no retries remain.
 /// </summary>
 [TestClass]
-public class RetryPipelineOfTTests
+public class ReliabilityPipelineOfTTests
 {
     private static readonly TimeSpan WaitLimit = TimeSpan.FromSeconds(10);
 
@@ -30,7 +30,7 @@ public class RetryPipelineOfTTests
     public async Task A503ResultIsRetriedAndA200ResultIsNot()
     {
         var responses = new ResponseSequence(503, 200, 503);
-        RetryPipeline<Response> pipeline = CreatePipeline(new Count(3));
+        ReliabilityPipeline<Response> pipeline = CreatePipeline(new Count(3));
 
         Response result = await pipeline.ExecuteAsync(responses.NextAsync).ConfigureAwait(false);
 
@@ -42,7 +42,7 @@ public class RetryPipelineOfTTests
     public async Task A200ResultOnTheFirstAttemptIsReturnedWithoutRetry()
     {
         var responses = new ResponseSequence(200, 503);
-        RetryPipeline<Response> pipeline = CreatePipeline(new Count(3));
+        ReliabilityPipeline<Response> pipeline = CreatePipeline(new Count(3));
 
         Response result = await pipeline.ExecuteAsync(responses.NextAsync).ConfigureAwait(false);
 
@@ -55,7 +55,7 @@ public class RetryPipelineOfTTests
     public async Task EachRejectedResultIsDisposedAfterTheCallback()
     {
         var responses = new ResponseSequence(503, 503, 200);
-        RetryPipeline<Response> pipeline = CreatePipeline(
+        ReliabilityPipeline<Response> pipeline = CreatePipeline(
             new Count(3),
             args =>
             {
@@ -78,7 +78,7 @@ public class RetryPipelineOfTTests
     public async Task WhenNoRetriesRemain_TheLastResultIsReturnedAndNotDisposed()
     {
         var responses = new ResponseSequence(503, 503, 503);
-        RetryPipeline<Response> pipeline = CreatePipeline(new Count(3));
+        ReliabilityPipeline<Response> pipeline = CreatePipeline(new Count(3));
 
         Response result = await pipeline.ExecuteAsync(responses.NextAsync).ConfigureAwait(false);
 
@@ -94,7 +94,7 @@ public class RetryPipelineOfTTests
     {
         var responses = new ResponseSequence(503, 200);
         var calls = new List<RetryEventArgs>();
-        RetryPipeline<Response> pipeline = CreatePipeline(
+        ReliabilityPipeline<Response> pipeline = CreatePipeline(
             new Count(3),
             args =>
             {
@@ -120,7 +120,7 @@ public class RetryPipelineOfTTests
         tooManyRequests.Headers.RetryAfter = new RetryConditionHeaderValue(fiveSeconds);
         using var ok = new HttpResponseMessage(HttpStatusCode.OK);
         int invocations = 0;
-        var pipeline = new RetryPipeline<HttpResponseMessage>(new RetryPipelineOptions<HttpResponseMessage>
+        var pipeline = new ReliabilityPipeline<HttpResponseMessage>(new ReliabilityPipelineOptions<HttpResponseMessage>
         {
             Strategy = RetryStrategies.RetryAfter(RetryStrategies.Constant(3, TimeSpan.FromSeconds(1)), fake),
             ShouldRetryResult = RetryPolicies.IsTransientHttpResponse,
@@ -145,7 +145,7 @@ public class RetryPipelineOfTTests
     {
         var responses = new ResponseSequence(503, 200);
         var policy = new RecordingRetryPolicy(false);
-        var pipeline = new RetryPipeline<Response>(new RetryPipelineOptions<Response>
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
         {
             Strategy = new Count(3),
             Policy = policy,
@@ -163,7 +163,7 @@ public class RetryPipelineOfTTests
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
         var policy = new RecordingRetryPolicy(false);
-        var pipeline = new RetryPipeline<string>(new RetryPipelineOptions<string>
+        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
         {
             Strategy = new Count(3),
             Policy = policy,
@@ -182,7 +182,7 @@ public class RetryPipelineOfTTests
     public async Task WhenShouldRetryResultIsNull_NoResultIsAFailure()
     {
         var responses = new ResponseSequence(503, 200);
-        var pipeline = new RetryPipeline<Response>(new RetryPipelineOptions<Response> { Strategy = new Count(3) });
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response> { Strategy = new Count(3) });
 
         Response result = await pipeline.ExecuteAsync(responses.NextAsync).ConfigureAwait(false);
 
@@ -196,7 +196,7 @@ public class RetryPipelineOfTTests
     {
         var responses = new ResponseSequence(503, 200);
         var predicateFailure = new FormatException("The predicate failed");
-        var pipeline = new RetryPipeline<Response>(new RetryPipelineOptions<Response>
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
         {
             Strategy = new Count(3),
             ShouldRetryResult = _ => throw predicateFailure,
@@ -215,7 +215,7 @@ public class RetryPipelineOfTTests
         RecordingFakeTimeProvider fake = new();
         TimeSpan oneHour = TimeSpan.FromHours(1);
         var responses = new ResponseSequence(503, 200);
-        var pipeline = new RetryPipeline<Response>(new RetryPipelineOptions<Response>
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
         {
             Strategy = new Linear(oneHour, 3),
             ShouldRetryResult = IsServerError,
@@ -236,7 +236,7 @@ public class RetryPipelineOfTTests
     [TestMethod]
     public void ExecuteAsyncRejectsANullOperation()
     {
-        RetryPipeline<Response> pipeline = CreatePipeline(new Count(3));
+        ReliabilityPipeline<Response> pipeline = CreatePipeline(new Count(3));
 
         ArgumentNullException thrown = Assert.ThrowsExactly<ArgumentNullException>(() => pipeline.ExecuteAsync(null!).AsTask());
 
@@ -245,9 +245,9 @@ public class RetryPipelineOfTTests
 
     private static bool IsServerError(Response response) => response.StatusCode >= 500;
 
-    private static RetryPipeline<Response> CreatePipeline(IRetryStrategy strategy, Func<RetryEventArgs, ValueTask>? onRetry = null)
+    private static ReliabilityPipeline<Response> CreatePipeline(IRetryStrategy strategy, Func<RetryEventArgs, ValueTask>? onRetry = null)
     {
-        return new RetryPipeline<Response>(new RetryPipelineOptions<Response>
+        return new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
         {
             Strategy = strategy,
             ShouldRetryResult = IsServerError,

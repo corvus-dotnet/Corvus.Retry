@@ -12,7 +12,7 @@ using BenchmarkDotNet.Configs;
 using Corvus.Retry.Strategies;
 
 /// <summary>
-/// The cost of a <see cref="CircuitBreaker"/> in a <see cref="RetryPipeline"/> that makes one attempt, compared with the
+/// The cost of a <see cref="CircuitBreaker"/> in a <see cref="ReliabilityPipeline"/> that makes one attempt, compared with the
 /// same pipeline without a breaker.
 /// </summary>
 /// <remarks>
@@ -36,11 +36,11 @@ public class CircuitBreakerBenchmarks
     private static readonly TimeSpan BreakDuration = TimeSpan.FromSeconds(1);
 
     private readonly ManualTimeProvider clock = new();
-    private readonly RetryPipeline noBreakerPipeline;
-    private readonly RetryPipeline closedPipeline;
-    private readonly RetryPipeline openPipeline;
-    private readonly RetryPipeline isolatedPipeline;
-    private readonly RetryPipeline probePipeline;
+    private readonly ReliabilityPipeline noBreakerPipeline;
+    private readonly ReliabilityPipeline closedPipeline;
+    private readonly ReliabilityPipeline openPipeline;
+    private readonly ReliabilityPipeline isolatedPipeline;
+    private readonly ReliabilityPipeline probePipeline;
     private readonly Func<CancellationToken, ValueTask<int>> operation;
     private readonly Func<CancellationToken, ValueTask<int>> failingOperation;
 
@@ -102,9 +102,9 @@ public class CircuitBreakerBenchmarks
         return Observe(this.probePipeline.ExecuteAsync(this.failingOperation));
     }
 
-    private static RetryPipeline NewPipeline(CircuitBreaker? breaker)
+    private static ReliabilityPipeline NewPipeline(CircuitBreaker? breaker)
     {
-        return new RetryPipeline(new RetryPipelineOptions { Strategy = new DoNotRetry(), CircuitBreaker = breaker });
+        return new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new DoNotRetry(), CircuitBreaker = breaker });
     }
 
     // Every call completes synchronously, so the exception is read without a wait.

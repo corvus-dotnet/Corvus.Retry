@@ -1,4 +1,4 @@
-// <copyright file="RetryPipelineOptions.cs" company="Endjin Limited">
+// <copyright file="ReliabilityPipelineOptions.cs" company="Endjin Limited">
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
@@ -12,7 +12,7 @@ using Corvus.Retry.Policies;
 using Corvus.Retry.Strategies;
 
 /// <summary>
-/// The settings of a <see cref="RetryPipeline"/>.
+/// The settings of a <see cref="ReliabilityPipeline"/>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -24,7 +24,7 @@ using Corvus.Retry.Strategies;
 /// The <c>maxTries</c> of a strategy is the number of retries plus 1.
 /// </para>
 /// </remarks>
-public record RetryPipelineOptions
+public record ReliabilityPipelineOptions
 {
     /// <summary>
     /// The strategy that a pipeline uses when <see cref="Strategy"/> is <see langword="null"/>: 4 attempts, with 2
@@ -151,7 +151,7 @@ public record RetryPipelineOptions
     /// The <see cref="ArgumentException.ParamName"/> of each exception is the name of the property that is not
     /// correct.
     /// </remarks>
-    internal static void Validate(RetryPipelineOptions options)
+    internal static void Validate(ReliabilityPipelineOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         ThrowIfOutOfRange(options.AttemptTimeout, nameof(AttemptTimeout));
@@ -161,7 +161,7 @@ public record RetryPipelineOptions
         ValidateHedging(options);
     }
 
-    private static void ValidateHedging(RetryPipelineOptions options)
+    private static void ValidateHedging(ReliabilityPipelineOptions options)
     {
         if (options.Hedging is not HedgingOptions hedging)
         {

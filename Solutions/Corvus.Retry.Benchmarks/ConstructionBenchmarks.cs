@@ -29,15 +29,15 @@ public class ConstructionBenchmarks
     private static readonly Func<Exception, bool> IsTransient = static ex => ex is TimeoutException;
     private static readonly Func<TimeoutException, bool> IsTimeoutTransient = static ex => ex.Message.Length > 0;
     private static readonly Func<FallbackArgs<int>, ValueTask<int>> FallbackAction = static _ => new ValueTask<int>(0);
-    private static readonly RetryPipelineOptions PipelineOptions = new() { Strategy = SharedStrategy, AttemptTimeout = TimeSpan.FromSeconds(5) };
-    private static readonly RetryPipelineOptions<int> PipelineOptionsOfT = new() { Strategy = SharedStrategy, ShouldRetryResult = static r => r < 0 };
+    private static readonly ReliabilityPipelineOptions PipelineOptions = new() { Strategy = SharedStrategy, AttemptTimeout = TimeSpan.FromSeconds(5) };
+    private static readonly ReliabilityPipelineOptions<int> PipelineOptionsOfT = new() { Strategy = SharedStrategy, ShouldRetryResult = static r => r < 0 };
     private static readonly CircuitBreakerOptions BreakerOptions = new() { MinimumThroughput = 10, FailureRatio = 0.5 };
-    private static readonly RetryPipelineOptions<int> PipelineOptionsWithFallback = PipelineOptionsOfT with
+    private static readonly ReliabilityPipelineOptions<int> PipelineOptionsWithFallback = PipelineOptionsOfT with
     {
         Fallback = new FallbackOptions<int> { Action = FallbackAction },
     };
 
-    private static readonly RetryPipelineOptions<int> PipelineOptionsWithHedging = new()
+    private static readonly ReliabilityPipelineOptions<int> PipelineOptionsWithHedging = new()
     {
         Hedging = new HedgingOptions { MaxHedgedAttempts = 2 },
         HedgingActionGenerator = static _ => null,
@@ -186,19 +186,19 @@ public class ConstructionBenchmarks
 
     [Benchmark]
     [BenchmarkCategory("Other")]
-    public RetryPipeline RetryPipeline() => new(PipelineOptions);
+    public ReliabilityPipeline ReliabilityPipeline() => new(PipelineOptions);
 
     [Benchmark]
     [BenchmarkCategory("Other")]
-    public RetryPipeline<int> RetryPipelineOfT() => new(PipelineOptionsOfT);
+    public ReliabilityPipeline<int> ReliabilityPipelineOfT() => new(PipelineOptionsOfT);
 
     [Benchmark]
     [BenchmarkCategory("Other")]
-    public RetryPipeline<int> RetryPipelineOfT_WithFallback() => new(PipelineOptionsWithFallback);
+    public ReliabilityPipeline<int> ReliabilityPipelineOfT_WithFallback() => new(PipelineOptionsWithFallback);
 
     [Benchmark]
     [BenchmarkCategory("Other")]
-    public RetryPipeline<int> RetryPipelineOfT_WithHedging() => new(PipelineOptionsWithHedging);
+    public ReliabilityPipeline<int> ReliabilityPipelineOfT_WithHedging() => new(PipelineOptionsWithHedging);
 
     [Benchmark]
     [BenchmarkCategory("Other")]
@@ -230,11 +230,11 @@ public class ConstructionBenchmarks
 
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("Options")]
-    public RetryPipelineOptions RetryPipelineOptions() => new() { Strategy = SharedStrategy };
+    public ReliabilityPipelineOptions ReliabilityPipelineOptions() => new() { Strategy = SharedStrategy };
 
     [Benchmark]
     [BenchmarkCategory("Options")]
-    public RetryPipelineOptions<int> RetryPipelineOptionsOfT() => new() { Strategy = SharedStrategy };
+    public ReliabilityPipelineOptions<int> ReliabilityPipelineOptionsOfT() => new() { Strategy = SharedStrategy };
 
     [Benchmark]
     [BenchmarkCategory("Options")]

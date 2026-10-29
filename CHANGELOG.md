@@ -15,23 +15,23 @@ not do the steps in the guide, your project can fail to compile, or your retries
 
 ### Added
 
-- `RetryPipeline` holds all the retry settings in one immutable object. Many threads can use one pipeline at the same
+- `ReliabilityPipeline` holds all the retry settings in one immutable object. Many threads can use one pipeline at the same
   time. Its `ExecuteAsync` methods give a cancellation token to the operation, and use `ValueTask`.
-- `RetryPipelineOptions` is an immutable record with the settings of a pipeline. The constructor of the pipeline
+- `ReliabilityPipelineOptions` is an immutable record with the settings of a pipeline. The constructor of the pipeline
   examines the options. The `ParamName` of each exception is the name of the incorrect property.
-- `RetryPipeline<T>` and `RetryPipelineOptions<T>` can retry a result. If `ShouldRetryResult` returns `true`, the
+- `ReliabilityPipeline<T>` and `ReliabilityPipelineOptions<T>` can retry a result. If `ShouldRetryResult` returns `true`, the
   pipeline uses the result as a failure.
 - `AttemptTimeout` limits the time of each attempt. `TotalTimeout` limits the time of all the attempts and all the
   delays.
 - `RetryTimeoutException` derives from `TimeoutException`. A pipeline throws it when a timeout expires. Its `Timeout`
   property gives the time limit.
-- `RetryPipelineOptions<T>.Fallback` gives a value when the pipeline fails. `FallbackOptions<T>` and
+- `ReliabilityPipelineOptions<T>.Fallback` gives a value when the pipeline fails. `FallbackOptions<T>` and
   `FallbackArgs<T>` hold its settings and its data.
 - `CircuitBreaker` stops calls to a service that fails frequently. Many pipelines can share one breaker.
   `CircuitBreakerOptions`, `CircuitState`, `CircuitStateChange`, `BrokenCircuitException` and
   `IsolatedCircuitException` are new. `Isolate()` and `Close()` control the circuit manually.
-- `RetryPipelineOptions.Hedging` starts more attempts in parallel when an attempt is slow or fails.
-  `HedgingOptions`, `HedgingEventArgs` and `RetryPipelineOptions<T>.HedgingActionGenerator` are new.
+- `ReliabilityPipelineOptions.Hedging` starts more attempts in parallel when an attempt is slow or fails.
+  `HedgingOptions`, `HedgingEventArgs` and `ReliabilityPipelineOptions<T>.HedgingActionGenerator` are new.
 - The `Exponential` strategy doubles the delay before each retry. With jitter, it uses decorrelated jitter.
 - `Linear` and `Incremental` have new constructor overloads with the parameters `maxDelay` and `useJitter`.
 - `RetryAttempt` gives the data about an attempt that failed to a strategy. `AttemptNumber` starts at 1.
@@ -54,7 +54,7 @@ not do the steps in the guide, your project can fail to compile, or your retries
 - `ReliableTaskRunner` implements `IAsyncDisposable`. Use `await using` to stop the runner at the end of a scope.
 - The benchmarks measure the pipeline, the fallback, the circuit breaker, hedging, the new strategies and the new
   policies. `DelayBenchmarks` replaces `SleepBenchmarks`.
-- A sample for `RetryPipeline` is in `Examples/RetryPipelineSample.cs`.
+- A sample for `ReliabilityPipeline` is in `Examples/ReliabilityPipelineSample.cs`.
 - ADR 0002 records the decision to use `TimeProvider`. It replaces ADR 0001.
 
 ### Changed

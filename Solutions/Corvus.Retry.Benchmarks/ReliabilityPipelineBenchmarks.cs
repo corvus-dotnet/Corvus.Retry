@@ -1,4 +1,4 @@
-// <copyright file="RetryPipelineBenchmarks.cs" company="Endjin Limited">
+// <copyright file="ReliabilityPipelineBenchmarks.cs" company="Endjin Limited">
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
@@ -12,7 +12,7 @@ using BenchmarkDotNet.Configs;
 using Corvus.Retry.Strategies;
 
 /// <summary>
-/// The cost of running an operation through a <see cref="RetryPipeline"/> or a <see cref="RetryPipeline{T}"/>,
+/// The cost of running an operation through a <see cref="ReliabilityPipeline"/> or a <see cref="ReliabilityPipeline{T}"/>,
 /// compared with a hand-written retry loop that does the same work.
 /// </summary>
 /// <remarks>
@@ -28,7 +28,7 @@ using Corvus.Retry.Strategies;
 [MemoryDiagnoser]
 [CategoriesColumn]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
-public class RetryPipelineBenchmarks
+public class ReliabilityPipelineBenchmarks
 {
     private const int MaxTries = 5;
     private const int Result = 42;
@@ -36,21 +36,21 @@ public class RetryPipelineBenchmarks
 
     private static readonly TimeSpan LongTimeout = TimeSpan.FromMinutes(1);
 
-    private readonly RetryPipeline defaultPipeline = new(new RetryPipelineOptions());
-    private readonly RetryPipeline countPipeline = new(new RetryPipelineOptions { Strategy = new Count(MaxTries) });
-    private readonly RetryPipeline attemptTimeoutPipeline = new(new RetryPipelineOptions { Strategy = new Count(MaxTries), AttemptTimeout = LongTimeout });
-    private readonly RetryPipeline totalTimeoutPipeline = new(new RetryPipelineOptions { Strategy = new Count(MaxTries), TotalTimeout = LongTimeout });
-    private readonly RetryPipeline bothTimeoutsPipeline = new(new RetryPipelineOptions { Strategy = new Count(MaxTries), AttemptTimeout = LongTimeout, TotalTimeout = LongTimeout });
-    private readonly RetryPipeline onRetryPipeline = new(new RetryPipelineOptions { Strategy = new Count(MaxTries), OnRetry = _ => ValueTask.CompletedTask });
-    private readonly RetryPipeline capturedContextPipeline = new(new RetryPipelineOptions { Strategy = new Count(MaxTries), ContinueOnCapturedContext = true });
-    private readonly RetryPipeline<int> resultPipeline = new(new RetryPipelineOptions<int> { Strategy = new Count(MaxTries), ShouldRetryResult = static r => r == RejectedResult });
+    private readonly ReliabilityPipeline defaultPipeline = new(new ReliabilityPipelineOptions());
+    private readonly ReliabilityPipeline countPipeline = new(new ReliabilityPipelineOptions { Strategy = new Count(MaxTries) });
+    private readonly ReliabilityPipeline attemptTimeoutPipeline = new(new ReliabilityPipelineOptions { Strategy = new Count(MaxTries), AttemptTimeout = LongTimeout });
+    private readonly ReliabilityPipeline totalTimeoutPipeline = new(new ReliabilityPipelineOptions { Strategy = new Count(MaxTries), TotalTimeout = LongTimeout });
+    private readonly ReliabilityPipeline bothTimeoutsPipeline = new(new ReliabilityPipelineOptions { Strategy = new Count(MaxTries), AttemptTimeout = LongTimeout, TotalTimeout = LongTimeout });
+    private readonly ReliabilityPipeline onRetryPipeline = new(new ReliabilityPipelineOptions { Strategy = new Count(MaxTries), OnRetry = _ => ValueTask.CompletedTask });
+    private readonly ReliabilityPipeline capturedContextPipeline = new(new ReliabilityPipelineOptions { Strategy = new Count(MaxTries), ContinueOnCapturedContext = true });
+    private readonly ReliabilityPipeline<int> resultPipeline = new(new ReliabilityPipelineOptions<int> { Strategy = new Count(MaxTries), ShouldRetryResult = static r => r == RejectedResult });
 
     private readonly Func<CancellationToken, ValueTask<int>> operation;
     private readonly Func<CancellationToken, ValueTask> unitOperation;
     private readonly Func<CancellationToken, ValueTask<int>> resultOperation;
     private int remainingFailures;
 
-    public RetryPipelineBenchmarks()
+    public ReliabilityPipelineBenchmarks()
     {
         // The delegates are created once, so that the benchmarks do not measure their allocation.
         this.operation = this.Operation;

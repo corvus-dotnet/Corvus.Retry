@@ -1,4 +1,4 @@
-// <copyright file="RetryPipelineOptions{T}.cs" company="Endjin Limited">
+// <copyright file="ReliabilityPipelineOptions{T}.cs" company="Endjin Limited">
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
@@ -9,13 +9,13 @@ using System.Threading;
 using System.Threading.Tasks;
 
 /// <summary>
-/// The settings of a <see cref="RetryPipeline{T}"/>.
+/// The settings of a <see cref="ReliabilityPipeline{T}"/>.
 /// </summary>
 /// <typeparam name="T">The type of the result of the operation.</typeparam>
 /// <remarks>
 /// These options add the settings that apply to the result of the operation.
 /// </remarks>
-public sealed record RetryPipelineOptions<T> : RetryPipelineOptions
+public sealed record ReliabilityPipelineOptions<T> : ReliabilityPipelineOptions
 {
     /// <summary>
     /// Gets a predicate that returns <see langword="true"/> for a result that is a failure, or <see langword="null"/>
@@ -58,11 +58,11 @@ public sealed record RetryPipelineOptions<T> : RetryPipelineOptions
     /// <para>
     /// The function receives the number of the attempt, starting at 1, and can give a different operation for each
     /// attempt (for example, a different endpoint). When it returns <see langword="null"/>, the attempt uses the
-    /// primary operation: the operation that the caller gives to <see cref="RetryPipeline{T}.ExecuteAsync"/>. An
+    /// primary operation: the operation that the caller gives to <see cref="ReliabilityPipeline{T}.ExecuteAsync"/>. An
     /// exception from the function stops the call.
     /// </para>
     /// <para>
-    /// The pipeline uses this function only when <see cref="RetryPipelineOptions.Hedging"/> is set.
+    /// The pipeline uses this function only when <see cref="ReliabilityPipelineOptions.Hedging"/> is set.
     /// </para>
     /// </remarks>
     public Func<int, Func<CancellationToken, ValueTask<T>>?>? HedgingActionGenerator { get; init; }

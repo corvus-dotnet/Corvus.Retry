@@ -19,8 +19,8 @@ The .NET package validation tool compared the 3.0 package with the 2.0.0 package
 | `IRetryStrategy.CanRetry` | CP0002 | `IRetryStrategy.GetRetryDelay` returns `null` when the strategy stops the retries. |
 | `IRetryStrategy.PrepareToRetry(Exception)` | CP0002 | `IRetryStrategy.GetRetryDelay(in RetryAttempt)`. |
 | `IRetryStrategy.Exception` | CP0002 | None. A strategy does not record exceptions. `RetryTask` records them. |
-| `IRetryStrategy.OnRetrying(RetryEventArgs)` | CP0002 | The `onRetry` parameter of `Retriable`, or `RetryPipelineOptions.OnRetry`. See [Events and callbacks](#events-and-callbacks). |
-| The `IRetryStrategy.Retrying` event | CP0002 | The `onRetry` parameter of `Retriable`, or `RetryPipelineOptions.OnRetry`. See [Events and callbacks](#events-and-callbacks). |
+| `IRetryStrategy.OnRetrying(RetryEventArgs)` | CP0002 | The `onRetry` parameter of `Retriable`, or `ReliabilityPipelineOptions.OnRetry`. See [Events and callbacks](#events-and-callbacks). |
+| The `IRetryStrategy.Retrying` event | CP0002 | The `onRetry` parameter of `Retriable`, or `ReliabilityPipelineOptions.OnRetry`. See [Events and callbacks](#events-and-callbacks). |
 | A new member `IRetryStrategy.GetRetryDelay(in RetryAttempt)` | CP0006 | Implement this method in each custom strategy. See [Strategies](#strategies). |
 | The `RetryEventArgs(Exception, TimeSpan)` constructor | CP0002 | `RetryEventArgs(Exception? lastException, object? result, TimeSpan delayBeforeRetry, int attemptNumber)`. |
 | The setters of `Backoff.MinBackoff` and `Backoff.MaxBackoff` | CP0002 | `init` accessors. Set the values with an object initializer. |
@@ -54,7 +54,7 @@ The method returns the delay before the next attempt, or `null` to stop the retr
 
 - `AttemptNumber` is the number of the attempt that failed. The first attempt is 1.
 - `Exception` is the exception of the attempt.
-- `Result` is the result that caused the retry, or `null`. Only `RetryPipeline<T>` retries results.
+- `Result` is the result that caused the retry, or `null`. Only `ReliabilityPipeline<T>` retries results.
 - `PreviousDelay` is the delay before the attempt that failed. It is zero for the first attempt.
 
 To change a custom strategy:
@@ -114,8 +114,8 @@ Version 3.0 has no `Retrying` event and no `OnRetrying` method. Use a callback:
 
 | 2.x | 3.0 |
 |-----|-----|
-| `strategy.Retrying += handler` with `Retriable` | The `onRetry` parameter of the `Retriable` overloads that have all the parameters, or `RetryPipelineOptions.OnRetry` if you move the call to a `RetryPipeline` |
-| `strategy.Retrying += handler` with `RetryTask` | None. `RetryTask` has no retry callback. Use `Retriable` or `RetryPipeline` in the operation, if you must have a callback. |
+| `strategy.Retrying += handler` with `Retriable` | The `onRetry` parameter of the `Retriable` overloads that have all the parameters, or `ReliabilityPipelineOptions.OnRetry` if you move the call to a `ReliabilityPipeline` |
+| `strategy.Retrying += handler` with `RetryTask` | None. `RetryTask` has no retry callback. Use `Retriable` or `ReliabilityPipeline` in the operation, if you must have a callback. |
 
 The callback is `Func<RetryEventArgs, ValueTask>`. `Retriable` and the pipeline await it before the delay. An exception from the callback stops the call. The synchronous `Retry` overloads wait for the callback.
 
@@ -166,7 +166,7 @@ The overloads without a cancellation token use `CancellationToken.None`. Thus, t
 
 | 2.x type | 3.0 replacement |
 |----------|-----------------|
-| `ISleepService` and `SleepService` | `TimeProvider`. `Retriable` and `RetryTask` use `TimeProvider.System`. `RetryPipeline` and `CircuitBreaker` take a `TimeProvider` in their options. See [ADR 0002](adr/0002-use-timeprovider-for-delays-and-timeouts.md). |
+| `ISleepService` and `SleepService` | `TimeProvider`. `Retriable` and `RetryTask` use `TimeProvider.System`. `ReliabilityPipeline` and `CircuitBreaker` take a `TimeProvider` in their options. See [ADR 0002](adr/0002-use-timeprovider-for-delays-and-timeouts.md). |
 | `RetryStrategy` | Implement `IRetryStrategy`. See [Strategies](#strategies). |
 
 `SleepService` was internal in version 2.x. Only the tests of this project used `ISleepService`.

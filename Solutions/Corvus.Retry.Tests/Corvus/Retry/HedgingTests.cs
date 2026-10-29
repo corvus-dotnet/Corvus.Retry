@@ -17,7 +17,7 @@ using Corvus.Retry.Time;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
-/// With <see cref="RetryPipelineOptions.Hedging"/>, a pipeline starts the next attempt when the delay expires or when an
+/// With <see cref="ReliabilityPipelineOptions.Hedging"/>, a pipeline starts the next attempt when the delay expires or when an
 /// attempt fails; the first outcome that is not a failure wins, and the pipeline cancels the other attempts, does not
 /// wait for them, and disposes their results; when every attempt fails, it throws the last exception or returns the last
 /// result. Each attempt goes through the circuit breaker and has its own attempt timeout, the total timeout applies to
@@ -65,7 +65,7 @@ public class HedgingTests
     public async Task WhenAttemptOneIsSlow_AttemptTwoStartsAfterTheDelay_WinsAndAttemptOneIsCancelled()
     {
         var op = new ScriptedOperation<string>(NeverCompletesAsync, Succeeds("attempt 2"));
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay });
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay });
 
         Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
 
@@ -87,7 +87,7 @@ public class HedgingTests
     {
         var failure = new InvalidOperationException("Attempt 1 failed");
         var op = new ScriptedOperation<string>(Fails<string>(failure), Succeeds("attempt 2"));
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay });
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay });
 
         ValueTask<string> call = pipeline.ExecuteAsync(op.InvokeAsync);
 
@@ -103,7 +103,7 @@ public class HedgingTests
     {
         using CancellationTokenSource cts = new();
         var op = new ScriptedOperation<string>(NeverCompletesAsync);
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = TimeSpan.Zero, MaxHedgedAttempts = 3 });
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = TimeSpan.Zero, MaxHedgedAttempts = 3 });
 
         Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync, cts.Token).AsTask();
 
@@ -123,7 +123,7 @@ public class HedgingTests
     {
         var firstAttempt = new TaskCompletionSource<string>();
         var op = new ScriptedOperation<string>(_ => new ValueTask<string>(firstAttempt.Task), Succeeds("attempt 2"));
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = Timeout.InfiniteTimeSpan });
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = Timeout.InfiniteTimeSpan });
 
         Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
 
@@ -146,7 +146,7 @@ public class HedgingTests
         using CancellationTokenSource cts = new();
         var firstAttempt = new TaskCompletionSource<string>();
         var op = new ScriptedOperation<string>(_ => new ValueTask<string>(firstAttempt.Task), NeverCompletesAsync);
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay, MaxHedgedAttempts = 2 });
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay, MaxHedgedAttempts = 2 });
 
         Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync, cts.Token).AsTask();
 
@@ -172,7 +172,7 @@ public class HedgingTests
     public async Task AfterAnOutcomeWins_NoOtherAttemptStarts()
     {
         var op = new ScriptedOperation<string>(NeverCompletesAsync, Succeeds("attempt 2"));
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay, MaxHedgedAttempts = 5 });
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay, MaxHedgedAttempts = 5 });
 
         Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
         this.fake.Advance(HedgingDelay);
@@ -187,7 +187,7 @@ public class HedgingTests
     public async Task WhenAttemptOneSucceeds_NoHedgedAttemptStarts()
     {
         var op = new ScriptedOperation<string>(Succeeds("attempt 1"));
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay, MaxHedgedAttempts = 3 });
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay, MaxHedgedAttempts = 3 });
 
         ValueTask<string> call = pipeline.ExecuteAsync(op.InvokeAsync);
 
@@ -206,7 +206,7 @@ public class HedgingTests
             Fails<string>(new InvalidOperationException("Attempt 1 failed")),
             Fails<string>(new InvalidOperationException("Attempt 2 failed")),
             Fails<string>(new InvalidOperationException("Attempt 3 failed")));
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { MaxHedgedAttempts = 2 });
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { MaxHedgedAttempts = 2 });
 
         InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
             () => pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
@@ -228,7 +228,7 @@ public class HedgingTests
             _ => new ValueTask<Response>(firstAttempt.Task),
             Fails<Response>(new InvalidOperationException("Attempt 2 failed")),
             _ => new ValueTask<Response>(rejected));
-        RetryPipeline<Response> pipeline = this.NewPipeline<Response>(
+        ReliabilityPipeline<Response> pipeline = this.NewPipeline<Response>(
             new HedgingOptions { Delay = TimeSpan.Zero, MaxHedgedAttempts = 2 },
             o => o with { ShouldRetryResult = r => r.StatusCode >= 500 });
 
@@ -256,7 +256,7 @@ public class HedgingTests
 
         // Attempt 1 ignores its token, so it completes after the winner.
         var op = new ScriptedOperation<Disposable>(_ => new ValueTask<Disposable>(loserCompletion.Task), _ => new ValueTask<Disposable>(winner));
-        RetryPipeline<Disposable> pipeline = this.NewPipeline<Disposable>(new HedgingOptions { Delay = HedgingDelay });
+        ReliabilityPipeline<Disposable> pipeline = this.NewPipeline<Disposable>(new HedgingOptions { Delay = HedgingDelay });
 
         Task<Disposable> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
         this.fake.Advance(HedgingDelay);
@@ -280,7 +280,7 @@ public class HedgingTests
         var first = new Disposable("first");
         var second = new Disposable("second");
         var op = new ScriptedOperation<Disposable>(_ => new ValueTask<Disposable>(first), _ => new ValueTask<Disposable>(second));
-        RetryPipeline<Disposable> pipeline = this.NewPipeline<Disposable>(new HedgingOptions { Delay = TimeSpan.Zero });
+        ReliabilityPipeline<Disposable> pipeline = this.NewPipeline<Disposable>(new HedgingOptions { Delay = TimeSpan.Zero });
 
         // Both attempts complete before the pipeline reads an outcome. Attempt 1 started first, so it wins.
         Disposable result = await pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
@@ -299,7 +299,7 @@ public class HedgingTests
         var results = new List<Disposable>();
         int started = 0;
         using SemaphoreSlim ended = new(0);
-        var pipeline = new RetryPipeline<Disposable>(new RetryPipelineOptions<Disposable>
+        var pipeline = new ReliabilityPipeline<Disposable>(new ReliabilityPipelineOptions<Disposable>
         {
             Hedging = new HedgingOptions { Delay = TimeSpan.Zero, MaxHedgedAttempts = 3 },
             ShouldRetryResult = r => r.Name == "rejected",
@@ -380,7 +380,7 @@ public class HedgingTests
         var log = new List<string>();
         var generatorCalls = new List<int>();
         int primaryCalls = 0;
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
             new HedgingOptions { Delay = Timeout.InfiniteTimeSpan, MaxHedgedAttempts = 2 },
             o => o with
             {
@@ -412,7 +412,7 @@ public class HedgingTests
     [TestMethod]
     public async Task TheOperationThatTheGeneratorGivesCanWin()
     {
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
             new HedgingOptions { Delay = HedgingDelay },
             o => o with { HedgingActionGenerator = attempt => attempt == 2 ? _ => new ValueTask<string>("marker") : null });
 
@@ -427,7 +427,7 @@ public class HedgingTests
     {
         var generatorFailure = new FormatException("The generator failed");
         var op = new ScriptedOperation<string>(NeverCompletesAsync);
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
             new HedgingOptions { Delay = HedgingDelay },
             o => o with { HedgingActionGenerator = attempt => attempt == 2 ? throw generatorFailure : null });
 
@@ -443,11 +443,11 @@ public class HedgingTests
     [TestMethod]
     public void HedgingWithAStrategy_GivesAnArgumentException()
     {
-        var options = new RetryPipelineOptions { Hedging = new HedgingOptions(), Strategy = new Count(3) };
-        var optionsOfT = new RetryPipelineOptions<int> { Hedging = new HedgingOptions(), Strategy = new Count(3) };
+        var options = new ReliabilityPipelineOptions { Hedging = new HedgingOptions(), Strategy = new Count(3) };
+        var optionsOfT = new ReliabilityPipelineOptions<int> { Hedging = new HedgingOptions(), Strategy = new Count(3) };
 
-        ArgumentException thrown = Assert.ThrowsExactly<ArgumentException>(() => new RetryPipeline(options));
-        ArgumentException thrownOfT = Assert.ThrowsExactly<ArgumentException>(() => new RetryPipeline<int>(optionsOfT));
+        ArgumentException thrown = Assert.ThrowsExactly<ArgumentException>(() => new ReliabilityPipeline(options));
+        ArgumentException thrownOfT = Assert.ThrowsExactly<ArgumentException>(() => new ReliabilityPipeline<int>(optionsOfT));
 
         Assert.AreEqual("Hedging", thrown.ParamName);
         Assert.AreEqual("Hedging", thrownOfT.ParamName);
@@ -459,11 +459,11 @@ public class HedgingTests
     [DataRow(11)]
     public void TheConstructorRejectsMaxHedgedAttemptsOutsideOneThruTen(int maxHedgedAttempts)
     {
-        var options = new RetryPipelineOptions { Hedging = new HedgingOptions { MaxHedgedAttempts = maxHedgedAttempts } };
+        var options = new ReliabilityPipelineOptions { Hedging = new HedgingOptions { MaxHedgedAttempts = maxHedgedAttempts } };
 
-        ArgumentOutOfRangeException thrown = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new RetryPipeline(options));
+        ArgumentOutOfRangeException thrown = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new ReliabilityPipeline(options));
         ArgumentOutOfRangeException thrownOfT = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
-            () => new RetryPipeline<int>(new RetryPipelineOptions<int> { Hedging = options.Hedging }));
+            () => new ReliabilityPipeline<int>(new ReliabilityPipelineOptions<int> { Hedging = options.Hedging }));
 
         Assert.AreEqual("Hedging", thrown.ParamName);
         Assert.AreEqual("Hedging", thrownOfT.ParamName);
@@ -474,16 +474,16 @@ public class HedgingTests
     [DataRow(10)]
     public void TheConstructorAcceptsMaxHedgedAttemptsFromOneThruTen(int maxHedgedAttempts)
     {
-        _ = new RetryPipeline(new RetryPipelineOptions { Hedging = new HedgingOptions { MaxHedgedAttempts = maxHedgedAttempts } });
+        _ = new ReliabilityPipeline(new ReliabilityPipelineOptions { Hedging = new HedgingOptions { MaxHedgedAttempts = maxHedgedAttempts } });
     }
 
     [TestMethod]
     [DynamicData(nameof(DelaysOutOfRange))]
     public void TheConstructorRejectsADelayOutOfRange(TimeSpan delay)
     {
-        var options = new RetryPipelineOptions { Hedging = new HedgingOptions { Delay = delay } };
+        var options = new ReliabilityPipelineOptions { Hedging = new HedgingOptions { Delay = delay } };
 
-        ArgumentOutOfRangeException thrown = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new RetryPipeline(options));
+        ArgumentOutOfRangeException thrown = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new ReliabilityPipeline(options));
 
         Assert.AreEqual("Hedging", thrown.ParamName);
     }
@@ -492,15 +492,15 @@ public class HedgingTests
     [DynamicData(nameof(DelaysInRange))]
     public void TheConstructorAcceptsZeroInfiniteAndPositiveDelays(TimeSpan delay)
     {
-        _ = new RetryPipeline(new RetryPipelineOptions { Hedging = new HedgingOptions { Delay = delay } });
+        _ = new ReliabilityPipeline(new ReliabilityPipelineOptions { Hedging = new HedgingOptions { Delay = delay } });
     }
 
     [TestMethod]
     public void TheConstructorRejectsANullHedgingPolicy()
     {
-        var options = new RetryPipelineOptions<int> { Hedging = new HedgingOptions { Policy = null! } };
+        var options = new ReliabilityPipelineOptions<int> { Hedging = new HedgingOptions { Policy = null! } };
 
-        ArgumentNullException thrown = Assert.ThrowsExactly<ArgumentNullException>(() => new RetryPipeline<int>(options));
+        ArgumentNullException thrown = Assert.ThrowsExactly<ArgumentNullException>(() => new ReliabilityPipeline<int>(options));
 
         Assert.AreEqual("Hedging", thrown.ParamName);
     }
@@ -514,8 +514,8 @@ public class HedgingTests
         Assert.AreEqual(TimeSpan.FromSeconds(2), hedging.Delay);
         Assert.AreSame(AnyExceptionPolicy.Default, hedging.Policy);
         Assert.IsNull(hedging.OnHedging);
-        Assert.IsNull(new RetryPipelineOptions().Hedging);
-        Assert.IsNull(new RetryPipelineOptions<int>().HedgingActionGenerator);
+        Assert.IsNull(new ReliabilityPipelineOptions().Hedging);
+        Assert.IsNull(new ReliabilityPipelineOptions<int>().HedgingActionGenerator);
     }
 
     // §6.8
@@ -524,7 +524,7 @@ public class HedgingTests
     {
         using CancellationTokenSource cts = new();
         var op = new ScriptedOperation<string>(NeverCompletesAsync);
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay, MaxHedgedAttempts = 3 });
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay, MaxHedgedAttempts = 3 });
 
         Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync, cts.Token).AsTask();
         this.fake.Advance(HedgingDelay);
@@ -547,7 +547,7 @@ public class HedgingTests
         using CancellationTokenSource cts = new();
         var neverCompletes = new TaskCompletionSource<string>();
         var op = new ScriptedOperation<string>(_ => new ValueTask<string>(neverCompletes.Task));
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = Timeout.InfiniteTimeSpan });
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = Timeout.InfiniteTimeSpan });
 
         Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync, cts.Token).AsTask();
         Assert.IsFalse(call.IsCompleted);
@@ -564,7 +564,7 @@ public class HedgingTests
         using CancellationTokenSource cts = new();
         await cts.CancelAsync().ConfigureAwait(false);
         var op = new ScriptedOperation<string>(Succeeds("attempt 1"));
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions());
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions());
 
         await Assert.ThrowsAsync<OperationCanceledException>(() => pipeline.ExecuteAsync(op.InvokeAsync, cts.Token).AsTask()).ConfigureAwait(false);
 
@@ -577,7 +577,7 @@ public class HedgingTests
     {
         TimeSpan totalTimeout = TimeSpan.FromSeconds(3);
         var op = new ScriptedOperation<string>(NeverCompletesAsync);
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
             new HedgingOptions { Delay = HedgingDelay, MaxHedgedAttempts = 5 },
             o => o with { TotalTimeout = totalTimeout });
 
@@ -597,7 +597,7 @@ public class HedgingTests
     {
         TimeSpan totalTimeout = TimeSpan.FromSeconds(1);
         var neverCompletes = new TaskCompletionSource<string>();
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
             new HedgingOptions { Delay = Timeout.InfiniteTimeSpan },
             o => o with { TotalTimeout = totalTimeout });
 
@@ -613,7 +613,7 @@ public class HedgingTests
     {
         TimeSpan attemptTimeout = TimeSpan.FromSeconds(5);
         var op = new ScriptedOperation<string>(NeverCompletesAsync);
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
             new HedgingOptions { Delay = HedgingDelay },
             o => o with { AttemptTimeout = attemptTimeout });
 
@@ -638,7 +638,7 @@ public class HedgingTests
     {
         TimeSpan attemptTimeout = TimeSpan.FromSeconds(1);
         var op = new ScriptedOperation<string>(NeverCompletesAsync, Succeeds("attempt 2"));
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
             new HedgingOptions { Delay = Timeout.InfiniteTimeSpan },
             o => o with { AttemptTimeout = attemptTimeout });
 
@@ -660,7 +660,7 @@ public class HedgingTests
             Fails<string>(new InvalidOperationException("Attempt 1 failed")),
             Fails<string>(new InvalidOperationException("Attempt 2 failed")),
             Succeeds("attempt 3"));
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
             new HedgingOptions { MaxHedgedAttempts = 2 },
             o => o with { CircuitBreaker = breaker });
 
@@ -675,7 +675,7 @@ public class HedgingTests
     {
         var breaker = new CircuitBreaker(new CircuitBreakerOptions { TimeProvider = this.fake });
         var op = new ScriptedOperation<string>(NeverCompletesAsync, Succeeds("attempt 2"));
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay }, o => o with { CircuitBreaker = breaker });
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = HedgingDelay }, o => o with { CircuitBreaker = breaker });
 
         Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
         this.fake.Advance(HedgingDelay);
@@ -690,7 +690,7 @@ public class HedgingTests
         var breaker = new CircuitBreaker(new CircuitBreakerOptions { TimeProvider = this.fake });
         breaker.Isolate();
         var op = new ScriptedOperation<string>(Succeeds("attempt"));
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { MaxHedgedAttempts = 2 }, o => o with { CircuitBreaker = breaker });
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { MaxHedgedAttempts = 2 }, o => o with { CircuitBreaker = breaker });
 
         await Assert.ThrowsExactlyAsync<IsolatedCircuitException>(() => pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
@@ -705,7 +705,7 @@ public class HedgingTests
     public async Task ACancellationByTheCaller_ReleasesTheTestCallOfAHalfOpenCircuit()
     {
         var breaker = new CircuitBreaker(new CircuitBreakerOptions { MinimumThroughput = 2, FailureRatio = 1, TimeProvider = this.fake });
-        var opener = new RetryPipeline(new RetryPipelineOptions { Strategy = new DoNotRetry(), CircuitBreaker = breaker, TimeProvider = this.fake });
+        var opener = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new DoNotRetry(), CircuitBreaker = breaker, TimeProvider = this.fake });
         for (int i = 0; i < 2; i++)
         {
             await Assert.ThrowsExactlyAsync<InvalidOperationException>(
@@ -714,7 +714,7 @@ public class HedgingTests
 
         this.fake.Advance(new CircuitBreakerOptions().BreakDuration);
         using CancellationTokenSource cts = new();
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = Timeout.InfiniteTimeSpan }, o => o with { CircuitBreaker = breaker });
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = Timeout.InfiniteTimeSpan }, o => o with { CircuitBreaker = breaker });
 
         Task<string> call = pipeline.ExecuteAsync(NeverCompletesAsync, cts.Token).AsTask();
         Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
@@ -733,7 +733,7 @@ public class HedgingTests
         var rejected = new Response(503, log);
         var accepted = new Response(200, log);
         var op = new ScriptedOperation<Response>(_ => new ValueTask<Response>(rejected), _ => new ValueTask<Response>(accepted));
-        RetryPipeline<Response> pipeline = this.NewPipeline<Response>(
+        ReliabilityPipeline<Response> pipeline = this.NewPipeline<Response>(
             new HedgingOptions
             {
                 Delay = HedgingDelay,
@@ -761,7 +761,7 @@ public class HedgingTests
             _ => new ValueTask<Response>(responses[0]),
             _ => new ValueTask<Response>(responses[1]),
             _ => new ValueTask<Response>(responses[2]));
-        RetryPipeline<Response> pipeline = this.NewPipeline<Response>(
+        ReliabilityPipeline<Response> pipeline = this.NewPipeline<Response>(
             new HedgingOptions { MaxHedgedAttempts = 2 },
             o => o with { ShouldRetryResult = r => r.StatusCode >= 500 });
 
@@ -780,7 +780,7 @@ public class HedgingTests
         var log = new List<string>();
         var responses = new[] { new Response(500, log), new Response(502, log) };
         var op = new ScriptedOperation<Response>(_ => new ValueTask<Response>(responses[0]), _ => new ValueTask<Response>(responses[1]));
-        RetryPipeline<Response> pipeline = this.NewPipeline<Response>(
+        ReliabilityPipeline<Response> pipeline = this.NewPipeline<Response>(
             new HedgingOptions { Delay = TimeSpan.Zero },
             o => o with { ShouldRetryResult = r => r.StatusCode >= 500 });
 
@@ -798,7 +798,7 @@ public class HedgingTests
         var refused = new FormatException("Not a failure");
         var op = new ScriptedOperation<string>(NeverCompletesAsync, Fails<string>(refused));
         var policy = new RecordingRetryPolicy(e => e is InvalidOperationException);
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = TimeSpan.Zero, MaxHedgedAttempts = 3, Policy = policy });
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = TimeSpan.Zero, MaxHedgedAttempts = 3, Policy = policy });
 
         FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
             () => pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
@@ -814,7 +814,7 @@ public class HedgingTests
         var op = new ScriptedOperation<string>(Fails<string>(new InvalidOperationException("Attempt 1 failed")), Succeeds("attempt 2"));
         var retryPolicy = new RecordingRetryPolicy(false);
         int onRetryCalls = 0;
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
             new HedgingOptions(),
             o => o with
             {
@@ -836,7 +836,7 @@ public class HedgingTests
     {
         var callbackFailure = new FormatException("The callback failed");
         var op = new ScriptedOperation<string>(NeverCompletesAsync);
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
             new HedgingOptions { Delay = HedgingDelay, OnHedging = _ => throw callbackFailure });
 
         Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
@@ -853,7 +853,7 @@ public class HedgingTests
     {
         var callbackCompletion = new TaskCompletionSource();
         var op = new ScriptedOperation<string>(Fails<string>(new InvalidOperationException("Attempt 1 failed")), Succeeds("attempt 2"));
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
             new HedgingOptions { OnHedging = _ => new ValueTask(callbackCompletion.Task) });
 
         Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
@@ -871,7 +871,7 @@ public class HedgingTests
     {
         var predicateFailure = new FormatException("The predicate failed");
         var op = new ScriptedOperation<string>(Succeeds("attempt 1"));
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions(), o => o with { ShouldRetryResult = _ => throw predicateFailure });
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions(), o => o with { ShouldRetryResult = _ => throw predicateFailure });
 
         FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
             () => pipeline.ExecuteAsync(op.InvokeAsync).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
@@ -888,7 +888,7 @@ public class HedgingTests
             Fails<string>(new InvalidOperationException("Attempt 1 failed")),
             Fails<string>(new InvalidOperationException("Attempt 2 failed")));
         FallbackArgs<string>? received = null;
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
             new HedgingOptions(),
             o => o with
             {
@@ -911,7 +911,7 @@ public class HedgingTests
     {
         TimeSpan totalTimeout = TimeSpan.FromSeconds(3);
         FallbackArgs<string>? received = null;
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(
             new HedgingOptions(),
             o => o with
             {
@@ -940,7 +940,7 @@ public class HedgingTests
         var log = new List<string>();
         var responses = new[] { new Response(500, log), new Response(503, log) };
         var op = new ScriptedOperation<Response>(_ => new ValueTask<Response>(responses[0]), _ => new ValueTask<Response>(responses[1]));
-        RetryPipeline<Response> pipeline = this.NewPipeline<Response>(
+        ReliabilityPipeline<Response> pipeline = this.NewPipeline<Response>(
             new HedgingOptions(),
             o => o with
             {
@@ -962,7 +962,7 @@ public class HedgingTests
     public async Task ThePipelineWithoutAResultTypeHedgesAnOperationThatReturnsAResult()
     {
         var op = new ScriptedOperation<int>(NeverCompletesAsync<int>, _ => new ValueTask<int>(42));
-        var pipeline = new RetryPipeline(new RetryPipelineOptions { Hedging = new HedgingOptions { Delay = HedgingDelay }, TimeProvider = this.fake });
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Hedging = new HedgingOptions { Delay = HedgingDelay }, TimeProvider = this.fake });
 
         Task<int> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
         this.fake.Advance(HedgingDelay);
@@ -975,7 +975,7 @@ public class HedgingTests
     public async Task ThePipelineWithoutAResultTypeHedgesAnOperationThatReturnsNoResult()
     {
         int invocations = 0;
-        var pipeline = new RetryPipeline(new RetryPipelineOptions { Hedging = new HedgingOptions(), TimeProvider = this.fake });
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Hedging = new HedgingOptions(), TimeProvider = this.fake });
 
         ValueTask call = pipeline.ExecuteAsync(
             _ => Interlocked.Increment(ref invocations) == 1 ? throw new InvalidOperationException("Attempt 1 failed") : ValueTask.CompletedTask);
@@ -989,7 +989,7 @@ public class HedgingTests
     public async Task ThePipelineWithoutAResultTypeThrowsTheLastExceptionWhenAllTheAttemptsFail()
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
-        var pipeline = new RetryPipeline(new RetryPipelineOptions { Hedging = new HedgingOptions { MaxHedgedAttempts = 3 }, TimeProvider = this.fake });
+        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Hedging = new HedgingOptions { MaxHedgedAttempts = 3 }, TimeProvider = this.fake });
 
         InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
             () => pipeline.ExecuteAsync(
@@ -1009,7 +1009,7 @@ public class HedgingTests
     {
         var stopwatch = Stopwatch.StartNew();
         var op = new ScriptedOperation<string>(NeverCompletesAsync, Succeeds("attempt 2"));
-        RetryPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = TimeSpan.FromHours(1) });
+        ReliabilityPipeline<string> pipeline = this.NewPipeline<string>(new HedgingOptions { Delay = TimeSpan.FromHours(1) });
 
         Task<string> call = pipeline.ExecuteAsync(op.InvokeAsync).AsTask();
         this.fake.Advance(TimeSpan.FromHours(1));
@@ -1021,7 +1021,7 @@ public class HedgingTests
 
     // A pipeline with the fake time provider and hedging that records each call to OnHedging, unless the test sets
     // its own callback.
-    private RetryPipeline<T> NewPipeline<T>(HedgingOptions hedging, Func<RetryPipelineOptions<T>, RetryPipelineOptions<T>>? configure = null)
+    private ReliabilityPipeline<T> NewPipeline<T>(HedgingOptions hedging, Func<ReliabilityPipelineOptions<T>, ReliabilityPipelineOptions<T>>? configure = null)
     {
         if (hedging.OnHedging is null)
         {
@@ -1039,8 +1039,8 @@ public class HedgingTests
             };
         }
 
-        var options = new RetryPipelineOptions<T> { Hedging = hedging, TimeProvider = this.fake };
-        return new RetryPipeline<T>(configure is null ? options : configure(options));
+        var options = new ReliabilityPipelineOptions<T> { Hedging = hedging, TimeProvider = this.fake };
+        return new ReliabilityPipeline<T>(configure is null ? options : configure(options));
     }
 
     private static Func<CancellationToken, ValueTask<T>> Succeeds<T>(T value) => _ => new ValueTask<T>(value);

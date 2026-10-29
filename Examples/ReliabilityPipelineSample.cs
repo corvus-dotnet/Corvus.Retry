@@ -1,7 +1,7 @@
 #:project ../Solutions/Corvus.Retry/Corvus.Retry.csproj
 
-// Corvus.Retry - RetryPipeline sample
-// Run from the repository root:  dotnet run Examples/RetryPipelineSample.cs
+// Corvus.Retry - ReliabilityPipeline sample
+// Run from the repository root:  dotnet run Examples/ReliabilityPipelineSample.cs
 //
 // This sample does not use the network. The operations are fakes in this process: they wait with Task.Delay, and
 // fail when the sample tells them to fail. Each example prints the attempts and the outcome. The sample takes
@@ -20,7 +20,7 @@ using Corvus.Retry.Strategies;
 // for many calls. These two pipelines use options only.
 //
 // The first pipeline retries 3 times with an exponential delay and jitter. Each attempt has a time limit of 5 seconds.
-RetryPipeline exponentialPipeline = new(new RetryPipelineOptions
+ReliabilityPipeline exponentialPipeline = new(new ReliabilityPipelineOptions
 {
     Strategy = RetryStrategies.Exponential(retries: 3, baseDelay: TimeSpan.FromMilliseconds(200), useJitter: true),
     AttemptTimeout = TimeSpan.FromSeconds(5),
@@ -29,7 +29,7 @@ RetryPipeline exponentialPipeline = new(new RetryPipelineOptions
 
 // The second pipeline retries 5 times with a constant delay of 1 second. Each attempt has a time limit of 10 seconds,
 // and the full call has a time limit of 30 seconds.
-RetryPipeline constantPipeline = new(new RetryPipelineOptions
+ReliabilityPipeline constantPipeline = new(new ReliabilityPipelineOptions
 {
     TotalTimeout = TimeSpan.FromSeconds(30),
     Strategy = RetryStrategies.Constant(retries: 5, delay: TimeSpan.FromSeconds(1)),
@@ -60,7 +60,7 @@ Console.WriteLine("## Constant pipeline - one failure, then a success");
 Console.WriteLine();
 Console.WriteLine("## Attempt timeout");
 {
-    RetryPipeline pipeline = new(new RetryPipelineOptions
+    ReliabilityPipeline pipeline = new(new ReliabilityPipelineOptions
     {
         Strategy = new Count(2),
         AttemptTimeout = TimeSpan.FromMilliseconds(500),
@@ -103,13 +103,13 @@ Console.WriteLine("## Cancellation by the caller");
 
 // ## A result retry with Retry-After
 //
-// RetryPipeline<T> can retry a result. RetryPolicies.IsTransientHttpResponse rejects a status of 408, 429, or 500 or
+// ReliabilityPipeline<T> can retry a result. RetryPolicies.IsTransientHttpResponse rejects a status of 408, 429, or 500 or
 // more. RetryStrategies.RetryAfter uses the Retry-After header of the response for the delay. The pipeline disposes
 // each rejected response before the next attempt.
 Console.WriteLine();
 Console.WriteLine("## Result retry with Retry-After");
 {
-    RetryPipeline<HttpResponseMessage> pipeline = new(new RetryPipelineOptions<HttpResponseMessage>
+    ReliabilityPipeline<HttpResponseMessage> pipeline = new(new ReliabilityPipelineOptions<HttpResponseMessage>
     {
         Strategy = RetryStrategies.RetryAfter(RetryStrategies.Exponential(retries: 3, baseDelay: TimeSpan.FromSeconds(5))),
         Policy = RetryPolicies.TransientHttp,
@@ -142,7 +142,7 @@ Console.WriteLine("## Result retry with Retry-After");
 Console.WriteLine();
 Console.WriteLine("## Fallback");
 {
-    RetryPipeline<string> pipeline = new(new RetryPipelineOptions<string>
+    ReliabilityPipeline<string> pipeline = new(new ReliabilityPipelineOptions<string>
     {
         Strategy = RetryStrategies.Constant(retries: 2, delay: TimeSpan.FromMilliseconds(200)),
         OnRetry = PrintRetry,
@@ -183,7 +183,7 @@ Console.WriteLine("## Circuit breaker");
     });
 
     // One attempt for each call, so that each call is one call to the breaker.
-    RetryPipeline pipeline = new(new RetryPipelineOptions { Strategy = new DoNotRetry(), CircuitBreaker = breaker });
+    ReliabilityPipeline pipeline = new(new ReliabilityPipelineOptions { Strategy = new DoNotRetry(), CircuitBreaker = breaker });
     FlakyService service = new(failures: 4);
 
     for (int call = 1; call <= 6; call++)
@@ -221,7 +221,7 @@ Console.WriteLine("## Circuit breaker");
 Console.WriteLine();
 Console.WriteLine("## Hedging");
 {
-    RetryPipeline<string> pipeline = new(new RetryPipelineOptions<string>
+    ReliabilityPipeline<string> pipeline = new(new ReliabilityPipelineOptions<string>
     {
         Hedging = new HedgingOptions
         {

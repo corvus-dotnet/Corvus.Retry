@@ -25,7 +25,7 @@ using Corvus.Retry.Strategies;
 // from the `Retriable` default strategy, which is `new Count(10)`.
 //
 // A retry does not block a thread: a delay task and continuations start each retry on the scheduler of the caller.
-// `RetryTask` has no retry callback; if you need one, use `Retriable` or `RetryPipeline` inside the operation.
+// `RetryTask` has no retry callback; if you need one, use `Retriable` or `ReliabilityPipeline` inside the operation.
 //
 // (See RetriableSample.cs in this folder for examples of `Retriable`, `IRetryPolicy` and `IRetryStrategy`.)
 //
