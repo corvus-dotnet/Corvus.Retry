@@ -54,7 +54,7 @@ not do the steps in the guide, your project can fail to compile, or your retries
 - `ReliableTaskRunner` implements `IAsyncDisposable`. Use `await using` to stop the runner at the end of a scope.
 - The benchmarks measure the pipeline, the fallback, the circuit breaker, hedging, the new strategies and the new
   policies. `DelayBenchmarks` replaces `SleepBenchmarks`.
-- A sample for `RetryPipeline` is in `Documentation/Examples/RetryPipelineSample.cs`.
+- A sample for `RetryPipeline` is in `Examples/RetryPipelineSample.cs`.
 - ADR 0002 records the decision to use `TimeProvider`. It replaces ADR 0001.
 
 ### Changed

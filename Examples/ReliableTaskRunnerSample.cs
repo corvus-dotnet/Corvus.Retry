@@ -1,7 +1,7 @@
-#:project ../../Solutions/Corvus.Retry/Corvus.Retry.csproj
+#:project ../Solutions/Corvus.Retry/Corvus.Retry.csproj
 
 // Corvus.Retry - ReliableTaskRunner sample
-// Run from the repository root:  dotnet run Documentation/Examples/ReliableTaskRunnerSample.cs
+// Run from the repository root:  dotnet run Examples/ReliableTaskRunnerSample.cs
 // The narrative from the original Polyglot notebook is kept as comments above each section.
 
 using System.Diagnostics;

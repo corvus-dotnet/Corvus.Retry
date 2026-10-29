@@ -1,7 +1,7 @@
-#:project ../../Solutions/Corvus.Retry/Corvus.Retry.csproj
+#:project ../Solutions/Corvus.Retry/Corvus.Retry.csproj
 
 // Corvus.Retry - Retriable sample
-// Run from the repository root:  dotnet run Documentation/Examples/RetriableSample.cs
+// Run from the repository root:  dotnet run Examples/RetriableSample.cs
 // The narrative from the original Polyglot notebook is kept as comments above each section.
 //
 // This sample pings endjin.com, so it needs network access. Several examples deliberately wait between

@@ -689,12 +689,12 @@ string body = await pipeline.ExecuteAsync(
 
 ## Samples
 
-The folder `Documentation/Examples` has samples. Each sample is a .NET 10 file-based app. Each sample uses the library source with `#:project`, thus it always uses the code in this repository. To run a sample, use one of these commands from the root of the repository:
+The folder `Examples` has samples. Each sample is a .NET 10 file-based app. Each sample uses the library source with `#:project`, thus it always uses the code in this repository. To run a sample, use one of these commands from the root of the repository:
 
-    dotnet run Documentation/Examples/RetryPipelineSample.cs
-    dotnet run Documentation/Examples/RetriableSample.cs
-    dotnet run Documentation/Examples/ReliableTaskRunnerSample.cs
-    dotnet run Documentation/Examples/RetryTaskSample.cs
+    dotnet run Examples/RetryPipelineSample.cs
+    dotnet run Examples/RetriableSample.cs
+    dotnet run Examples/ReliableTaskRunnerSample.cs
+    dotnet run Examples/RetryTaskSample.cs
 
 The samples use the .NET 10 SDK. `RetriableSample` sends pings to `endjin.com`, thus it must have network access. The other samples do not use the network. Some samples wait between the retries: `RetriableSample` takes approximately 2 minutes, and the other samples take approximately 20 seconds each.
 

@@ -1,7 +1,7 @@
-#:project ../../Solutions/Corvus.Retry/Corvus.Retry.csproj
+#:project ../Solutions/Corvus.Retry/Corvus.Retry.csproj
 
 // Corvus.Retry - RetryPipeline sample
-// Run from the repository root:  dotnet run Documentation/Examples/RetryPipelineSample.cs
+// Run from the repository root:  dotnet run Examples/RetryPipelineSample.cs
 //
 // This sample does not use the network. The operations are fakes in this process: they wait with Task.Delay, and
 // fail when the sample tells them to fail. Each example prints the attempts and the outcome. The sample takes

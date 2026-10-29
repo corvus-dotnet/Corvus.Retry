@@ -1,7 +1,7 @@
-#:project ../../Solutions/Corvus.Retry/Corvus.Retry.csproj
+#:project ../Solutions/Corvus.Retry/Corvus.Retry.csproj
 
 // Corvus.Retry - RetryTask sample
-// Run from the repository root:  dotnet run Documentation/Examples/RetryTaskSample.cs
+// Run from the repository root:  dotnet run Examples/RetryTaskSample.cs
 // The narrative from the original Polyglot notebook is kept as comments above each section.
 //
 // The operations in this sample fail at random, so a retry can still give up after its last try. The sample catches
