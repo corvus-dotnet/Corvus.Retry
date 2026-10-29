@@ -56,9 +56,16 @@ public sealed record FallbackOptions<T>
     /// <see langword="null"/> if no result gets the fallback value.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The predicate receives the result that the other parts of the pipeline return. Before the pipeline calls
     /// <see cref="OnFallback"/> and <see cref="Action"/>, it disposes a rejected result that implements
-    /// <see cref="IDisposable"/>. An exception from the predicate stops the call.
+    /// <see cref="IDisposable"/>. An exception from that disposal stops the call: the caller gets that exception, and
+    /// the pipeline does not call <see cref="OnFallback"/> or <see cref="Action"/>.
+    /// </para>
+    /// <para>
+    /// An exception from the predicate stops the call: the caller gets that exception. The pipeline disposes the result
+    /// that it does not return, and ignores an exception from that disposal.
+    /// </para>
     /// </remarks>
     public Func<T, bool>? ShouldFallbackResult { get; init; }
 

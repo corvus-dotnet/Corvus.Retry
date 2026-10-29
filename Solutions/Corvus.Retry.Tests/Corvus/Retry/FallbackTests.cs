@@ -169,6 +169,103 @@ public class FallbackTests
         Assert.IsTrue(responses[1].Disposed);
     }
 
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task WhenShouldFallbackResultThrows_TheCallerGetsThatExceptionAndTheResultIsDisposed(bool operationCompletesAsynchronously)
+    {
+        var log = new List<string>();
+        var result = new Response(503, log);
+        var failure = new FormatException("ShouldFallbackResult failed.");
+        var calls = new List<FallbackArgs<Response>>();
+        int actions = 0;
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        {
+            Strategy = new DoNotRetry(),
+            Fallback = RecordingFallback(calls, new Response(200, log)) with
+            {
+                ShouldFallbackResult = _ => throw failure,
+                Action = _ =>
+                {
+                    Interlocked.Increment(ref actions);
+                    return new ValueTask<Response>(new Response(200, log));
+                },
+            },
+        });
+
+        async ValueTask<Response> OperationAsync(CancellationToken cancellationToken)
+        {
+            if (operationCompletesAsynchronously)
+            {
+                await Task.Yield();
+            }
+
+            return result;
+        }
+
+        FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
+            () => pipeline.ExecuteAsync(OperationAsync).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        Assert.AreSame(failure, thrown);
+        Assert.IsTrue(result.Disposed);
+        Assert.IsEmpty(calls);
+        Assert.AreEqual(0, actions);
+    }
+
+    [TestMethod]
+    public async Task WhenShouldFallbackResultThrowsAndTheDisposalOfTheResultThrows_TheCallerGetsThePredicatesException()
+    {
+        var log = new List<string>();
+        var result = new Response(503, log) { DisposeFailure = new InvalidOperationException("Dispose failed.") };
+        var failure = new FormatException("ShouldFallbackResult failed.");
+        var calls = new List<FallbackArgs<Response>>();
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        {
+            Strategy = new DoNotRetry(),
+            Fallback = RecordingFallback(calls, new Response(200, log)) with { ShouldFallbackResult = _ => throw failure },
+        });
+
+        // The predicate's exception is the outcome of the call. The pipeline ignores the exception from the disposal.
+        FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
+            () => pipeline.ExecuteAsync(_ => new ValueTask<Response>(result)).AsTask()).ConfigureAwait(false);
+
+        Assert.AreSame(failure, thrown);
+        Assert.IsTrue(result.Disposed);
+        Assert.IsEmpty(calls);
+    }
+
+    [TestMethod]
+    public async Task WhenTheDisposalOfARejectedResultThrows_TheCallerGetsThatExceptionAndTheFallbackDoesNotRun()
+    {
+        var log = new List<string>();
+        var disposeFailure = new InvalidOperationException("Dispose failed.");
+        var result = new Response(503, log) { DisposeFailure = disposeFailure };
+        var calls = new List<FallbackArgs<Response>>();
+        int actions = 0;
+        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        {
+            Strategy = new DoNotRetry(),
+            Fallback = RecordingFallback(calls, new Response(200, log)) with
+            {
+                ShouldFallbackResult = r => r.StatusCode >= 500,
+                Action = _ =>
+                {
+                    Interlocked.Increment(ref actions);
+                    return new ValueTask<Response>(new Response(200, log));
+                },
+            },
+        });
+
+        // The pipeline disposes the rejected result before the fallback. An exception from the disposal stops the call.
+        InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            () => pipeline.ExecuteAsync(_ => new ValueTask<Response>(result)).AsTask()).ConfigureAwait(false);
+
+        Assert.AreSame(disposeFailure, thrown);
+        Assert.AreSequenceEqual(new[] { "dispose 503" }, log);
+        Assert.IsEmpty(calls);
+        Assert.AreEqual(0, actions);
+    }
+
     // §6.9
     [TestMethod]
     public async Task TheFallbackReceivesARetryTimeoutExceptionFromTheTotalTimeout()
@@ -846,17 +943,28 @@ public class FallbackTests
         return "never";
     }
 
-    // A disposable result with a status code. It writes its disposal to the log.
+    // A disposable result with a status code. It writes its disposal to the log. When DisposeFailure is set, Dispose
+    // throws it after it records the disposal.
     private sealed class Response(int statusCode, List<string> log) : IDisposable
     {
         public int StatusCode => statusCode;
 
         public bool Disposed { get; private set; }
 
+        public Exception? DisposeFailure { get; init; }
+
         public void Dispose()
         {
             this.Disposed = true;
-            log.Add($"dispose {statusCode}");
+            lock (log)
+            {
+                log.Add($"dispose {statusCode}");
+            }
+
+            if (this.DisposeFailure is { } failure)
+            {
+                throw failure;
+            }
         }
     }
 }

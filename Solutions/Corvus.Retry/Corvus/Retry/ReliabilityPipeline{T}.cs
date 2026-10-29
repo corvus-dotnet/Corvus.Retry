@@ -5,6 +5,7 @@
 namespace Corvus.Retry;
 
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -171,6 +172,40 @@ public sealed class ReliabilityPipeline<T>
         }
     }
 
+    // Asks the predicate about a result. An exception from the predicate stops the call. The caller does not get the
+    // result, so the pipeline disposes it, and ignores an exception from the disposal.
+    private static bool ShouldFallBack(Func<T, bool> shouldFallbackResult, T result)
+    {
+        try
+        {
+            return shouldFallbackResult(result);
+        }
+        catch
+        {
+            DisposeQuietly(result);
+            throw;
+        }
+    }
+
+    [SuppressMessage(
+        "Roslynator",
+        "RCS1075:Avoid empty catch clause that catches System.Exception",
+        Justification = "The call already stops with another exception. That exception is more important to the caller.")]
+    private static void DisposeQuietly(T result)
+    {
+        if (result is IDisposable disposable)
+        {
+            try
+            {
+                disposable.Dispose();
+            }
+            catch (Exception)
+            {
+                // The call already has an outcome, so the exception has no receiver.
+            }
+        }
+    }
+
     private async ValueTask<T> WithFallbackAsync(ValueTask<T> core, FallbackOptions<T> fallback, CallOutcome outcome, CancellationToken cancellationToken)
     {
         T result;
@@ -196,11 +231,12 @@ public sealed class ReliabilityPipeline<T>
             return await this.FallBackAsync(fallback, new FallbackArgs<T>(ex, default, cancellationToken)).ConfigureAwait(this.continueOnCapturedContext);
         }
 
-        if (fallback.ShouldFallbackResult is not { } shouldFallbackResult || !shouldFallbackResult(result))
+        if (fallback.ShouldFallbackResult is not { } shouldFallbackResult || !ShouldFallBack(shouldFallbackResult, result))
         {
             return result;
         }
 
+        // The caller does not get the result, so release it. An exception from the disposal stops the call.
         (result as IDisposable)?.Dispose();
         return await this.FallBackAsync(fallback, new FallbackArgs<T>(null, result, cancellationToken)).ConfigureAwait(this.continueOnCapturedContext);
     }
