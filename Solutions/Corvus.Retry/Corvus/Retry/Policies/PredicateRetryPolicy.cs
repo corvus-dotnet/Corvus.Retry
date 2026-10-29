@@ -15,7 +15,7 @@ internal sealed class PredicateRetryPolicy : IRetryPolicy
     private readonly Func<Exception, bool> predicate;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="PredicateRetryPolicy"/> class.
+    /// Initialises a new instance of the <see cref="PredicateRetryPolicy"/> class.
     /// </summary>
     /// <param name="predicate">The predicate that returns true when the operation can be retried.</param>
     internal PredicateRetryPolicy(Func<Exception, bool> predicate)

@@ -45,7 +45,7 @@ public sealed class ReliabilityPipeline
     private readonly HedgingOptions? hedging;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="ReliabilityPipeline"/> class.
+    /// Initialises a new instance of the <see cref="ReliabilityPipeline"/> class.
     /// </summary>
     /// <param name="options">The settings of the pipeline.</param>
     /// <exception cref="ArgumentNullException">

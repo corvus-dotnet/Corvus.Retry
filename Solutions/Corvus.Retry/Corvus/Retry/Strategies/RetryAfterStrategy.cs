@@ -20,7 +20,7 @@ internal sealed class RetryAfterStrategy : IRetryStrategy
     private readonly TimeProvider timeProvider;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="RetryAfterStrategy"/> class.
+    /// Initialises a new instance of the <see cref="RetryAfterStrategy"/> class.
     /// </summary>
     /// <param name="inner">The strategy that decides whether to retry, and the delay when there is no header.</param>
     /// <param name="timeProvider">The time provider that gives the current time for a header with a date.</param>

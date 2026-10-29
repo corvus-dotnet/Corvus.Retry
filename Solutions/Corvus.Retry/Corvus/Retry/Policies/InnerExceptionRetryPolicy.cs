@@ -16,7 +16,7 @@ internal sealed class InnerExceptionRetryPolicy : IRetryPolicy
     private readonly Func<Exception, bool> match;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="InnerExceptionRetryPolicy"/> class.
+    /// Initialises a new instance of the <see cref="InnerExceptionRetryPolicy"/> class.
     /// </summary>
     /// <param name="match">The function that returns true for an exception that can be retried.</param>
     internal InnerExceptionRetryPolicy(Func<Exception, bool> match)

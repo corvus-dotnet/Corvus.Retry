@@ -15,7 +15,7 @@ internal sealed class NotRetryPolicy : IRetryPolicy
     private readonly IRetryPolicy policy;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="NotRetryPolicy"/> class.
+    /// Initialises a new instance of the <see cref="NotRetryPolicy"/> class.
     /// </summary>
     /// <param name="policy">The policy to negate.</param>
     internal NotRetryPolicy(IRetryPolicy policy)

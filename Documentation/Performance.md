@@ -13,7 +13,7 @@ them.
   first attempt, the library allocates no memory for `Retry`. For `RetryAsync`, the only allocation is the returned
   `Task<T>`, which a hand-written `async` retry loop also allocates.
 - An asynchronous `Retriable` call that completes immediately takes 3 ns to 22 ns more than in 2.0.
-- `RetryTask` and `ReliableTaskRunner.StopAsync` are slower than in 2.0, because of changes to their behavior.
+- `RetryTask` and `ReliableTaskRunner.StopAsync` are slower than in 2.0, because of changes to their behaviour.
 - A `ReliabilityPipeline` with no options adds approximately 26 ns to a call, and allocates no memory.
 - A hedged attempt after the first attempt starts on the thread pool. In the benchmark, this adds approximately 620 B
   and 2.4 µs to a hedged call.
@@ -39,7 +39,7 @@ them.
    `RetryTaskBenchmarks` and `ReliabilityPipelineBenchmarks`. The two versions used the same benchmark code.
 3. After the changes that this document describes in [Changes from the analysis](#changes-from-the-analysis), we ran
    the benchmarks that these changes affect again. Each run used the same job as the run before the change.
-4. After the changes in [Changes to the behavior](#changes-to-the-behavior), we ran the benchmarks that these
+4. After the changes in [Changes to the behaviour](#changes-to-the-behaviour), we ran the benchmarks that these
    changes affect with the short job, before and after the changes.
 
 Some benchmarks have a different name in 3.0:
@@ -114,7 +114,7 @@ approximately the same as a failure of the operation.
 
 ## Causes of the slower results
 
-We accept these results. Each one is the result of a change to the behavior of 3.0.
+We accept these results. Each one is the result of a change to the behaviour of 3.0.
 
 - **R1: an asynchronous `Retriable` call that completes immediately takes 3 ns to 22 ns more.** It allocates the same
   memory or 40 B less. In 3.0, one retry loop does all the asynchronous calls. This loop also examines the token, the
@@ -130,7 +130,7 @@ We accept these results. Each one is the result of a change to the behavior of 3
 
 ## Changes from the analysis
 
-The analysis made these changes. They do not change the public API or the documented behavior.
+The analysis made these changes. They do not change the public API or the documented behaviour.
 
 | Change | Before | After |
 |---|---|---|
@@ -142,9 +142,9 @@ The `RetriableBenchmarks` results after this change are not directly comparable 
 3.0 values in the table [Version 2.0 and version 3.0](#version-20-and-version-30) use the old benchmark code for
 the two versions.
 
-## Changes to the behavior
+## Changes to the behaviour
 
-Some changes to the behavior of 3.0 changed the cost of the fallback, hedging and `ReliableTaskRunner`. We ran
+Some changes to the behaviour of 3.0 changed the cost of the fallback, hedging and `ReliableTaskRunner`. We ran
 `FallbackBenchmarks`, `HedgingBenchmarks`, `ReliableTaskRunnerBenchmarks`, `CircuitBreakerBenchmarks` and
 `RetryTaskBenchmarks` with the short job, before and after these changes, one run after the other.
 
@@ -177,4 +177,4 @@ and their time changed less than the noise.
 | Less memory for hedging | The decrease is less than 100 B, in the code that has the most risk from concurrent attempts. |
 | A rejection by the circuit breaker without an exception | The API contract is an exception. The cost comes from the exception through an `async` method. |
 | A circuit breaker window without a lock, or a less accurate clock | The window must change all its counts at the same time. A less accurate clock changes the time of each bucket. |
-| `Cancel()` in `StopAsync`, not `CancelAsync()` | This would change the documented behavior of 3.0. |
+| `Cancel()` in `StopAsync`, not `CancelAsync()` | This would change the documented behaviour of 3.0. |

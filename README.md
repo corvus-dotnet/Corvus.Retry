@@ -1,6 +1,6 @@
 # Corvus.Retry
 [![Build Status](https://github.com/corvus-dotnet/Corvus.Retry/actions/workflows/build.yml/badge.svg)](https://github.com/corvus-dotnet/Corvus.Retry/actions/workflows/build.yml)
-[![GitHub license](https://img.shields.io/badge/License-Apache%202-blue.svg)](https://raw.githubusercontent.com/corvus-dotnet/Corvus.Retry/main/LICENSE)
+[![GitHub licence](https://img.shields.io/badge/License-Apache%202-blue.svg)](https://raw.githubusercontent.com/corvus-dotnet/Corvus.Retry/main/LICENSE)
 [![IMM](https://imm.endjin.com/api/imm/github/corvus-dotnet/Corvus.Retry/total?cache=false)](https://imm.endjin.com/api/imm/github/corvus-dotnet/Corvus.Retry/total?cache=false)
 
 This library retries operations that fail, and restarts long-running operations that fail.
@@ -520,7 +520,7 @@ In the formulas, `n` is the number of the attempt that failed. The first attempt
 
 All strategies limit each delay to 0xFFFFFFFE ms (approximately 49.7 days). `Task.Delay` and the timer of a `CancellationTokenSource` do not accept a longer delay.
 
-`Backoff` has `MinBackoff` and `MaxBackoff` properties. Set them with an object initializer:
+`Backoff` has `MinBackoff` and `MaxBackoff` properties. Set them with an object initialiser:
 
 ```csharp
 Backoff backoff = new(maxTries: 5, deltaBackoff: TimeSpan.FromSeconds(1)) { MaxBackoff = TimeSpan.FromSeconds(10) };
@@ -786,19 +786,19 @@ GitHub Actions (`.github/workflows/build.yml`).
 
 ## Changelog
 
-[CHANGELOG.md](CHANGELOG.md) gives the changes in each release, with the behavior changes in 2.0 and 3.0. The [migration guide from 2.x to 3.0](Documentation/Migrating-from-2.x-to-3.0.md) gives each change that is not compatible with 2.x, and the 3.0 replacement.
+[CHANGELOG.md](CHANGELOG.md) gives the changes in each release, with the behaviour changes in 2.0 and 3.0. The [migration guide from 2.x to 3.0](Documentation/Migrating-from-2.x-to-3.0.md) gives each change that is not compatible with 2.x, and the 3.0 replacement.
 
-## Licenses
+## Licences
 
-[![GitHub license](https://img.shields.io/badge/License-Apache%202-blue.svg)](https://raw.githubusercontent.com/corvus-dotnet/Corvus.Retry/main/LICENSE)
+[![GitHub licence](https://img.shields.io/badge/License-Apache%202-blue.svg)](https://raw.githubusercontent.com/corvus-dotnet/Corvus.Retry/main/LICENSE)
 
-Corvus.Retry is available under the Apache 2.0 open source license.
+Corvus.Retry is available under the Apache 2.0 open source licence.
 
 For any licensing questions, please email [&#108;&#105;&#99;&#101;&#110;&#115;&#105;&#110;&#103;&#64;&#101;&#110;&#100;&#106;&#105;&#110;&#46;&#99;&#111;&#109;](&#109;&#97;&#105;&#108;&#116;&#111;&#58;&#108;&#105;&#99;&#101;&#110;&#115;&#105;&#110;&#103;&#64;&#101;&#110;&#100;&#106;&#105;&#110;&#46;&#99;&#111;&#109;)
 
 ## Project Sponsor
 
-This project is sponsored by [endjin](https://endjin.com), a UK based Technology Consultancy which specializes in Data & Analytics, AI & Cloud Native App Dev.
+This project is sponsored by [endjin](https://endjin.com), a UK based Technology Consultancy which specialises in Data & Analytics, AI & Cloud Native App Dev.
 
 > We help small teams achieve big things.
 
@@ -830,7 +830,7 @@ For more information about our products and services, or for commercial support 
 
 ## Code of conduct
 
-This project has adopted a code of conduct adapted from the [Contributor Covenant](http://contributor-covenant.org/) to clarify expected behavior in our community. This code of conduct has been [adopted by many other projects](http://contributor-covenant.org/adopters/). For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [&#104;&#101;&#108;&#108;&#111;&#064;&#101;&#110;&#100;&#106;&#105;&#110;&#046;&#099;&#111;&#109;](&#109;&#097;&#105;&#108;&#116;&#111;:&#104;&#101;&#108;&#108;&#111;&#064;&#101;&#110;&#100;&#106;&#105;&#110;&#046;&#099;&#111;&#109;) with any additional questions or comments.
+This project has adopted a code of conduct adapted from the [Contributor Covenant](http://contributor-covenant.org/) to clarify expected behaviour in our community. This code of conduct has been [adopted by many other projects](http://contributor-covenant.org/adopters/). For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [&#104;&#101;&#108;&#108;&#111;&#064;&#101;&#110;&#100;&#106;&#105;&#110;&#046;&#099;&#111;&#109;](&#109;&#097;&#105;&#108;&#116;&#111;:&#104;&#101;&#108;&#108;&#111;&#064;&#101;&#110;&#100;&#106;&#105;&#110;&#046;&#099;&#111;&#109;) with any additional questions or comments.
 
 ## IP Maturity Matrix (IMM)
 
@@ -860,7 +860,7 @@ The IMM is endjin's IP quality framework.
 
 [![Source Code Availability](https://imm.endjin.com/api/imm/github/corvus-dotnet/Corvus.Retry/rule/30e1b40b-b27d-4631-b38d-3172426593ca?cache=false)](https://imm.endjin.com/api/imm/github/corvus-dotnet/Corvus.Retry/rule/30e1b40b-b27d-4631-b38d-3172426593ca?cache=false)
 
-[![License](https://imm.endjin.com/api/imm/github/corvus-dotnet/Corvus.Retry/rule/d96b5bdc-62c7-47b6-bcc4-de31127c08b7?cache=false)](https://imm.endjin.com/api/imm/github/corvus-dotnet/Corvus.Retry/rule/d96b5bdc-62c7-47b6-bcc4-de31127c08b7?cache=false)
+[![Licence](https://imm.endjin.com/api/imm/github/corvus-dotnet/Corvus.Retry/rule/d96b5bdc-62c7-47b6-bcc4-de31127c08b7?cache=false)](https://imm.endjin.com/api/imm/github/corvus-dotnet/Corvus.Retry/rule/d96b5bdc-62c7-47b6-bcc4-de31127c08b7?cache=false)
 
 [![Production Use](https://imm.endjin.com/api/imm/github/corvus-dotnet/Corvus.Retry/rule/87ee2c3e-b17a-4939-b969-2c9c034d05d7?cache=false)](https://imm.endjin.com/api/imm/github/corvus-dotnet/Corvus.Retry/rule/87ee2c3e-b17a-4939-b969-2c9c034d05d7?cache=false)
 

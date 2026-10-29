@@ -14,7 +14,7 @@ using System;
 public sealed class IsolatedCircuitException : BrokenCircuitException
 {
     /// <summary>
-    /// Initializes a new instance of the <see cref="IsolatedCircuitException"/> class.
+    /// Initialises a new instance of the <see cref="IsolatedCircuitException"/> class.
     /// </summary>
     public IsolatedCircuitException()
         : this("The circuit is isolated.")
@@ -22,7 +22,7 @@ public sealed class IsolatedCircuitException : BrokenCircuitException
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="IsolatedCircuitException"/> class.
+    /// Initialises a new instance of the <see cref="IsolatedCircuitException"/> class.
     /// </summary>
     /// <param name="message">The message that describes the error.</param>
     public IsolatedCircuitException(string message)
@@ -31,7 +31,7 @@ public sealed class IsolatedCircuitException : BrokenCircuitException
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="IsolatedCircuitException"/> class.
+    /// Initialises a new instance of the <see cref="IsolatedCircuitException"/> class.
     /// </summary>
     /// <param name="message">The message that describes the error.</param>
     /// <param name="innerException">The exception that caused this exception, or <see langword="null"/>.</param>

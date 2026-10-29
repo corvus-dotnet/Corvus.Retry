@@ -27,7 +27,7 @@ public class Linear : IRetryStrategy
     private readonly bool useJitter;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="Linear"/> class.
+    /// Initialises a new instance of the <see cref="Linear"/> class.
     /// </summary>
     /// <param name="periodicity">The delay between tries.</param>
     /// <param name="maxTries">The maximum number of times the method will be tried.</param>
@@ -37,7 +37,7 @@ public class Linear : IRetryStrategy
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="Linear"/> class.
+    /// Initialises a new instance of the <see cref="Linear"/> class.
     /// </summary>
     /// <param name="periodicity">The delay between tries.</param>
     /// <param name="maxTries">The maximum number of times the method will be tried.</param>

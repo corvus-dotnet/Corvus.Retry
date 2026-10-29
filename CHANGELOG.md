@@ -119,7 +119,7 @@ not do the steps in the guide, your project can fail to compile, or your retries
 - When an operation gives a `null` task to `Retriable.RetryAsync`, the attempt fails with an
   `InvalidOperationException`. Before, it failed with a `NullReferenceException`. The strategy and the policy decide
   if `RetryAsync` retries it.
-- `Backoff.MinBackoff` and `Backoff.MaxBackoff` have `init` accessors. Set them with an object initializer.
+- `Backoff.MinBackoff` and `Backoff.MaxBackoff` have `init` accessors. Set them with an object initialiser.
 - The `Incremental` constructor parameter `intialDelay` is now `initialDelay`.
 - An incorrect `maxTries` gives an `ArgumentOutOfRangeException`, not an `ArgumentException`. A negative delay
   parameter of a strategy also gives an `ArgumentOutOfRangeException`.

@@ -17,7 +17,7 @@ using System;
 public sealed class RetryTimeoutException : TimeoutException
 {
     /// <summary>
-    /// Initializes a new instance of the <see cref="RetryTimeoutException"/> class.
+    /// Initialises a new instance of the <see cref="RetryTimeoutException"/> class.
     /// </summary>
     /// <param name="timeout">The time limit that expired.</param>
     public RetryTimeoutException(TimeSpan timeout)
@@ -26,7 +26,7 @@ public sealed class RetryTimeoutException : TimeoutException
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="RetryTimeoutException"/> class.
+    /// Initialises a new instance of the <see cref="RetryTimeoutException"/> class.
     /// </summary>
     /// <param name="timeout">The time limit that expired.</param>
     /// <param name="innerException">
@@ -39,7 +39,7 @@ public sealed class RetryTimeoutException : TimeoutException
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="RetryTimeoutException"/> class.
+    /// Initialises a new instance of the <see cref="RetryTimeoutException"/> class.
     /// </summary>
     /// <param name="message">The message that describes the error.</param>
     /// <param name="timeout">The time limit that expired.</param>

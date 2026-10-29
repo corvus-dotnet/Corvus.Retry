@@ -25,7 +25,7 @@ The .NET package validation tool compared the 3.0 package with the 2.0.0 package
 | The `RetryEventArgs(Exception, TimeSpan)` constructor | CP0002 | `RetryEventArgs(Exception? LastException, object? Result, TimeSpan DelayBeforeRetry, int AttemptNumber)`. |
 | `RetryEventArgs` is a class that derives from `EventArgs` | CP0007, CP0009 | `RetryEventArgs` is a `readonly record struct`. See [Events and callbacks](#events-and-callbacks). |
 | `RetryTaskFactory` and `RetryTaskFactory<T>` are not sealed | CP0009 | Both classes are sealed. If you derived a class from them, call `RetryTask.Factory` from a class of your own. |
-| The setters of `Backoff.MinBackoff` and `Backoff.MaxBackoff` | CP0002 | `init` accessors. Set the values with an object initializer. |
+| The setters of `Backoff.MinBackoff` and `Backoff.MaxBackoff` | CP0002 | `init` accessors. Set the values with an object initialiser. |
 | `Retriable.Retry<T>(Func<T>, CancellationToken, IRetryStrategy, IRetryPolicy)` | CP0002 | The same overload with an optional `onRetry` parameter. Compile your project again. |
 | `Retriable.Retry(Action, CancellationToken, IRetryStrategy, IRetryPolicy)` | CP0002 | The same overload with an optional `onRetry` parameter. Compile your project again. |
 | `Retriable.RetryAsync<T>(Func<Task<T>>, CancellationToken, IRetryStrategy, IRetryPolicy, bool)` | CP0002 | The same overload with an optional `onRetry` parameter. Compile your project again. |
@@ -33,7 +33,7 @@ The .NET package validation tool compared the 3.0 package with the 2.0.0 package
 
 The tool also gave CP0003 for the assembly version. This code occurs only in a local build without a version number. The release build has the version 3.0.0.0.
 
-The tool does not find the changes in behavior, or the name of a parameter. The sections that follow also give these changes.
+The tool does not find the changes in behaviour, or the name of a parameter. The sections that follow also give these changes.
 
 ## Target framework
 
@@ -105,7 +105,7 @@ public class MyCount : IRetryStrategy
 These changes also apply to the built-in strategies:
 
 - **One instance for many calls.** In version 2.x, a strategy kept its count between calls. Thus, a second call with the same instance could get fewer tries. In version 3.0, each call gets all its tries.
-- **`Backoff` bounds.** `MinBackoff` and `MaxBackoff` have `init` accessors. Set them with an object initializer: `new Backoff(5, TimeSpan.FromSeconds(1)) { MaxBackoff = TimeSpan.FromSeconds(10) }`. You cannot change them after you make the strategy.
+- **`Backoff` bounds.** `MinBackoff` and `MaxBackoff` have `init` accessors. Set them with an object initialiser: `new Backoff(5, TimeSpan.FromSeconds(1)) { MaxBackoff = TimeSpan.FromSeconds(10) }`. You cannot change them after you make the strategy.
 - **`Incremental` parameter name.** The constructor parameter `intialDelay` is now `initialDelay`. If you use the named argument `intialDelay:`, change it to `initialDelay:`.
 - **Exceptions for incorrect arguments.** A `maxTries` value of zero or less now gives an `ArgumentOutOfRangeException`, not an `ArgumentException`. A negative delay (`periodicity`, `initialDelay`, `step` or `deltaBackoff`) also gives an `ArgumentOutOfRangeException`. `ArgumentOutOfRangeException` derives from `ArgumentException`, thus a `catch (ArgumentException)` block continues to operate.
 - **Maximum delay.** Each strategy limits its delays to 0xFFFFFFFE ms (approximately 49.7 days). `Backoff` and `Incremental` do not overflow with a large number of tries.

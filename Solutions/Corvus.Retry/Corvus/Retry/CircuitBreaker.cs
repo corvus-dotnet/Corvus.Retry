@@ -76,7 +76,7 @@ public sealed class CircuitBreaker
     private int lastProbe;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="CircuitBreaker"/> class.
+    /// Initialises a new instance of the <see cref="CircuitBreaker"/> class.
     /// </summary>
     /// <param name="options">The settings of the breaker.</param>
     /// <exception cref="ArgumentNullException">

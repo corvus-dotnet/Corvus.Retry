@@ -32,7 +32,7 @@ public class Exponential : IRetryStrategy
     private readonly bool useJitter;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="Exponential"/> class.
+    /// Initialises a new instance of the <see cref="Exponential"/> class.
     /// </summary>
     /// <param name="maxTries">The maximum number of times the method will be tried.</param>
     /// <param name="baseDelay">The delay before the first retry.</param>

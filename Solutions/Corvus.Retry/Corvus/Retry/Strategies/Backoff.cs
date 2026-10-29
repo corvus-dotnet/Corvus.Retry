@@ -23,7 +23,7 @@ public class Backoff : IRetryStrategy
     private readonly int maxTries;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="Backoff"/> class.
+    /// Initialises a new instance of the <see cref="Backoff"/> class.
     /// </summary>
     /// <remarks>This defaults to 5 retries, with a back-off of 2 seconds. The minimum backoff is 1 second, and the maximum backoff is 30 seconds.</remarks>
     public Backoff()
@@ -32,7 +32,7 @@ public class Backoff : IRetryStrategy
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="Backoff"/> class.
+    /// Initialises a new instance of the <see cref="Backoff"/> class.
     /// </summary>
     /// <param name="maxTries">The maximum number of times the method will be tried.</param>
     /// <param name="deltaBackoff">The increase in the delay with each try.</param>
@@ -74,13 +74,13 @@ public class Backoff : IRetryStrategy
     /// <summary>
     /// Gets the minimum delay.
     /// </summary>
-    /// <remarks>Set this with an object initializer. It cannot change after the strategy is created.</remarks>
+    /// <remarks>Set this with an object initialiser. It cannot change after the strategy is created.</remarks>
     public TimeSpan MinBackoff { get; init; }
 
     /// <summary>
     /// Gets the maximum delay.
     /// </summary>
-    /// <remarks>Set this with an object initializer. It cannot change after the strategy is created.</remarks>
+    /// <remarks>Set this with an object initialiser. It cannot change after the strategy is created.</remarks>
     public TimeSpan MaxBackoff { get; init; }
 
     /// <inheritdoc/>

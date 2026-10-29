@@ -15,7 +15,7 @@ public class Count : IRetryStrategy
     private readonly int maxTries;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="Count"/> class.
+    /// Initialises a new instance of the <see cref="Count"/> class.
     /// </summary>
     /// <remarks>This tries the operation up to 5 times.</remarks>
     public Count()
@@ -24,7 +24,7 @@ public class Count : IRetryStrategy
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="Count"/> class.
+    /// Initialises a new instance of the <see cref="Count"/> class.
     /// </summary>
     /// <param name="maxTries">The maximum number of times the method will be tried.</param>
     public Count(int maxTries)

@@ -44,7 +44,7 @@ public sealed class ReliabilityPipeline<T>
     private readonly Func<int, Func<CancellationToken, ValueTask<T>>?>? hedgingActionGenerator;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="ReliabilityPipeline{T}"/> class.
+    /// Initialises a new instance of the <see cref="ReliabilityPipeline{T}"/> class.
     /// </summary>
     /// <param name="options">The settings of the pipeline.</param>
     /// <exception cref="ArgumentNullException">

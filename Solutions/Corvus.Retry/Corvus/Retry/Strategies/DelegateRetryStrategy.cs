@@ -15,7 +15,7 @@ internal sealed class DelegateRetryStrategy : IRetryStrategy
     private readonly Func<RetryAttempt, TimeSpan?> getRetryDelay;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="DelegateRetryStrategy"/> class.
+    /// Initialises a new instance of the <see cref="DelegateRetryStrategy"/> class.
     /// </summary>
     /// <param name="getRetryDelay">The delegate that gives the delay, or <see langword="null"/> to stop.</param>
     internal DelegateRetryStrategy(Func<RetryAttempt, TimeSpan?> getRetryDelay)

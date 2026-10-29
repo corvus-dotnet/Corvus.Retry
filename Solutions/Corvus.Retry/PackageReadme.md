@@ -71,4 +71,4 @@ await using ReliableTaskRunner runner = ReliableTaskRunner.Run(cancellationToken
 - [Migration guide from 2.x to 3.0](https://github.com/corvus-dotnet/Corvus.Retry/blob/main/Documentation/Migrating-from-2.x-to-3.0.md)
 - [Issues](https://github.com/corvus-dotnet/Corvus.Retry/issues)
 
-Corvus.Retry is sponsored by [endjin](https://endjin.com) and available under the Apache 2.0 license.
+Corvus.Retry is sponsored by [endjin](https://endjin.com) and available under the Apache 2.0 licence.

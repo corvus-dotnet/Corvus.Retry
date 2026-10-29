@@ -16,7 +16,7 @@ using System;
 public class BrokenCircuitException : Exception
 {
     /// <summary>
-    /// Initializes a new instance of the <see cref="BrokenCircuitException"/> class.
+    /// Initialises a new instance of the <see cref="BrokenCircuitException"/> class.
     /// </summary>
     public BrokenCircuitException()
         : this("The circuit is open.")
@@ -24,7 +24,7 @@ public class BrokenCircuitException : Exception
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="BrokenCircuitException"/> class.
+    /// Initialises a new instance of the <see cref="BrokenCircuitException"/> class.
     /// </summary>
     /// <param name="message">The message that describes the error.</param>
     public BrokenCircuitException(string message)
@@ -33,7 +33,7 @@ public class BrokenCircuitException : Exception
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="BrokenCircuitException"/> class.
+    /// Initialises a new instance of the <see cref="BrokenCircuitException"/> class.
     /// </summary>
     /// <param name="message">The message that describes the error.</param>
     /// <param name="innerException">The exception that caused this exception, or <see langword="null"/>.</param>
@@ -43,7 +43,7 @@ public class BrokenCircuitException : Exception
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="BrokenCircuitException"/> class.
+    /// Initialises a new instance of the <see cref="BrokenCircuitException"/> class.
     /// </summary>
     /// <param name="message">The message that describes the error.</param>
     /// <param name="retryAfter">The time until the break ends.</param>

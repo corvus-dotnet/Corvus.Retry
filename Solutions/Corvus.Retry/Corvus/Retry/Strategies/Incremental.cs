@@ -28,7 +28,7 @@ public class Incremental : IRetryStrategy
     private readonly bool useJitter;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="Incremental"/> class.
+    /// Initialises a new instance of the <see cref="Incremental"/> class.
     /// </summary>
     /// <remarks>This retries 5 times by default, with an initial delay of 1 second and a step of 2 seconds.</remarks>
     public Incremental()
@@ -37,7 +37,7 @@ public class Incremental : IRetryStrategy
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="Incremental"/> class.
+    /// Initialises a new instance of the <see cref="Incremental"/> class.
     /// </summary>
     /// <param name="maxTries">The maximum number of times the method will be tried.</param>
     /// <param name="initialDelay">The initial delay.</param>
@@ -48,7 +48,7 @@ public class Incremental : IRetryStrategy
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="Incremental"/> class.
+    /// Initialises a new instance of the <see cref="Incremental"/> class.
     /// </summary>
     /// <param name="maxTries">The maximum number of times the method will be tried.</param>
     /// <param name="initialDelay">The initial delay.</param>

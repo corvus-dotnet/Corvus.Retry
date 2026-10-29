@@ -456,7 +456,7 @@ await RunExampleAsync(async () =>
 
 // ##### Example - using `MinBackoff` and `MaxBackoff`
 //
-// You set `MinBackoff` and `MaxBackoff` with an object initializer when you create a `Backoff`. If we use the same example
+// You set `MinBackoff` and `MaxBackoff` with an object initialiser when you create a `Backoff`. If we use the same example
 // as above but set the `MaxBackoff` to 5 seconds, we will see that once the number of retries reaches a number such
 // that delay > 5 seconds, the delay between each retry will be restricted to 5 seconds.
 Console.WriteLine();

@@ -18,7 +18,7 @@ internal sealed class AllRetryPolicy : IRetryPolicy
     private readonly IRetryPolicy[] policies;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="AllRetryPolicy"/> class.
+    /// Initialises a new instance of the <see cref="AllRetryPolicy"/> class.
     /// </summary>
     /// <param name="policies">The policies. This instance owns the array.</param>
     internal AllRetryPolicy(IRetryPolicy[] policies)
