@@ -37,6 +37,13 @@ using Corvus.Retry.Strategies;
 /// <see cref="ReliabilityPipeline.ExecuteAsync{T}(Func{CancellationToken, ValueTask{T}}, CancellationToken)"/> for a
 /// <see cref="ValueTask{TResult}"/>.
 /// </para>
+/// <para>
+/// When <typeparamref name="T"/> is not a task type, but the function returns a task as a value of a wider type (for
+/// example a <see cref="Task"/> as an <see cref="object"/>, <see cref="IAsyncResult"/> or <see cref="IDisposable"/>,
+/// or a boxed <see cref="ValueTask"/>), <c>StartNew</c> cannot refuse the call before the function runs. Instead, the
+/// result of each successful try is checked: if it is a task, the returned task faults with a
+/// <see cref="NotSupportedException"/>, and the function is not retried.
+/// </para>
 /// </remarks>
 public sealed class RetryTaskFactory<T>
 {
@@ -47,6 +54,10 @@ public sealed class RetryTaskFactory<T>
         typeof(Task).IsAssignableFrom(typeof(T)) ||
         typeof(T) == typeof(ValueTask) ||
         (typeof(T).IsGenericType && typeof(T).GetGenericTypeDefinition() == typeof(ValueTask<>));
+
+    // Only object, or an interface that a task type implements (such as IAsyncResult), can hold a task when T is not
+    // a task type. For any other T, the result is not checked, so that the check costs nothing.
+    private static readonly bool ResultMayBeTask = !ResultIsTask && (typeof(T) == typeof(object) || typeof(T).IsInterface);
 
     /// <summary>
     /// Start a new retriable task for a function.
@@ -609,7 +620,24 @@ public sealed class RetryTaskFactory<T>
         return RetryTaskFactory.Start(Task<T>.Factory.StartNew(function, cancellationToken, RetryTaskFactory.Detached(taskCreationOptions), scheduler), () => new Task<T>(function, cancellationToken, RetryTaskFactory.Detached(taskCreationOptions)), GetResult, cancellationToken, taskCreationOptions, scheduler, strategy, policy);
     }
 
-    private static T GetResult(Task task) => ((Task<T>)task).Result;
+    private static T GetResult(Task task)
+    {
+        T result = ((Task<T>)task).Result;
+
+        // An exception here faults the operation's task, and is not retried.
+        if (ResultMayBeTask && IsTask(result))
+        {
+            throw new NotSupportedException(TaskResultMessage);
+        }
+
+        return result;
+    }
+
+    private static bool IsTask(T result)
+    {
+        return result is Task or ValueTask
+            || (result is not null && result.GetType().IsGenericType && result.GetType().GetGenericTypeDefinition() == typeof(ValueTask<>));
+    }
 
     private static void ThrowIfResultIsTask()
     {
