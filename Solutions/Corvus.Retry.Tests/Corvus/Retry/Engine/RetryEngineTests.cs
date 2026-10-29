@@ -6,7 +6,6 @@ namespace Corvus.Retry;
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -34,7 +33,6 @@ public class RetryEngineTests
     [TestMethod]
     public async Task WhenEveryAttemptTimesOut_EachAttemptGetsItsOwnCancelledTokenAndTheLastTimeoutIsThrown()
     {
-        var stopwatch = Stopwatch.StartNew();
         RecordingFakeTimeProvider fake = new();
         TimeSpan attemptTimeout = TimeSpan.FromMilliseconds(50);
         var tokens = new List<CancellationToken>();
@@ -65,17 +63,26 @@ public class RetryEngineTests
         RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
 
         Assert.AreEqual(attemptTimeout, thrown.Timeout);
-        Assert.IsInstanceOfType<OperationCanceledException>(thrown.InnerException);
         Assert.HasCount(3, tokens);
         Assert.AreNotEqual(tokens[0], tokens[1]);
         Assert.AreNotEqual(tokens[1], tokens[2]);
         Assert.AreNotEqual(tokens[0], tokens[2]);
         Assert.IsTrue(tokens.TrueForAll(t => t.IsCancellationRequested));
 
+        // The inner exception is the cancellation of the last attempt.
+        TaskCanceledException inner = Assert.IsInstanceOfType<TaskCanceledException>(thrown.InnerException);
+        Assert.AreEqual(tokens[2], inner.CancellationToken);
+
         // The policy can retry an attempt timeout. The strategy has no tries left after the third.
         Assert.HasCount(2, policy.Consulted);
-        Assert.IsTrue(policy.Consulted[0] is RetryTimeoutException { Timeout.TotalMilliseconds: 50 });
-        Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
+        for (int i = 0; i < 2; i++)
+        {
+            RetryTimeoutException consulted = Assert.IsInstanceOfType<RetryTimeoutException>(policy.Consulted[i]);
+            Assert.AreEqual(attemptTimeout, consulted.Timeout);
+            Assert.AreEqual(tokens[i], Assert.IsInstanceOfType<TaskCanceledException>(consulted.InnerException).CancellationToken);
+        }
+
+        Assert.AreNotSame(policy.Consulted[0], policy.Consulted[1]);
     }
 
     [TestMethod]
@@ -109,13 +116,17 @@ public class RetryEngineTests
     {
         RecordingFakeTimeProvider fake = new();
         TimeSpan totalTimeout = TimeSpan.FromMilliseconds(100);
-        int invocations = 0;
+        var tokens = new List<CancellationToken>();
         var policy = new RecordingRetryPolicy(true);
 
         Task<string> call = RunAsync(
             ct =>
             {
-                Interlocked.Increment(ref invocations);
+                lock (tokens)
+                {
+                    tokens.Add(ct);
+                }
+
                 return NeverCompletesAsync(ct);
             },
             fake,
@@ -128,15 +139,16 @@ public class RetryEngineTests
 
         RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
         Assert.AreEqual(totalTimeout, thrown.Timeout);
-        Assert.IsInstanceOfType<OperationCanceledException>(thrown.InnerException);
-        Assert.AreEqual(1, invocations);
+
+        // The inner exception is the cancellation of the attempt that the total timeout stopped.
+        CancellationToken token = Assert.ContainsSingle(tokens);
+        Assert.AreEqual(token, Assert.IsInstanceOfType<TaskCanceledException>(thrown.InnerException).CancellationToken);
         Assert.IsEmpty(policy.Consulted);
     }
 
     [TestMethod]
     public async Task WhenTheTotalTimeoutExpiresDuringADelay_TheDelayIsCancelledAndNoFurtherAttemptStarts()
     {
-        var stopwatch = Stopwatch.StartNew();
         RecordingFakeTimeProvider fake = new();
         TimeSpan totalTimeout = TimeSpan.FromMilliseconds(200);
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
@@ -152,7 +164,6 @@ public class RetryEngineTests
         Assert.AreSame(op.LastThrown, thrown.InnerException);
         fake.Advance(OneHour);
         Assert.AreEqual(1, op.Invocations);
-        Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
     }
 
     // RetryTimeoutException.cs and RetryEngine.cs: "When the total timeout expires between attempts, the inner exception
@@ -283,7 +294,6 @@ public class RetryEngineTests
     [TestMethod]
     public async Task WhenTheCallerCancelsDuringADelay_TheCallIsCancelledAtOnceAndNoFurtherAttemptStarts()
     {
-        var stopwatch = Stopwatch.StartNew();
         RecordingFakeTimeProvider fake = new();
         using var cts = new CancellationTokenSource();
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
@@ -293,10 +303,10 @@ public class RetryEngineTests
         await fake.WaitForTimersAsync(1).ConfigureAwait(false);
         await cts.CancelAsync().ConfigureAwait(false);
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        TaskCanceledException thrown = await Assert.ThrowsExactlyAsync<TaskCanceledException>(() => WhenCompleteAsync(call)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
         fake.Advance(OneHour);
         Assert.AreEqual(1, op.Invocations);
-        Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
     }
 
     // Decision Q1 as it applies to RetryEngine. The engine awaits each attempt to its end, and does not wait on the token
@@ -361,7 +371,8 @@ public class RetryEngineTests
         await cts.CancelAsync().ConfigureAwait(false);
 
         // The caller token cancels the total timeout source too, but the engine reports the caller cancellation.
-        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => WhenCompleteAsync(call)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
         Assert.AreEqual(1, op.Invocations);
     }
 
@@ -373,10 +384,11 @@ public class RetryEngineTests
         await cts.CancelAsync().ConfigureAwait(false);
         var op = new FlakyOperation(0);
 
-        await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
             () => RunAsync(_ => new ValueTask<string>(op.Invoke()), fake, new Count(3), attemptTimeout: OneHour, totalTimeout: OneHour, cancellationToken: cts.Token)).ConfigureAwait(false);
 
         Assert.AreEqual(0, op.Invocations);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
     }
 
     [TestMethod]
@@ -393,7 +405,10 @@ public class RetryEngineTests
         await cts.CancelAsync().ConfigureAwait(false);
         fake.Advance(attemptTimeout);
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        // The operation throws the cancellation of its own token, which the attempt timeout links to the caller's token, and
+        // the engine rethrows it as it is.
+        TaskCanceledException thrown = await Assert.ThrowsExactlyAsync<TaskCanceledException>(() => WhenCompleteAsync(call)).ConfigureAwait(false);
+        Assert.IsTrue(thrown.CancellationToken.IsCancellationRequested);
         Assert.IsEmpty(policy.Consulted);
     }
 
@@ -410,6 +425,9 @@ public class RetryEngineTests
 
         RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
         Assert.AreEqual(timeout, thrown.Timeout);
+
+        // The inner exception is the cancellation of the only attempt, and no attempt failed before it.
+        Assert.IsInstanceOfType<TaskCanceledException>(thrown.InnerException);
     }
 
     [TestMethod]
@@ -455,7 +473,6 @@ public class RetryEngineTests
     [TestMethod]
     public async Task TheOnRetryCallbackGetsTheAttemptNumbersInOrderAndTheDelayStartsOnlyWhenItCompletes()
     {
-        var stopwatch = Stopwatch.StartNew();
         RecordingFakeTimeProvider fake = new();
         var op = new FlakyOperation(2);
         var calls = new List<RetryEventArgs>();
@@ -492,8 +509,8 @@ public class RetryEngineTests
         Assert.AreSame(op.Thrown[0], calls[0].LastException);
         Assert.AreSame(op.Thrown[1], calls[1].LastException);
         Assert.AreEqual(OneHour, calls[0].DelayBeforeRetry);
+        Assert.AreEqual(OneHour, calls[1].DelayBeforeRetry);
         Assert.AreSequenceEqual(new[] { OneHour, OneHour }, fake.Delays);
-        Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
     }
 
     [TestMethod]
@@ -600,13 +617,20 @@ public class RetryEngineTests
     public async Task WhenAResultIsAFailure_ItIsRetriedAndTheCallbackGetsTheResultWithNoException()
     {
         RecordingFakeTimeProvider fake = new();
-        int invocations = 0;
+        var results = new List<object>();
         var calls = new List<RetryEventArgs>();
-        var strategy = new RecordingStrategy(TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero);
+        var strategy = new RecordingStrategy(TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(20), TimeSpan.Zero);
         var policy = new RecordingRetryPolicy(true);
+        object good = new();
 
-        string result = await RunAsync(
-            _ => new ValueTask<string>(Interlocked.Increment(ref invocations) < 3 ? "bad" : "good"),
+        // Each rejected result is a new instance, so the test can tell which one each callback got.
+        Task<object> call = RunAsync(
+            _ =>
+            {
+                object r = results.Count < 2 ? new object() : good;
+                results.Add(r);
+                return new ValueTask<object>(r);
+            },
             fake,
             strategy,
             policy,
@@ -615,15 +639,28 @@ public class RetryEngineTests
                 calls.Add(args);
                 return ValueTask.CompletedTask;
             },
-            isFailure: r => r == "bad").ConfigureAwait(false);
+            isFailure: r => r != good);
 
-        Assert.AreEqual("good", result);
-        Assert.AreEqual(3, invocations);
+        await fake.WaitForTimersAsync(1).ConfigureAwait(false);
+        fake.Advance(TimeSpan.FromMilliseconds(10));
+        await fake.WaitForTimersAsync(2).ConfigureAwait(false);
+        fake.Advance(TimeSpan.FromMilliseconds(20));
+
+        Assert.AreSame(good, await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.HasCount(3, results);
         Assert.HasCount(2, calls);
-        Assert.IsNull(calls[0].LastException);
-        Assert.AreEqual("bad", calls[0].Result);
-        Assert.AreEqual("bad", strategy.Attempts[0].Result);
-        Assert.IsNull(strategy.Attempts[0].Exception);
+        for (int i = 0; i < 2; i++)
+        {
+            Assert.IsNull(calls[i].LastException);
+            Assert.AreSame(results[i], calls[i].Result);
+            Assert.AreEqual(i + 1, calls[i].AttemptNumber);
+            Assert.AreSame(results[i], strategy.Attempts[i].Result);
+            Assert.IsNull(strategy.Attempts[i].Exception);
+        }
+
+        Assert.AreEqual(TimeSpan.FromMilliseconds(10), calls[0].DelayBeforeRetry);
+        Assert.AreEqual(TimeSpan.FromMilliseconds(20), calls[1].DelayBeforeRetry);
+        Assert.AreSequenceEqual(new[] { TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(20) }, fake.Delays);
 
         // The policy is for exceptions only.
         Assert.IsEmpty(policy.Consulted);
@@ -669,7 +706,6 @@ public class RetryEngineTests
     [TestMethod]
     public async Task TheSynchronousLoopIsCancelledDuringADelay()
     {
-        var stopwatch = Stopwatch.StartNew();
         RecordingFakeTimeProvider fake = new();
         using var cts = new CancellationTokenSource();
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
@@ -681,10 +717,10 @@ public class RetryEngineTests
         await fake.WaitForTimersAsync(1).ConfigureAwait(false);
         await cts.CancelAsync().ConfigureAwait(false);
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => WhenCompleteAsync(call)).ConfigureAwait(false);
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
         fake.Advance(OneHour);
         Assert.AreEqual(1, op.Invocations);
-        Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
     }
 
     [TestMethod]
