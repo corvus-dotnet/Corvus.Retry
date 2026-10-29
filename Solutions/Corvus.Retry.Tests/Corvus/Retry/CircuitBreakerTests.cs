@@ -30,9 +30,12 @@ public class CircuitBreakerTests
 {
     private static readonly TimeSpan WaitLimit = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan BreakDuration = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ExitTimeout = TimeSpan.FromSeconds(1);
 
     private readonly FakeTimeProvider fake = new();
     private readonly List<CircuitStateChange> changes = [];
+    private readonly ArithmeticException exitPolicyFailure = new("The policy failed");
+    private readonly InvalidCastException resultCheckFailure = new("The result check failed");
 
     private IReadOnlyList<CircuitStateChange> Changes
     {
@@ -594,6 +597,76 @@ public class CircuitBreakerTests
     }
 
     [TestMethod]
+    [DataRow(CircuitBreakerExit.Success, 1, 0)]
+    [DataRow(CircuitBreakerExit.Failure, 1, 1)]
+    [DataRow(CircuitBreakerExit.ResultRejected, 1, 1)]
+    [DataRow(CircuitBreakerExit.ResultCheckThrows, 0, 0)]
+    [DataRow(CircuitBreakerExit.AttemptTimeout, 1, 1)]
+    [DataRow(CircuitBreakerExit.TotalTimeout, 1, 1)]
+    [DataRow(CircuitBreakerExit.PolicyRefuses, 1, 0)]
+    [DataRow(CircuitBreakerExit.PolicyThrows, 0, 0)]
+    [DataRow(CircuitBreakerExit.OperationCancelsItself, 1, 1)]
+    [DataRow(CircuitBreakerExit.CallerCancels, 0, 0)]
+    public async Task EachWayThatACallEndsInAClosedCircuit_IsCountedAsDocumented(CircuitBreakerExit exit, int calls, int failures)
+    {
+        CircuitBreaker breaker = this.NewExitBreaker();
+
+        await this.EndPermittedCallAsync(breaker, exit).ConfigureAwait(false);
+
+        Assert.AreEqual(CircuitState.Closed, breaker.State);
+        Assert.AreEqual((calls, failures), breaker.GetCounts());
+        Assert.IsEmpty(this.Changes);
+
+        // The call holds nothing, so the next call goes through and is counted.
+        await SucceedAsync(this.NewPipeline(breaker), 1).ConfigureAwait(false);
+        Assert.AreEqual((calls + 1, failures), breaker.GetCounts());
+    }
+
+    [TestMethod]
+    [DataRow(CircuitBreakerExit.Success, CircuitState.Closed)]
+    [DataRow(CircuitBreakerExit.Failure, CircuitState.Open)]
+    [DataRow(CircuitBreakerExit.ResultRejected, CircuitState.Open)]
+    [DataRow(CircuitBreakerExit.ResultCheckThrows, CircuitState.HalfOpen)]
+    [DataRow(CircuitBreakerExit.AttemptTimeout, CircuitState.Open)]
+    [DataRow(CircuitBreakerExit.TotalTimeout, CircuitState.Open)]
+    [DataRow(CircuitBreakerExit.PolicyRefuses, CircuitState.Closed)]
+    [DataRow(CircuitBreakerExit.PolicyThrows, CircuitState.HalfOpen)]
+    [DataRow(CircuitBreakerExit.OperationCancelsItself, CircuitState.Open)]
+    [DataRow(CircuitBreakerExit.CallerCancels, CircuitState.HalfOpen)]
+    public async Task EachWayThatTheTestCallEnds_DecidesTheStateAsDocumented_AndReleasesTheTestCall(CircuitBreakerExit exit, CircuitState expected)
+    {
+        CircuitBreaker breaker = this.NewExitBreaker();
+        OpenDirectly(breaker);
+        this.fake.Advance(BreakDuration);
+
+        Exception? thrown = await this.EndPermittedCallAsync(breaker, exit).ConfigureAwait(false);
+
+        Assert.AreEqual(expected, breaker.State);
+        List<CircuitStateChange> expectedChanges = [new(CircuitState.Open, CircuitState.HalfOpen, null)];
+        if (expected != CircuitState.HalfOpen)
+        {
+            // The change has the exception of a failure. A rejected result is a failure with no exception.
+            expectedChanges.Add(new(CircuitState.HalfOpen, expected, expected == CircuitState.Open ? thrown : null));
+        }
+
+        Assert.AreSequenceEqual(expectedChanges, this.Changes);
+
+        ReliabilityPipeline next = this.NewPipeline(breaker);
+        if (expected == CircuitState.Open)
+        {
+            // A failure of the test call starts a full new break.
+            BrokenCircuitException rejected = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
+                () => next.ExecuteAsync(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+            Assert.AreEqual(BreakDuration, rejected.RetryAfter);
+            this.fake.Advance(BreakDuration);
+        }
+
+        // Nothing holds the test call, so the next call goes through: as the test call if the circuit is not closed.
+        await SucceedAsync(next, 1).ConfigureAwait(false);
+        Assert.AreEqual(CircuitState.Closed, breaker.State);
+    }
+
+    [TestMethod]
     public async Task WhenThePolicyOfTheBreakerThrowsDuringTheTestCall_TheCallThrowsThatExceptionAndTheNextCallMakesTheTest()
     {
         var policyFailure = new ArithmeticException("The policy failed");
@@ -898,6 +971,12 @@ public class CircuitBreakerTests
         return "never";
     }
 
+    private static async ValueTask<int> NeverCompletesInt32Async(CancellationToken cancellationToken)
+    {
+        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+        return 0;
+    }
+
     private CircuitBreaker NewBreaker(Func<CircuitBreakerOptions, CircuitBreakerOptions>? configure = null)
     {
         CircuitBreakerOptions options = new()
@@ -943,6 +1022,81 @@ public class CircuitBreakerTests
     {
         this.Record(change);
         throw exception;
+    }
+
+    // A breaker whose policy refuses an ArgumentException, throws for a FormatException, and accepts other exceptions.
+    private CircuitBreaker NewExitBreaker()
+    {
+        return this.NewBreaker(o => o with
+        {
+            Policy = RetryPolicies.FromPredicate(ex => ex switch
+            {
+                FormatException => throw this.exitPolicyFailure,
+                ArgumentException => false,
+                _ => true,
+            }),
+        });
+    }
+
+    // Makes one call that the breaker permits, and ends it in the way that the exit names. Returns the exception that
+    // the caller gets, or null when the caller gets a result.
+    private async Task<Exception?> EndPermittedCallAsync(CircuitBreaker breaker, CircuitBreakerExit exit)
+    {
+        const int ResultThatTheCheckThrowsFor = -2;
+        var pipeline = new ReliabilityPipeline<int>(new ReliabilityPipelineOptions<int>
+        {
+            Strategy = new DoNotRetry(),
+            ShouldRetryResult = r => r == ResultThatTheCheckThrowsFor ? throw this.resultCheckFailure : r < 0,
+            AttemptTimeout = exit == CircuitBreakerExit.AttemptTimeout ? ExitTimeout : null,
+            TotalTimeout = exit == CircuitBreakerExit.TotalTimeout ? ExitTimeout : null,
+            CircuitBreaker = breaker,
+            TimeProvider = this.fake,
+        });
+
+        // The caller's token is live, so that a token of the operation is never the caller's.
+        using CancellationTokenSource caller = new();
+        switch (exit)
+        {
+            case CircuitBreakerExit.Success:
+            case CircuitBreakerExit.ResultRejected:
+                int result = exit == CircuitBreakerExit.Success ? 1 : -1;
+                Assert.AreEqual(result, await pipeline.ExecuteAsync(_ => new ValueTask<int>(result), caller.Token).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false));
+                return null;
+
+            case CircuitBreakerExit.ResultCheckThrows:
+                InvalidCastException checkFailure = await Assert.ThrowsExactlyAsync<InvalidCastException>(
+                    () => pipeline.ExecuteAsync(_ => new ValueTask<int>(ResultThatTheCheckThrowsFor), caller.Token).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+                Assert.AreSame(this.resultCheckFailure, checkFailure);
+                return checkFailure;
+
+            case CircuitBreakerExit.AttemptTimeout:
+            case CircuitBreakerExit.TotalTimeout:
+                Task<int> timedCall = pipeline.ExecuteAsync(NeverCompletesInt32Async, caller.Token).AsTask();
+                this.fake.Advance(ExitTimeout);
+                RetryTimeoutException timeout = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => timedCall.WaitAsync(WaitLimit)).ConfigureAwait(false);
+                Assert.AreEqual(ExitTimeout, timeout.Timeout);
+                return timeout;
+
+            case CircuitBreakerExit.CallerCancels:
+                Task<int> cancelledCall = pipeline.ExecuteAsync(NeverCompletesInt32Async, caller.Token).AsTask();
+                await caller.CancelAsync().ConfigureAwait(false);
+                TaskCanceledException cancelled = await Assert.ThrowsExactlyAsync<TaskCanceledException>(() => cancelledCall.WaitAsync(WaitLimit)).ConfigureAwait(false);
+                Assert.AreEqual(caller.Token, cancelled.CancellationToken);
+                return cancelled;
+
+            default:
+                Exception failure = exit switch
+                {
+                    CircuitBreakerExit.Failure => new InvalidOperationException("Failure"),
+                    CircuitBreakerExit.PolicyRefuses => new ArgumentException("A failure that the policy refuses"),
+                    CircuitBreakerExit.PolicyThrows => new FormatException("A failure that the policy throws for"),
+                    _ => new TaskCanceledException("The operation cancelled itself", null, new CancellationToken(canceled: true)),
+                };
+                Exception thrown = await Assert.ThrowsAsync<Exception>(
+                    () => pipeline.ExecuteAsync(_ => throw failure, caller.Token).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+                Assert.AreSame(exit == CircuitBreakerExit.PolicyThrows ? this.exitPolicyFailure : failure, thrown);
+                return thrown;
+        }
     }
 
     /// <summary>
