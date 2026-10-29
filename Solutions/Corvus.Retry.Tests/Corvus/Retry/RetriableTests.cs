@@ -379,6 +379,39 @@ public class RetriableTests
     }
 
     [TestMethod]
+    [DataRow(RetryShape.AsyncActionWithToken, false)]
+    [DataRow(RetryShape.AsyncFunctionWithToken, false)]
+    [DataRow(RetryShape.AsyncActionWithToken, true)]
+    [DataRow(RetryShape.AsyncFunctionWithToken, true)]
+    public async Task EachAttemptOfATokenShapeReceivesATokenThatTheCallersTokenCancels(RetryShape shape, bool withOnRetry)
+    {
+        using var cts = new CancellationTokenSource();
+        var received = new List<CancellationToken>();
+        int attempts = 0;
+
+        await RetriableDriver.RetryAsync(
+            shape,
+            ct =>
+            {
+                lock (received)
+                {
+                    received.Add(ct);
+                }
+
+                return Interlocked.Increment(ref attempts) < 3 ? throw new InvalidOperationException("Failed") : "done";
+            },
+            cts.Token,
+            new Count(5),
+            new AnyExceptionPolicy(),
+            withOnRetry ? _ => ValueTask.CompletedTask : null).ConfigureAwait(false);
+
+        Assert.HasCount(3, received);
+        Assert.IsTrue(received.TrueForAll(t => t.CanBeCanceled && !t.IsCancellationRequested));
+        await cts.CancelAsync().ConfigureAwait(false);
+        Assert.IsTrue(received.TrueForAll(t => t.IsCancellationRequested));
+    }
+
+    [TestMethod]
     [DataRow(RetryShape.AsyncActionWithToken)]
     [DataRow(RetryShape.AsyncFunctionWithToken)]
     public async Task TheTokenPassedToTheOperationIsCancelledWhenTheCallerCancels(RetryShape shape)
