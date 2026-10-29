@@ -55,6 +55,18 @@ public class RetryTaskBenchmarks
         return RetryTask<int>.Factory.StartNew(this.Operation, new Count(MaxTries), this.policy);
     }
 
+    /// <summary>
+    /// Retries through the delay continuation. A one-tick delay rounds down to no wait, so this measures the
+    /// <see cref="Task.Delay(TimeSpan, TimeProvider, System.Threading.CancellationToken)"/> machinery, not time.
+    /// </summary>
+    /// <returns>A task which completes when the operation is complete.</returns>
+    [Benchmark]
+    public Task<int> RetryTaskFactory_WithOneTickDelay()
+    {
+        this.remainingFailures = this.Failures;
+        return RetryTask<int>.Factory.StartNew(this.Operation, new Linear(TimeSpan.FromTicks(1), MaxTries), this.policy);
+    }
+
     private int HandWrittenLoop()
     {
         for (int tries = 1; ; tries++)

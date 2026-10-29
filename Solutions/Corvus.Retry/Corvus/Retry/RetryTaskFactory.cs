@@ -511,23 +511,18 @@ public class RetryTaskFactory
     /// that the parent sees the outcome of the operation rather than the failures of tries that were retried.
     /// </para>
     /// <para>
+    /// No thread is blocked while the operation is retried. Retry decisions run on the thread pool, each delay is a
+    /// <see cref="Task.Delay(TimeSpan, TimeProvider, CancellationToken)"/> on <see cref="RetryDefaults.TimeProvider"/>
+    /// with a continuation, and each retry is queued to <paramref name="scheduler"/>.
+    /// </para>
+    /// <para>
     /// This is used by both the <see cref="RetryTaskFactory"/> and the <see cref="RetryTaskFactory{T}"/>.
     /// </para>
     /// </remarks>
     internal static Task<TResult> Start<TResult>(Task firstTry, Func<Task> createTask, Func<Task, TResult> getResult, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy, IRetryPolicy policy)
     {
         var operation = new RetryOperation<TResult>(createTask, getResult, cancellationToken, taskCreationOptions, scheduler, strategy, policy);
-
-        // Retry decisions and delays run on the thread pool, not the caller's scheduler, so that waiting for a
-        // delay does not block (for example) a UI thread. Each retry itself runs on the caller's scheduler.
-        // The operation is passed as the continuation's state, so the continuation needs no closure.
-        firstTry.ContinueWith(
-            static (t, state) => ((RetryOperation<TResult>)state!).Complete(t),
-            operation,
-            CancellationToken.None,
-            TaskContinuationOptions.None,
-            TaskScheduler.Default);
-
+        operation.ExamineWhenComplete(firstTry);
         return operation.Task;
     }
 
@@ -542,66 +537,33 @@ public class RetryTaskFactory
     }
 
     /// <summary>
-    /// Retries a failed task for as long as the strategy and policy allow, and returns the last task run.
-    /// </summary>
-    /// <exception cref="OperationCanceledException">
-    /// The operation would have been retried, but cancellation was requested.
-    /// </exception>
-    private static Task Retry(Task task, Func<Task> createTask, CancellationToken cancellationToken, TaskScheduler scheduler, IRetryStrategy strategy, IRetryPolicy policy)
-    {
-        while (task.Exception is AggregateException exception)
-        {
-            TimeSpan delay = strategy.PrepareToRetry(exception);
-
-            if (!(strategy.CanRetry && policy.CanRetryAll(exception)))
-            {
-                break;
-            }
-
-            // Check before raising Retrying for a retry that will not run, and stop waiting as soon as cancellation
-            // is requested rather than at the end of the delay.
-            cancellationToken.ThrowIfCancellationRequested();
-
-            strategy.OnRetrying(new RetryEventArgs(exception, delay));
-
-            if (delay != TimeSpan.Zero)
-            {
-                RetryDelay.WaitAsync(delay, RetryDefaults.TimeProvider, CancellationToken.None).Wait(cancellationToken);
-            }
-
-            task = createTask();
-            try
-            {
-                // Run the retry inline if the scheduler allows it, otherwise queue it to the scheduler and wait.
-                // Unlike Wait(), this does not throw when the retry fails; its outcome is examined at the top of the
-                // loop.
-                task.RunSynchronously(scheduler);
-            }
-            catch (InvalidOperationException) when (task.IsCanceled)
-            {
-                // The cancellation token was signalled before the retry could start, so the task is already
-                // cancelled and cannot run.
-            }
-        }
-
-        return task;
-    }
-
-    /// <summary>
     /// An operation being retried by <see cref="Start{TResult}"/>, and the task that reports its outcome.
     /// </summary>
     /// <typeparam name="TResult">The type of the result of the operation.</typeparam>
     /// <remarks>
-    /// This holds everything the retry continuation needs, so that the continuation can be a static delegate.
+    /// <para>
+    /// This holds everything the continuations need, so that each continuation can be a static delegate.
+    /// </para>
+    /// <para>
+    /// Retry decisions run on the thread pool; a delay is a
+    /// <see cref="Task.Delay(TimeSpan, TimeProvider, CancellationToken)"/> on <see cref="TimeProvider"/> with a
+    /// continuation; no thread is blocked. Only one try runs at a time, and each step starts after the previous one
+    /// has ended, so the strategy is never used concurrently.
+    /// </para>
     /// </remarks>
     private sealed class RetryOperation<TResult> : TaskCompletionSource<TResult>
     {
+        // The operation is passed as each continuation's state, so the continuations need no closure.
+        private static readonly Action<Task, object?> OnTryCompleted = static (t, state) => ((RetryOperation<TResult>)state!).Complete(t);
+        private static readonly Action<Task, object?> OnDelayCompleted = static (t, state) => ((RetryOperation<TResult>)state!).AfterDelay(t);
+
         private readonly Func<Task> createTask;
         private readonly Func<Task, TResult> getResult;
         private readonly CancellationToken cancellationToken;
         private readonly TaskScheduler scheduler;
         private readonly IRetryStrategy strategy;
         private readonly IRetryPolicy policy;
+        private readonly TimeProvider timeProvider = RetryDefaults.TimeProvider;
 
         public RetryOperation(Func<Task> createTask, Func<Task, TResult> getResult, CancellationToken cancellationToken, TaskCreationOptions taskCreationOptions, TaskScheduler scheduler, IRetryStrategy strategy, IRetryPolicy policy)
             : base(taskCreationOptions & TaskCreationOptions.AttachedToParent)
@@ -614,12 +576,23 @@ public class RetryTaskFactory
             this.policy = policy;
         }
 
-        public void Complete(Task task)
+        /// <summary>
+        /// Examines the outcome of a try when it completes.
+        /// </summary>
+        /// <param name="task">The task running the try.</param>
+        /// <remarks>
+        /// The examination runs on the thread pool, not the caller's scheduler, so that it does not wait behind (or
+        /// hold up) other work on that scheduler, such as a UI thread.
+        /// </remarks>
+        public void ExamineWhenComplete(Task task)
+        {
+            task.ContinueWith(OnTryCompleted, this, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+        }
+
+        private void Complete(Task task)
         {
             try
             {
-                task = Retry(task, this.createTask, this.cancellationToken, this.scheduler, this.strategy, this.policy);
-
                 if (task.IsCanceled)
                 {
                     // A try acknowledged cancellation, or the token was cancelled before it could start.
@@ -627,10 +600,7 @@ public class RetryTaskFactory
                 }
                 else if (task.Exception is AggregateException exception)
                 {
-                    // Report every failure the strategy recorded. If it recorded none (for example DoNotRetry),
-                    // report the task's own exception, so that the failure is not lost.
-                    AggregateException recorded = this.strategy.Exception;
-                    this.TrySetException(recorded != null && recorded.InnerExceptions.Count > 0 ? recorded : exception);
+                    this.RetryOrFail(exception);
                 }
                 else
                 {
@@ -645,6 +615,93 @@ public class RetryTaskFactory
             {
                 // The strategy or policy failed.
                 this.TrySetException(ex);
+            }
+        }
+
+        private void RetryOrFail(AggregateException exception)
+        {
+            TimeSpan delay = this.strategy.PrepareToRetry(exception);
+
+            if (!(this.strategy.CanRetry && this.policy.CanRetryAll(exception)))
+            {
+                // Report every failure the strategy recorded. If it recorded none (for example DoNotRetry), report
+                // the task's own exception, so that the failure is not lost.
+                AggregateException recorded = this.strategy.Exception;
+                this.TrySetException(recorded != null && recorded.InnerExceptions.Count > 0 ? recorded : exception);
+                return;
+            }
+
+            // Check before raising Retrying for a retry that will not run.
+            if (this.cancellationToken.IsCancellationRequested)
+            {
+                this.TrySetCanceled(this.cancellationToken);
+                return;
+            }
+
+            this.strategy.OnRetrying(new RetryEventArgs(exception, delay));
+
+            if (delay <= TimeSpan.Zero)
+            {
+                this.StartNextTry();
+                return;
+            }
+
+            // The delay ends early if cancellation is requested. Its continuation only queues the next try, so it is
+            // cheap enough to run on the thread that completes the delay.
+            RetryDelay.WaitAsync(delay, this.timeProvider, this.cancellationToken).ContinueWith(
+                OnDelayCompleted,
+                this,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+
+        private void AfterDelay(Task delay)
+        {
+            try
+            {
+                if (delay.IsCanceled || this.cancellationToken.IsCancellationRequested)
+                {
+                    this.TrySetCanceled(this.cancellationToken);
+                }
+                else
+                {
+                    this.StartNextTry();
+                }
+            }
+            catch (Exception ex)
+            {
+                // Nothing observes this continuation's task, so a failure must fault the operation instead.
+                this.TrySetException(ex);
+            }
+        }
+
+        private void StartNextTry()
+        {
+            Task next = this.createTask();
+            if (next.IsCanceled)
+            {
+                // A task created with a cancelled token is cancelled before it starts.
+                this.TrySetCanceled(this.cancellationToken);
+                return;
+            }
+
+            // Attach the continuation before the try starts, so that the try cannot complete before it is attached.
+            this.ExamineWhenComplete(next);
+
+            try
+            {
+                next.Start(this.scheduler);
+            }
+            catch (InvalidOperationException) when (next.IsCanceled)
+            {
+                // The token was cancelled after the check above, but before the retry could start.
+                this.TrySetCanceled(this.cancellationToken);
+            }
+            catch (TaskSchedulerException)
+            {
+                // The scheduler could not queue the retry, so the retry's task is faulted with this exception. Its
+                // continuation examines that failure like any other, so there is nothing more to do here.
             }
         }
     }

@@ -6,6 +6,7 @@ namespace Corvus.Retry;
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Corvus.Retry.Policies;
@@ -74,6 +75,64 @@ public class RetryTaskFactoryDelayTests
         Assert.IsTrue(task.IsCanceled);
         Assert.AreEqual(cancellation.Token, thrown.CancellationToken);
         Assert.AreEqual(1, operation.Invocations);
+    }
+
+    [TestMethod]
+    public async Task WhileARetryWaitsForItsDelay_TheCallersSchedulerIsFree()
+    {
+        RecordingFakeTimeProvider fake = TimeProviderFixture.Install(new RecordingFakeTimeProvider());
+        TaskScheduler scheduler = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
+        FlakyOperation operation = new(2);
+        var stopwatch = Stopwatch.StartNew();
+
+        Task task = new RetryTaskFactory().StartNew(() => operation.Invoke(), CancellationToken.None, TaskCreationOptions.None, scheduler, new Linear(TimeSpan.FromHours(1), 3), new AnyExceptionPolicy());
+
+        await fake.WaitForTimersAsync(1).ConfigureAwait(false);
+
+        // The scheduler runs one task at a time, so this runs only if no thread holds it during the delay.
+        Task probe = Task.Factory.StartNew(() => { }, CancellationToken.None, TaskCreationOptions.None, scheduler);
+        await probe.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+
+        fake.Advance(TimeSpan.FromHours(1));
+        await fake.WaitForTimersAsync(2).ConfigureAwait(false);
+        fake.Advance(TimeSpan.FromHours(1));
+
+        await task.WaitAsync(Timeout).ConfigureAwait(false);
+        Assert.AreEqual(3, operation.Invocations);
+        Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
+    }
+
+    [TestMethod]
+    public async Task EveryTryRunsOnTheCallersSchedulerAlsoAfterADelay()
+    {
+        RecordingFakeTimeProvider fake = TimeProviderFixture.Install(new RecordingFakeTimeProvider());
+        TaskScheduler scheduler = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
+        List<TaskScheduler> schedulers = new();
+        FlakyOperation operation = new(2);
+
+        Task<string> task = new RetryTaskFactory<string>().StartNew(
+            () =>
+            {
+                lock (schedulers)
+                {
+                    schedulers.Add(TaskScheduler.Current);
+                }
+
+                return operation.Invoke();
+            },
+            CancellationToken.None,
+            TaskCreationOptions.None,
+            scheduler,
+            new Linear(TimeSpan.FromHours(1), 3),
+            new AnyExceptionPolicy());
+
+        await fake.WaitForTimersAsync(1).ConfigureAwait(false);
+        fake.Advance(TimeSpan.FromHours(1));
+        await fake.WaitForTimersAsync(2).ConfigureAwait(false);
+        fake.Advance(TimeSpan.FromHours(1));
+
+        Assert.AreEqual("attempt-3", await task.WaitAsync(Timeout).ConfigureAwait(false));
+        Assert.AreSequenceEqual(new[] { scheduler, scheduler, scheduler }, schedulers);
     }
 
     [TestMethod]
