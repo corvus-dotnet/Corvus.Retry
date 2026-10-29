@@ -7,7 +7,6 @@ namespace Corvus.Retry;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using Corvus.Retry.Async;
 using Corvus.Retry.Policies;
 using Corvus.Retry.Strategies;
 
@@ -567,7 +566,7 @@ public class RetryTaskFactory
 
             if (delay != TimeSpan.Zero)
             {
-                SleepService.Instance.SleepAsync(delay).Wait(cancellationToken);
+                RetryDelay.WaitAsync(delay, RetryDefaults.TimeProvider, CancellationToken.None).Wait(cancellationToken);
             }
 
             task = createTask();

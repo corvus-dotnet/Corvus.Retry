@@ -16,6 +16,10 @@
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
   </ItemGroup>
 
+  <ItemGroup Label="Testing">
+    <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.11.0" />
+  </ItemGroup>
+
   <!-- Testing: MSTest.Sdk (pinned in global.json "msbuild-sdks") injects the PackageVersion items for MSTest,
        Microsoft.Testing.Platform.* and Microsoft.Testing.Extensions.*; declaring them here causes NU1506. -->
 </Project>

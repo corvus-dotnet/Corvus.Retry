@@ -5,7 +5,6 @@
 namespace Corvus.Retry;
 
 using System.Threading.Tasks;
-using Corvus.Retry.Async;
 using Corvus.Retry.Policies;
 
 /// <summary>

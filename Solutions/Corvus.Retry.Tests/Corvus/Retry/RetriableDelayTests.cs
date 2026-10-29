@@ -7,72 +7,47 @@ namespace Corvus.Retry;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Linq;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
-using Corvus.Retry.Async;
 using Corvus.Retry.Policies;
 using Corvus.Retry.Strategies;
+using Corvus.Retry.Time;
+using Microsoft.Extensions.Time.Testing;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
-/// How <see cref="Retriable"/> waits between retries. The sleep service is process-wide, so these tests must not run in parallel.
+/// How <see cref="Retriable"/> waits between retries: every delay goes through <see cref="RetryDefaults.TimeProvider"/>.
+/// That provider is process-wide, so these tests must not run in parallel.
 /// </summary>
 [TestClass]
 [DoNotParallelize]
 public class RetriableDelayTests
 {
-    private RecordingSleepService sleeps = null!;
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan OneHour = TimeSpan.FromHours(1);
+
+    private ImmediateTimeProvider time = null!;
 
     [TestInitialize]
-    public void Initialize() => this.sleeps = SleepServiceFixture.InstallRecording();
+    public void Initialize() => this.time = TimeProviderFixture.Install(new ImmediateTimeProvider());
 
     [TestCleanup]
-    public void Cleanup() => SleepServiceFixture.InstallForbidden();
+    public void Cleanup() => TimeProviderFixture.Reset();
 
     [TestMethod]
     [DataRow(RetryShape.Action)]
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
-    public async Task WhenTheStrategyIsCount_NoSleepIsRequested(RetryShape shape)
+    public async Task WhenTheStrategyIsCount_NoDelayIsRequested(RetryShape shape)
     {
         var op = new FlakyOperation(2);
 
         await RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, new Count(5), new AnyExceptionPolicy()).ConfigureAwait(false);
 
         Assert.AreEqual(3, op.Invocations);
-        Assert.IsEmpty(this.sleeps.Records);
-    }
-
-    [TestMethod]
-    [DataRow(RetryShape.Action)]
-    [DataRow(RetryShape.Function)]
-    public async Task SynchronousRetriesUseTheSynchronousSleep(RetryShape shape)
-    {
-        TimeSpan period = TimeSpan.FromMilliseconds(100);
-        var op = new FlakyOperation(3);
-
-        await RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, new Linear(period, 4), new AnyExceptionPolicy()).ConfigureAwait(false);
-
-        Assert.AreEqual(4, op.Invocations);
-        Assert.AreSequenceEqual(new[] { period, period, period }, this.sleeps.Delays);
-        Assert.IsTrue(this.sleeps.Records.All(r => !r.IsAsync), "Synchronous retries must block with Sleep, not SleepAsync.");
-    }
-
-    [TestMethod]
-    [DataRow(RetryShape.AsyncAction)]
-    [DataRow(RetryShape.AsyncFunction)]
-    public async Task AsynchronousRetriesUseTheAsynchronousSleep(RetryShape shape)
-    {
-        TimeSpan period = TimeSpan.FromMilliseconds(100);
-        var op = new FlakyOperation(3);
-
-        await RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, new Linear(period, 4), new AnyExceptionPolicy()).ConfigureAwait(false);
-
-        Assert.AreEqual(4, op.Invocations);
-        Assert.AreSequenceEqual(new[] { period, period, period }, this.sleeps.Delays);
-        Assert.IsTrue(this.sleeps.Records.All(r => r.IsAsync), "Asynchronous retries must await SleepAsync, not block with Sleep.");
+        Assert.IsEmpty(this.time.Delays);
     }
 
     [TestMethod]
@@ -80,10 +55,28 @@ public class RetriableDelayTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
-    public async Task TheOperationIsRetriedOnlyAfterTheSleep(RetryShape shape)
+    public async Task EveryRetryWaitsThroughTheInstalledTimeProvider(RetryShape shape)
+    {
+        // The synchronous loops use Thread.Sleep only with TimeProvider.System; with any other provider they wait for
+        // one of its timers, as the asynchronous loops do.
+        TimeSpan period = TimeSpan.FromMilliseconds(100);
+        var op = new FlakyOperation(3);
+
+        await RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, new Linear(period, 4), new AnyExceptionPolicy()).ConfigureAwait(false);
+
+        Assert.AreEqual(4, op.Invocations);
+        Assert.AreSequenceEqual(new[] { period, period, period }, this.time.Delays);
+    }
+
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    [DataRow(RetryShape.AsyncAction)]
+    [DataRow(RetryShape.AsyncFunction)]
+    public async Task TheOperationIsRetriedOnlyAfterTheDelay(RetryShape shape)
     {
         var log = new ConcurrentQueue<string>();
-        this.sleeps.OnSleep = _ => log.Enqueue("sleep");
+        this.time.OnDelay = _ => log.Enqueue("delay");
         var op = new FlakyOperation(2);
 
         await RetriableDriver.RetryAsync(
@@ -97,7 +90,7 @@ public class RetriableDelayTests
             new Linear(TimeSpan.FromMilliseconds(100), 5),
             new AnyExceptionPolicy()).ConfigureAwait(false);
 
-        Assert.AreSequenceEqual(new[] { "try", "sleep", "try", "sleep", "try" }, log.ToArray());
+        Assert.AreSequenceEqual(new[] { "try", "delay", "try", "delay", "try" }, log.ToArray());
     }
 
     [TestMethod]
@@ -113,7 +106,7 @@ public class RetriableDelayTests
             () => RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, new Incremental(4, TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(50)), new AnyExceptionPolicy())).ConfigureAwait(false);
 
         Assert.AreEqual(4, op.Invocations);
-        Assert.AreSequenceEqual(Milliseconds(100, 150, 200), this.sleeps.Delays);
+        Assert.AreSequenceEqual(Milliseconds(100, 150, 200), this.time.Delays);
     }
 
     [TestMethod]
@@ -129,7 +122,7 @@ public class RetriableDelayTests
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(
             () => RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, strategy, new AnyExceptionPolicy())).ConfigureAwait(false);
 
-        IReadOnlyList<TimeSpan> delays = this.sleeps.Delays;
+        IReadOnlyList<TimeSpan> delays = this.time.Delays;
         Assert.HasCount(3, delays);
         Assert.IsGreaterThanOrEqualTo(strategy.MinBackoff, delays[0]);
         Assert.IsGreaterThan(delays[0], delays[1]);
@@ -141,7 +134,7 @@ public class RetriableDelayTests
     [DataRow(RetryShape.Function)]
     [DataRow(RetryShape.AsyncAction)]
     [DataRow(RetryShape.AsyncFunction)]
-    public async Task WhenTheRetryIsAbandoned_NoSleepIsRequestedForTheFinalFailure(RetryShape shape)
+    public async Task WhenTheRetryIsAbandoned_NoDelayIsRequestedForTheFinalFailure(RetryShape shape)
     {
         TimeSpan period = TimeSpan.FromMilliseconds(100);
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
@@ -150,7 +143,64 @@ public class RetriableDelayTests
             () => RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, new Linear(period, 2), new AnyExceptionPolicy())).ConfigureAwait(false);
 
         Assert.AreEqual(2, op.Invocations);
-        Assert.AreEqual(period, Assert.ContainsSingle(this.sleeps.Delays));
+        Assert.AreEqual(period, Assert.ContainsSingle(this.time.Delays));
+    }
+
+    [TestMethod]
+    [DataRow(RetryShape.AsyncAction)]
+    [DataRow(RetryShape.AsyncFunction)]
+    public async Task WithAFakeTimeProvider_AnAsynchronousRetryStartsOnlyWhenTheDelayHasElapsed(RetryShape shape)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        FakeTimeProvider fake = TimeProviderFixture.Install(new FakeTimeProvider());
+        var op = new FlakyOperation(2);
+
+        // The operation completes synchronously, so each delay's timer exists as soon as the failed try returns.
+        Task call = shape == RetryShape.AsyncAction
+            ? Retriable.RetryAsync(op.InvokeAsync, CancellationToken.None, new Linear(OneHour, 3), new AnyExceptionPolicy())
+            : Retriable.RetryAsync(op.InvokeAsyncReturning, CancellationToken.None, new Linear(OneHour, 3), new AnyExceptionPolicy());
+
+        Assert.AreEqual(1, op.Invocations);
+        fake.Advance(OneHour - TimeSpan.FromTicks(1));
+        Assert.AreEqual(1, op.Invocations);
+        fake.Advance(TimeSpan.FromTicks(1));
+        Assert.AreEqual(2, op.Invocations);
+        Assert.IsFalse(call.IsCompleted);
+        fake.Advance(OneHour);
+
+        await call.WaitAsync(Timeout).ConfigureAwait(false);
+        Assert.AreEqual(3, op.Invocations);
+        Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
+    }
+
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    public async Task WithAFakeTimeProvider_ASynchronousRetryStartsOnlyWhenTheDelayHasElapsed(RetryShape shape)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        RecordingFakeTimeProvider fake = TimeProviderFixture.Install(new RecordingFakeTimeProvider());
+        var op = new FlakyOperation(2);
+
+        // The synchronous loop blocks its thread for the delay, so it runs on the thread pool. The test waits until
+        // each delay's timer exists before it moves time on.
+        Task call = Task.Run(() => RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, new Linear(OneHour, 3), new AnyExceptionPolicy()));
+
+        await fake.WaitForTimersAsync(1).ConfigureAwait(false);
+        Assert.AreEqual(1, op.Invocations);
+        fake.Advance(OneHour - TimeSpan.FromTicks(1));
+        Assert.AreEqual(1, op.Invocations);
+        fake.Advance(TimeSpan.FromTicks(1));
+
+        await fake.WaitForTimersAsync(2).ConfigureAwait(false);
+        Assert.AreEqual(2, op.Invocations);
+        Assert.IsFalse(call.IsCompleted);
+        fake.Advance(OneHour);
+
+        await call.WaitAsync(Timeout).ConfigureAwait(false);
+        Assert.AreEqual(3, op.Invocations);
+        Assert.AreSequenceEqual(new[] { OneHour, OneHour }, fake.Delays);
+        Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
     }
 
     private static TimeSpan[] Milliseconds(params int[] milliseconds)

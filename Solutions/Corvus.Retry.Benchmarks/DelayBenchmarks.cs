@@ -1,4 +1,4 @@
-// <copyright file="SleepBenchmarks.cs" company="Endjin Limited">
+// <copyright file="DelayBenchmarks.cs" company="Endjin Limited">
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
@@ -8,24 +8,24 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
-using Corvus.Retry.Async;
 using Corvus.Retry.Policies;
 using Corvus.Retry.Strategies;
 
 /// <summary>
-/// The cost of the delay path: a retry whose strategy asks for a delay, which the library waits for using its
-/// default <see cref="ISleepService"/>.
+/// The cost of the delay path: a retry whose strategy asks for a delay, which the library waits for with
+/// <see cref="TimeProvider.System"/>.
 /// </summary>
 /// <remarks>
-/// <see cref="ISleepService"/> has no public implementation or injection point, so it is measured through the
-/// retry methods that use it. The delay is one tick, which the default service rounds down to no wait, so the
-/// benchmarks measure the sleep machinery rather than time passing. The baselines retry with no delay, which skips
-/// the sleep service.
+/// The delay machinery has no public entry point, so it is measured through the retry methods that use it. The
+/// asynchronous retry waits with <see cref="Task.Delay(TimeSpan, TimeProvider, CancellationToken)"/>; the synchronous
+/// retry, which cannot be cancelled during the delay, waits with <see cref="Thread.Sleep(TimeSpan)"/>. The delay is one
+/// tick, which rounds down to 0 ms, so the benchmarks measure the delay machinery rather than time passing. The
+/// baselines retry with no delay, which skips the delay entirely.
 /// </remarks>
 [MemoryDiagnoser]
 [BenchmarkDotNet.Attributes.CategoriesColumn]
 [GroupBenchmarksBy(BenchmarkDotNet.Configs.BenchmarkLogicalGroupRule.ByCategory)]
-public class SleepBenchmarks
+public class DelayBenchmarks
 {
     private const int Result = 42;
 
@@ -45,7 +45,7 @@ public class SleepBenchmarks
 
     [Benchmark]
     [BenchmarkCategory("Sync")]
-    public int Retry_WithDelay_Sleep()
+    public int Retry_WithDelay_ThreadSleep()
     {
         this.failNext = true;
         return Retriable.Retry(this.Operation, CancellationToken.None, new Linear(OneTick, 2), this.policy);
@@ -61,7 +61,7 @@ public class SleepBenchmarks
 
     [Benchmark]
     [BenchmarkCategory("Async")]
-    public Task<int> RetryAsync_WithDelay_SleepAsync()
+    public Task<int> RetryAsync_WithDelay_TaskDelay()
     {
         this.failNext = true;
         return Retriable.RetryAsync(this.OperationAsync, CancellationToken.None, new Linear(OneTick, 2), this.policy);

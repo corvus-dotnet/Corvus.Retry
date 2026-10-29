@@ -8,7 +8,6 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Corvus.Retry.Async;
 using Corvus.Retry.Policies;
 using Corvus.Retry.Strategies;
 
@@ -165,7 +164,7 @@ public static class Retriable
 
                 if (delay != TimeSpan.Zero)
                 {
-                    SleepService.Instance.Sleep(delay);
+                    RetryDelay.Wait(delay, RetryDefaults.TimeProvider, CancellationToken.None);
                 }
             }
         }
@@ -258,7 +257,7 @@ public static class Retriable
 
                 if (delay != TimeSpan.Zero)
                 {
-                    SleepService.Instance.Sleep(delay);
+                    RetryDelay.Wait(delay, RetryDefaults.TimeProvider, CancellationToken.None);
                 }
             }
         }
@@ -329,7 +328,7 @@ public static class Retriable
 
             if (delay != TimeSpan.Zero)
             {
-                await SleepService.Instance.SleepAsync(delay).ConfigureAwait(continueOnCapturedContext);
+                await RetryDelay.WaitAsync(delay, RetryDefaults.TimeProvider, CancellationToken.None).ConfigureAwait(continueOnCapturedContext);
             }
         }
     }
@@ -360,7 +359,7 @@ public static class Retriable
 
             if (delay != TimeSpan.Zero)
             {
-                await SleepService.Instance.SleepAsync(delay).ConfigureAwait(continueOnCapturedContext);
+                await RetryDelay.WaitAsync(delay, RetryDefaults.TimeProvider, CancellationToken.None).ConfigureAwait(continueOnCapturedContext);
             }
         }
     }
