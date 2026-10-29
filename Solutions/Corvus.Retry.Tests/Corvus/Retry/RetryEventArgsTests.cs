@@ -50,8 +50,11 @@ public class RetryEventArgsTests
     }
 
     [TestMethod]
-    public void ItIsAnEventArgs()
+    public void TwoInstancesWithTheSameValuesAreEqual()
     {
-        Assert.IsInstanceOfType<EventArgs>(new RetryEventArgs(null, null, TimeSpan.Zero, 1));
+        var exception = new InvalidOperationException();
+
+        Assert.AreEqual(new RetryEventArgs(exception, null, TimeSpan.Zero, 1), new RetryEventArgs(exception, null, TimeSpan.Zero, 1));
+        Assert.AreNotEqual(new RetryEventArgs(exception, null, TimeSpan.Zero, 1), new RetryEventArgs(exception, null, TimeSpan.Zero, 2));
     }
 }

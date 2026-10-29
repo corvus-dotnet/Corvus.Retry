@@ -68,8 +68,8 @@ public class CircuitBreakerPipelineTests
             () => pipeline.ExecuteAsync(_ => new ValueTask<int>(1)).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
         Assert.IsNotNull(args);
-        Assert.IsInstanceOfType<BrokenCircuitException>(args.LastException);
-        Assert.AreEqual(1, args.AttemptNumber);
+        Assert.IsInstanceOfType<BrokenCircuitException>(args.Value.LastException);
+        Assert.AreEqual(1, args.Value.AttemptNumber);
     }
 
     [TestMethod]

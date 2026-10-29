@@ -25,7 +25,7 @@ using Corvus.Retry.Strategies;
 /// </list>
 /// </para>
 /// </remarks>
-public class RetryTaskFactory<T>
+public sealed class RetryTaskFactory<T>
 {
     /// <summary>
     /// Start a new retriable task for a function.

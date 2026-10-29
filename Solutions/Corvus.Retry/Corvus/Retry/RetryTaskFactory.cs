@@ -27,7 +27,7 @@ using Corvus.Retry.Strategies;
 /// </list>
 /// </para>
 /// </remarks>
-public class RetryTaskFactory
+public sealed class RetryTaskFactory
 {
     /// <summary>
     /// The strategy that the overloads without a strategy parameter use: up to 5 tries, without delay.
