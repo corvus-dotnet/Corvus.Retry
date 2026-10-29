@@ -91,6 +91,36 @@ await RunExampleAsync(async () =>
     await task;
 });
 
+// ### Giving the token to the operation, and a retry callback - example
+//
+// The overloads for `Func<CancellationToken, Task<T>>` and `Func<CancellationToken, Task>` give the token to the
+// operation, so the operation can stop when the token is cancelled. The token also stops a delay immediately.
+//
+// The overloads that have all the parameters also take an optional `onRetry` callback. `Retriable` awaits the callback
+// before each delay. `RetryEventArgs.AttemptNumber` is the number of the attempt that failed (the first attempt is 1),
+// and `NextAttemptNumber` is the attempt that starts after the delay. The callback is not called for the last failure.
+//
+// Here the token is cancelled after 2.5 seconds, during the third delay, so the call throws an
+// `OperationCanceledException`.
+Console.WriteLine();
+Console.WriteLine("## Token overload with an onRetry callback");
+await RunExampleAsync(async () =>
+{
+    using CancellationTokenSource cancellationTokenSource = new(TimeSpan.FromSeconds(2.5));
+    MockHttpService mockHttpService = new();
+    await Retriable.RetryAsync(
+        ct => mockHttpService.MakeLotsOfRequestsAsync(ct),
+        cancellationTokenSource.Token,
+        RetryStrategies.Constant(retries: 5, delay: TimeSpan.FromSeconds(1)),
+        new RetryOnTooManyRequestsPolicy(),
+        continueOnCapturedContext: false,
+        onRetry: args =>
+        {
+            Console.WriteLine($"Attempt {args.AttemptNumber} failed: {args.LastException?.Message}. Attempt {args.NextAttemptNumber} starts after {args.DelayBeforeRetry.TotalSeconds}s");
+            return ValueTask.CompletedTask;
+        });
+});
+
 // ## Policy and Strategy
 //
 // Two types help you to control when a failed operation is retried, and how that retry occurs: `IRetryPolicy` and
@@ -308,7 +338,9 @@ await RunExampleAsync(async () =>
 // The `IRetryStrategy` controls the way in which the operation is retried. It controls both the _delay between each
 // retry_ and the _number of times that it will be retried_.
 //
-// There are several strategies provided out-of-the-box: `Count`, `DoNotRetry`, `Linear`, `Incremental`, and `Backoff`.
+// There are several strategies provided out-of-the-box: `Count`, `DoNotRetry`, `Linear`, `Incremental`, `Backoff` and
+// `Exponential`, and the `RetryStrategies` factory methods (`Constant`, `Linear`, `Exponential`, `FromDelegate` and
+// `RetryAfter`), which count retries rather than attempts. RetryPipelineSample.cs shows some of them.
 //
 // #### `Count`
 //
@@ -572,6 +604,14 @@ public class MockHttpService
 
         clock.IncrementCounter();
         await Task.Delay(100);
+        throw new MockHttpServiceException("429 - Too Many Requests", "429");
+    }
+
+    // This overload receives a cancellation token, so the token can stop the call.
+    public async Task MakeLotsOfRequestsAsync(CancellationToken cancellationToken)
+    {
+        Console.WriteLine("MakeLotsOfRequests(CancellationToken) method called");
+        await Task.Delay(100, cancellationToken);
         throw new MockHttpServiceException("429 - Too Many Requests", "429");
     }
 

@@ -1,53 +1,74 @@
 # Corvus.Retry
 
-Retry support for synchronous and asynchronous operations, and a self-restarting host for long-running tasks, with
-pluggable retry policies and strategies.
+This library retries synchronous and asynchronous operations that fail. It also restarts long-running tasks that fail.
+Policies and strategies control the retries.
 
 This package targets `net10.0`. If your project targets `netstandard2.0` or a different framework, use version 2.x.
 
 ## Usage
 
-`Retriable` wraps a synchronous or asynchronous operation, and runs it again if it throws:
+`RetryPipeline` holds all the retry settings in one immutable object. Make one pipeline and keep it in a field. The
+pipeline gives a cancellation token to the operation, and cancels it when the caller cancels or a timeout expires:
 
 ```csharp
 using Corvus.Retry;
 using Corvus.Retry.Policies;
 using Corvus.Retry.Strategies;
 
-SomeResult result = Retriable.Retry(() => GetSomething());
-await Retriable.RetryAsync(() => DoSomethingAsync());
+RetryPipeline pipeline = new(new RetryPipelineOptions
+{
+    Strategy = RetryStrategies.Exponential(retries: 3, baseDelay: TimeSpan.FromMilliseconds(200), useJitter: true),
+    Policy = RetryPolicies.TransientHttp,
+    AttemptTimeout = TimeSpan.FromSeconds(5),
+    TotalTimeout = TimeSpan.FromSeconds(30),
+});
 
-// Up to 5 tries, 1 second apart. Pass your own IRetryPolicy to retry only some exceptions.
+string body = await pipeline.ExecuteAsync(
+    ct => new ValueTask<string>(httpClient.GetStringAsync(uri, ct)),
+    cancellationToken);
+```
+
+A pipeline can also retry a result (`RetryPipeline<T>`), and can have a fallback, a circuit breaker and hedging.
+
+`Retriable` puts retries around a synchronous or an asynchronous operation:
+
+```csharp
+SomeResult result = Retriable.Retry(() => GetSomething());
+await Retriable.RetryAsync(ct => DoSomethingAsync(ct), cancellationToken);
+
+// Up to 5 tries, 1 second apart. Give your own IRetryPolicy to retry only some exceptions.
 SomeResult result2 = Retriable.Retry(
     () => GetSomething(),
     CancellationToken.None,
     new Linear(TimeSpan.FromSeconds(1), 5),
-    new AnyExceptionPolicy());
+    AnyExceptionPolicy.Default);
 ```
 
-`RetryTask.Factory` and `RetryTask<T>.Factory` work like `Task.Factory`, with retry:
+`RetryTask.Factory` and `RetryTask<T>.Factory` operate as `Task.Factory` does, with retries:
 
 ```csharp
-Task<SomeResult> task = RetryTask<SomeResult>.Factory.StartNew(() => GetSomething(), new Count(5), new AnyExceptionPolicy());
+Task<SomeResult> task = RetryTask<SomeResult>.Factory.StartNew(() => GetSomething(), new Count(5), AnyExceptionPolicy.Default);
 ```
 
-`ReliableTaskRunner` keeps a long-running operation going, restarting it after a failure, until you stop it:
+`ReliableTaskRunner` runs a long-running operation until you stop it. If the operation fails, the runner starts it
+again:
 
 ```csharp
-ReliableTaskRunner runner = ReliableTaskRunner.Run(cancellationToken => ProcessMessagesAsync(cancellationToken));
-await runner.StopAsync();
+await using ReliableTaskRunner runner = ReliableTaskRunner.Run(cancellationToken => ProcessMessagesAsync(cancellationToken));
 ```
 
-- **Policies** (`IRetryPolicy`) decide whether a failure is retried: `AnyExceptionPolicy`, `DoNotRetryPolicy`,
-  `AggregatePolicy`, or your own.
-- **Strategies** (`IRetryStrategy`) decide how many tries are made and the delay between them: `Count`, `DoNotRetry`,
-  `Linear`, `Incremental` and `Backoff`, or your own.
+- **Policies** (`IRetryPolicy`) decide if a failure can cause a retry: `AnyExceptionPolicy`, `DoNotRetryPolicy`,
+  `AggregatePolicy`, the `RetryPolicies` methods (`Handle<T>`, `HandleInner<T>`, `FromPredicate`, `Not`, `Any`, `All`,
+  `TransientHttp`), or your own policy.
+- **Strategies** (`IRetryStrategy`) decide the number of tries and the delay before each retry: `Count`, `DoNotRetry`,
+  `Linear`, `Incremental`, `Backoff`, `Exponential`, the `RetryStrategies` methods (`Constant`, `Linear`,
+  `Exponential`, `FromDelegate`, `RetryAfter`), or your own strategy.
 
 ## More information
 
 - [Documentation and samples](https://github.com/corvus-dotnet/Corvus.Retry#readme)
-- [Changelog](https://github.com/corvus-dotnet/Corvus.Retry/blob/main/CHANGELOG.md), including the behaviour changes in
-  2.0
+- [Changelog](https://github.com/corvus-dotnet/Corvus.Retry/blob/main/CHANGELOG.md)
+- [Migration guide from 2.x to 3.0](https://github.com/corvus-dotnet/Corvus.Retry/blob/main/Documentation/Migrating-from-2.x-to-3.0.md)
 - [Issues](https://github.com/corvus-dotnet/Corvus.Retry/issues)
 
 Corvus.Retry is sponsored by [endjin](https://endjin.com) and available under the Apache 2.0 license.

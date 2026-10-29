@@ -9,11 +9,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 These changes are planned for 3.0.0.
 
+Version 3.0 is not compatible with version 2.x. Read the
+[migration guide from 2.x to 3.0](Documentation/Migrating-from-2.x-to-3.0.md) before you do the upgrade. If you do
+not do the steps in the guide, your project can fail to compile, or your retries can operate differently.
+
 ### Added
+
+- `RetryPipeline` holds all the retry settings in one immutable object. Many threads can use one pipeline at the same
+  time. Its `ExecuteAsync` methods give a cancellation token to the operation, and use `ValueTask`.
+- `RetryPipelineOptions` is an immutable record with the settings of a pipeline. The constructor of the pipeline
+  examines the options. The `ParamName` of each exception is the name of the incorrect property.
+- `RetryPipeline<T>` and `RetryPipelineOptions<T>` can retry a result. If `ShouldRetryResult` returns `true`, the
+  pipeline uses the result as a failure.
+- `AttemptTimeout` limits the time of each attempt. `TotalTimeout` limits the time of all the attempts and all the
+  delays.
+- `RetryTimeoutException` derives from `TimeoutException`. A pipeline throws it when a timeout expires. Its `Timeout`
+  property gives the time limit.
+- `RetryPipelineOptions<T>.Fallback` gives a value when the pipeline fails. `FallbackOptions<T>` and
+  `FallbackArgs<T>` hold its settings and its data.
+- `CircuitBreaker` stops calls to a service that fails frequently. Many pipelines can share one breaker.
+  `CircuitBreakerOptions`, `CircuitState`, `CircuitStateChange`, `BrokenCircuitException` and
+  `IsolatedCircuitException` are new. `Isolate()` and `Close()` control the circuit manually.
+- `RetryPipelineOptions.Hedging` starts more attempts in parallel when an attempt is slow or fails.
+  `HedgingOptions`, `HedgingEventArgs` and `RetryPipelineOptions<T>.HedgingActionGenerator` are new.
+- The `Exponential` strategy doubles the delay before each retry. With jitter, it uses decorrelated jitter.
+- `Linear` and `Incremental` have new constructor overloads with the parameters `maxDelay` and `useJitter`.
+- `RetryAttempt` gives the data about an attempt that failed to a strategy. `AttemptNumber` starts at 1.
+- The static class `RetryStrategies` makes strategies that count retries, not attempts: `Constant`, `Linear`,
+  `Exponential`, `FromDelegate` and `RetryAfter`. `RetryStrategies.Default` is the shared default strategy of
+  `Retriable`.
+- `RetryStrategies.RetryAfter` uses the `Retry-After` header of an `HttpResponseMessage` result, or
+  `BrokenCircuitException.RetryAfter`, for the delay.
+- The static class `RetryPolicies` makes immutable policies: `FromPredicate`, `Handle<T>`, `HandleInner<T>`, `Not`,
+  `Any` and `All`. `Handle<T>` returns an `ExceptionTypeRetryPolicy`, which has the method `Or<T>`.
+- `RetryPolicies.TransientHttp` retries transient HTTP failures. `RetryPolicies.IsTransientHttpResponse` finds a
+  transient HTTP status in a result.
+- The C# 14 extension members `Or`, `And` and `Not` combine policies. `RetryPolicyExtensions` is now public.
+- `AnyExceptionPolicy.Default` is a public shared instance.
+- `Retriable` has overloads for `Func<CancellationToken, Task<T>>` and `Func<CancellationToken, Task>`. The token
+  goes to the operation.
+- The `Retriable` overloads that have all the parameters have an optional `onRetry` callback. The callback receives
+  the attempt numbers.
+- `RetryEventArgs` has the properties `Result`, `AttemptNumber` and `NextAttemptNumber`.
+- `ReliableTaskRunner` implements `IAsyncDisposable`. Use `await using` to stop the runner at the end of a scope.
+- The benchmarks measure the pipeline, the fallback, the circuit breaker, hedging, the new strategies and the new
+  policies. `DelayBenchmarks` replaces `SleepBenchmarks`.
+- A sample for `RetryPipeline` is in `Documentation/Examples/RetryPipelineSample.cs`.
+- ADR 0002 records the decision to use `TimeProvider`. It replaces ADR 0001.
 
 ### Changed
 
+- The package targets `net10.0` only. On a different framework, use version 2.x.
+- `IRetryStrategy` has one method, `GetRetryDelay(in RetryAttempt)`. A strategy has no state for a call. Thus, many
+  calls can use one strategy at the same time. A strategy that a call used before now gives all its tries to the next
+  call.
+- `RetryEventArgs` has a new constructor with an attempt number. `LastException` can be `null`, when a result caused
+  the retry.
+- The `Retriable` overloads that have a token examine the token before each attempt, also before the first attempt.
+  CAUTION: A cancelled token now gives an `OperationCanceledException`. Before, `Retriable` called the operation one
+  time, or rethrew the exception of the operation. If your code catches that exception, also catch
+  `OperationCanceledException`.
+- A cancellation token stops a `Retriable` delay immediately. Before, the delay continued until its end.
+- `Retriable` and the pipelines do not give an `OperationCanceledException` that the token of the caller caused to
+  the strategy or the policy.
+- The synchronous `Retriable.Retry` overloads with a token that can be cancelled wait on a timer, not on
+  `Thread.Sleep`.
+- A retry of `RetryTask` does not block a thread. A delay task and continuations start each retry on the scheduler of
+  the caller.
+- If a scheduler refuses to queue a `RetryTask` retry, the refusal is a failure of that try. The strategy and the
+  policy decide about it. Before, the task faulted immediately.
+- `Backoff.MinBackoff` and `Backoff.MaxBackoff` have `init` accessors. Set them with an object initializer.
+- The `Incremental` constructor parameter `intialDelay` is now `initialDelay`.
+- An incorrect `maxTries` gives an `ArgumentOutOfRangeException`, not an `ArgumentException`. A negative delay
+  parameter of a strategy also gives an `ArgumentOutOfRangeException`.
+- Each strategy limits its delays to 0xFFFFFFFE ms (approximately 49.7 days). `Backoff` and `Incremental` do not
+  overflow.
+- The four `Retriable` overloads that have all the parameters have a new optional `onRetry` parameter. Your source
+  code compiles without a change, but you must compile it again against this version.
+- `ReliableTaskRunner.StopAsync` cancels with `CancelAsync`. The callbacks of the token run on a thread-pool thread.
+  An exception from a callback faults the task from `StopAsync`. Before, `StopAsync` threw it immediately.
+- `ReliableTaskRunner.StopAsync` returns a new task that ends as the last run ended. If the run faulted with many
+  exceptions, the task faults with all of them.
+- `Retriable` and `RetryTask` use `TimeProvider.System` for their delays.
+- The 2.x benchmark methods `Retry_WithDelay_Sleep` and `RetryAsync_WithDelay_SleepAsync` are now
+  `Retry_WithDelay_ThreadSleep` and `RetryAsync_WithDelay_TaskDelay` in `DelayBenchmarks`.
+
 ### Removed
+
+- This release removes the `netstandard2.0` target. Version 2.x also targets `netstandard2.0`.
+- This release removes `ISleepService` and `SleepService`. The library uses `TimeProvider`.
+- This release removes the `RetryStrategy` base class. Implement `IRetryStrategy` directly.
+- This release removes the members `CanRetry`, `PrepareToRetry`, `Exception` and `OnRetrying`, and the `Retrying`
+  event, from `IRetryStrategy`. Use `GetRetryDelay`, and the `onRetry` callback of `Retriable` or the `OnRetry` option
+  of the pipeline.
+- `RetryTask` has no retry callback, because the `Retrying` event is removed.
+- This release removes the `RetryEventArgs(Exception, TimeSpan)` constructor.
+- This release removes the `RetryStrategyBenchmarks` and `SleepBenchmarks` benchmark classes.
 
 ## [2.0.0]
 

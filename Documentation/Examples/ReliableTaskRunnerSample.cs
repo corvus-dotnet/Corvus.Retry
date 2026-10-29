@@ -21,8 +21,27 @@ using Corvus.Retry.Policies;
 //
 //     await runner.StopAsync();
 //
+// The runner is also `IAsyncDisposable`, so `await using` stops it at the end of a scope:
+//
+//     await using ReliableTaskRunner runner = ReliableTaskRunner.Run(cancellationToken => DoSomeOperationAsync(cancellationToken));
+//
 // As with the other retry methods, there are overloads where you can pass an `IRetryPolicy` to control the restart
 // behaviour.
+
+// #### Example - Stopping the runner with `await using`
+//
+// `DisposeAsync` stops the operation, waits for the run to end, and releases the runner's resources. Unlike
+// `StopAsync()`, it does not report how the run ended: it completes even if the run failed. Call `StopAsync()` first
+// if you need the outcome.
+Console.WriteLine("## Stopping the runner with await using");
+{
+    await using ReliableTaskRunner runner = ReliableTaskRunner.Run(cancellationToken => LongRunningProcess.ExecuteAsync(cancellationToken));
+    await Task.Delay(500); // Let the operation run for a short time
+    Console.WriteLine("Leaving the scope, which disposes the runner");
+}
+
+Console.WriteLine("The runner is disposed, and the operation has stopped");
+Console.WriteLine();
 
 // #### Example - Cancelling a non-ending operation
 //
@@ -39,7 +58,7 @@ using Corvus.Retry.Policies;
 // `AnyExceptionPolicy`, which will retry upon detecting any exception. We can stop it with the `StopAsync()` method.
 Console.WriteLine("## Cancelling a non-ending operation");
 {
-    ReliableTaskRunner runner = ReliableTaskRunner.Run(cancellationToken => LongRunningProcess.ExecuteAsync(cancellationToken));
+    await using ReliableTaskRunner runner = ReliableTaskRunner.Run(cancellationToken => LongRunningProcess.ExecuteAsync(cancellationToken));
     await Task.Delay(5000); // Wait some time before cancelling operation
     Console.WriteLine("Stopping the runner");
     Task runnerTask = runner.StopAsync();
@@ -86,7 +105,7 @@ Console.WriteLine();
 Console.WriteLine("## Cancelling an operation that faults");
 {
     ModelALongRunningProcess modelALongRunningProcess = new();
-    ReliableTaskRunner runner = ReliableTaskRunner.Run(
+    await using ReliableTaskRunner runner = ReliableTaskRunner.Run(
         cancellationToken => modelALongRunningProcess.ExecuteALongRunningTransientProcess(cancellationToken),
         new CustomRetryPolicy(modelALongRunningProcess));
 
