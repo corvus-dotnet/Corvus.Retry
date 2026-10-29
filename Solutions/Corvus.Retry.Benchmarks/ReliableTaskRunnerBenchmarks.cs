@@ -12,7 +12,7 @@ using Corvus.Retry.Policies;
 
 /// <summary>
 /// The cost of hosting an operation with <see cref="ReliableTaskRunner"/>: starting it, restarting it after
-/// failures, and stopping it.
+/// failures, and stopping or disposing it.
 /// </summary>
 /// <remarks>
 /// The operation runs until the runner's token is cancelled, so each benchmark measures a complete start-to-stop
@@ -35,6 +35,12 @@ public class ReliableTaskRunnerBenchmarks
     public Task Run_WithPolicy_StopAsync()
     {
         return ReliableTaskRunner.Run(RunUntilStopped, this.policy).StopAsync();
+    }
+
+    [Benchmark]
+    public ValueTask Run_DisposeAsync()
+    {
+        return ReliableTaskRunner.Run(RunUntilStopped).DisposeAsync();
     }
 
     /// <summary>

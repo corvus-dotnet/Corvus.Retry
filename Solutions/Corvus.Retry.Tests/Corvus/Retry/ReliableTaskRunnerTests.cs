@@ -14,7 +14,8 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
 /// Pins the behaviour of <see cref="ReliableTaskRunner"/>: a host that keeps a long-running operation going,
-/// restarting it after a failure for as long as the retry policy allows, until <see cref="ReliableTaskRunner.StopAsync"/>.
+/// restarting it after a failure for as long as the retry policy allows, until <see cref="ReliableTaskRunner.StopAsync"/>
+/// or <see cref="ReliableTaskRunner.DisposeAsync"/>.
 /// </summary>
 /// <remarks>
 /// These tests never sleep. They synchronise with <see cref="TaskCompletionSource"/> gates and the runner's
@@ -573,6 +574,199 @@ public class ReliableTaskRunnerTests
         Assert.IsTrue(stopTask.IsCanceled);
         await Assert.ThrowsAsync<OperationCanceledException>(() => stopTask).ConfigureAwait(false);
         Assert.IsEmpty(policy.Consulted);
+    }
+
+    [TestMethod]
+    public async Task StopAsyncUsesCancelAsync()
+    {
+        // True only on this thread, and only while StopAsync runs, so the callback can tell if StopAsync ran it inline.
+        using var insideStopAsync = new ThreadLocal<bool>();
+        TaskCompletionSource<bool> callbackEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var allowCallbackToReturn = new ManualResetEventSlim();
+
+        ReliableTaskRunner runner = ReliableTaskRunner.Run(ct =>
+        {
+            ct.Register(() =>
+            {
+                callbackEntered.TrySetResult(insideStopAsync.Value);
+                allowCallbackToReturn.Wait(Timeout);
+            });
+
+            return WaitForCancellationAsync(ct);
+        });
+
+        insideStopAsync.Value = true;
+        Task stopTask = runner.StopAsync();
+        insideStopAsync.Value = false;
+
+        // StopAsync returned while the callback is still blocked, so the callback did not run inline.
+        await WaitAsync(callbackEntered.Task, "the token callback to run").ConfigureAwait(false);
+        Assert.IsFalse(await callbackEntered.Task.ConfigureAwait(false));
+        Assert.IsFalse(stopTask.IsCompleted);
+
+        allowCallbackToReturn.Set();
+        await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+        Assert.AreEqual(TaskStatus.RanToCompletion, stopTask.Status);
+    }
+
+    [TestMethod]
+    public async Task DisposeAsyncStopsTheRunnerAndDoesNotThrowTheRunsException()
+    {
+        var failure = new InvalidOperationException("Failed while stopping");
+        var policy = new RecordingRetryPolicy(true);
+        TaskCompletionSource runEnded = NewSignal();
+        CancellationToken token = default;
+        int invocations = 0;
+
+        ReliableTaskRunner runner = ReliableTaskRunner.Run(
+            async ct =>
+            {
+                Interlocked.Increment(ref invocations);
+                token = ct;
+                try
+                {
+                    await WaitForCancellationAsync(ct).ConfigureAwait(false);
+                    throw failure;
+                }
+                finally
+                {
+                    runEnded.TrySetResult();
+                }
+            },
+            policy);
+
+        await WaitAsync(runner.DisposeAsync().AsTask(), "the runner to be disposed").ConfigureAwait(false);
+
+        // DisposeAsync waited for the run to end, and swallowed its failure instead of restarting it.
+        Assert.IsTrue(token.IsCancellationRequested);
+        Assert.IsTrue(runEnded.Task.IsCompleted);
+        Assert.AreEqual(1, Volatile.Read(ref invocations));
+        Assert.IsEmpty(policy.Consulted);
+    }
+
+    [TestMethod]
+    public async Task DisposeAsyncTwiceIsSafe()
+    {
+        int invocations = 0;
+        ReliableTaskRunner runner = ReliableTaskRunner.Run(ct =>
+        {
+            Interlocked.Increment(ref invocations);
+            return WaitForCancellationAsync(ct);
+        });
+
+        await WaitAsync(runner.DisposeAsync().AsTask(), "the runner to be disposed").ConfigureAwait(false);
+
+        // The second call does nothing, so it completes at once.
+        ValueTask secondDisposal = runner.DisposeAsync();
+        Assert.IsTrue(secondDisposal.IsCompletedSuccessfully);
+        await secondDisposal.ConfigureAwait(false);
+
+        Assert.AreEqual(1, Volatile.Read(ref invocations));
+    }
+
+    [TestMethod]
+    public async Task StopAsyncAfterDisposeAsyncReturnsTheLastRun()
+    {
+        var failure = new InvalidOperationException("Permanent failure");
+        TaskCompletionSource policyConsulted = NewSignal();
+        var policy = new RecordingRetryPolicy(_ =>
+        {
+            policyConsulted.TrySetResult();
+            return false;
+        });
+
+        ReliableTaskRunner runner = ReliableTaskRunner.Run(_ => FailAsynchronously(failure), policy);
+        await WaitAsync(policyConsulted.Task, "the policy to be consulted").ConfigureAwait(false);
+
+        await WaitAsync(runner.DisposeAsync().AsTask(), "the runner to be disposed").ConfigureAwait(false);
+
+        // StopAsync does not cancel the disposed source, and still reports how the last run ended.
+        Task stopTask = runner.StopAsync();
+        await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+        InvalidOperationException actual = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => stopTask).ConfigureAwait(false);
+        Assert.AreSame(failure, actual);
+    }
+
+    [TestMethod]
+    public async Task DisposeAsyncAfterStopAsyncDoesNotThrowTheRunsException()
+    {
+        var failure = new InvalidOperationException("Failed while stopping");
+
+        ReliableTaskRunner runner = ReliableTaskRunner.Run(async ct =>
+        {
+            await WaitForCancellationAsync(ct).ConfigureAwait(false);
+            throw failure;
+        });
+
+        Task stopTask = runner.StopAsync();
+        await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+        Assert.AreSame(failure, await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => stopTask).ConfigureAwait(false));
+
+        // StopAsync has reported the failure; DisposeAsync only releases the runner.
+        await WaitAsync(runner.DisposeAsync().AsTask(), "the runner to be disposed").ConfigureAwait(false);
+    }
+
+    [TestMethod]
+    public async Task WhenDisposeAsyncIsCalledWhileTheRestartedOperationIsStarting_ItWaitsForTheRestartedRun()
+    {
+        var failure = new InvalidOperationException("First run failed");
+        TaskCompletionSource restartEntered = NewSignal();
+        using var allowRestartToReturn = new ManualResetEventSlim();
+        int invocations = 0;
+
+        ReliableTaskRunner runner = ReliableTaskRunner.Run(
+            ct =>
+            {
+                if (Interlocked.Increment(ref invocations) == 1)
+                {
+                    return FailAsynchronously(failure);
+                }
+
+                // Hold the restart inside runFunction, before it has returned its task.
+                restartEntered.TrySetResult();
+                allowRestartToReturn.Wait(Timeout);
+                return WaitForCancellationAsync(ct);
+            },
+            new RecordingRetryPolicy(true));
+
+        await WaitAsync(restartEntered.Task, "the restart to begin").ConfigureAwait(false);
+
+        Task disposal = runner.DisposeAsync().AsTask();
+
+        // The source must not be disposed while the restarted run can still use its token.
+        Assert.IsFalse(disposal.IsCompleted);
+
+        allowRestartToReturn.Set();
+        await WaitAsync(disposal, "the runner to be disposed").ConfigureAwait(false);
+        Assert.AreEqual(TaskStatus.RanToCompletion, disposal.Status);
+
+        // The restarted run is the last run, and it ended when its token was cancelled.
+        Task stopTask = runner.StopAsync();
+        await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+        Assert.AreEqual(TaskStatus.RanToCompletion, stopTask.Status);
+        Assert.AreEqual(2, Volatile.Read(ref invocations));
+    }
+
+    [TestMethod]
+    public async Task AwaitUsingStopsTheRunnerWhenTheBlockEnds()
+    {
+        TaskCompletionSource runStarted = NewSignal();
+        TaskCompletionSource runEnded = NewSignal();
+
+        ReliableTaskRunner runner = ReliableTaskRunner.Run(async ct =>
+        {
+            runStarted.TrySetResult();
+            await WaitForCancellationAsync(ct).ConfigureAwait(false);
+            runEnded.TrySetResult();
+        });
+
+        await using (runner.ConfigureAwait(false))
+        {
+            await WaitAsync(runStarted.Task, "the operation to start").ConfigureAwait(false);
+            Assert.IsFalse(runEnded.Task.IsCompleted);
+        }
+
+        Assert.IsTrue(runEnded.Task.IsCompleted);
     }
 
     [TestMethod]

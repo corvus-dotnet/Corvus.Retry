@@ -5,6 +5,7 @@
 namespace Corvus.Retry;
 
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
 using Corvus.Retry.Policies;
@@ -21,15 +22,24 @@ using Corvus.Retry.Policies;
 /// <item><see cref="ReliableTaskRunner"/> -wrapping a long-running asynchronous operation in a host that ensures it continues to run even after failure. You can use <see cref="IRetryPolicy"/> to control when the task restarts.</item>
 /// </list>
 /// </para>
+/// <para>
+/// Call <see cref="StopAsync"/> to stop the function and observe how its last run ended. Call <see cref="DisposeAsync"/>
+/// (for example with <c>await using</c>) to stop the function, wait for it to end without observing the outcome, and
+/// release the resources of the runner.
+/// </para>
 /// </remarks>
-public sealed class ReliableTaskRunner
+public sealed class ReliableTaskRunner : IAsyncDisposable
 {
     private readonly CancellationTokenSource cancellationTokenSource;
 
-    // Guards processingTask and stopping, so that StopAsync and a restart cannot interleave.
+    // A copy of the source's token, which stays usable after DisposeAsync disposes the source.
+    private readonly CancellationToken cancellationToken;
+
+    // Guards processingTask, stopping and disposed, so that StopAsync, DisposeAsync and a restart cannot interleave.
     private readonly Lock sync = new();
     private Task processingTask;
     private bool stopping;
+    private bool disposed;
 
     /// <summary>
     /// In order to ensure that processingTask has been initialised, we need to invoke runFunction before returning.
@@ -39,8 +49,9 @@ public sealed class ReliableTaskRunner
     private ReliableTaskRunner(Func<CancellationToken, Task> runFunction, IRetryPolicy retryPolicy)
     {
         this.cancellationTokenSource = new CancellationTokenSource();
+        this.cancellationToken = this.cancellationTokenSource.Token;
 
-        this.processingTask = runFunction(this.cancellationTokenSource.Token);
+        this.processingTask = runFunction(this.cancellationToken);
         this.AttachFailureContinuation(this.processingTask, runFunction, retryPolicy);
     }
 
@@ -73,20 +84,85 @@ public sealed class ReliableTaskRunner
     /// <summary>
     /// Stops a running function.
     /// </summary>
-    /// <returns>A task which completes when the function terminates.</returns>
-    public Task StopAsync()
+    /// <returns>
+    /// A task which completes when the function terminates. It ends as the last run ended: it faults with the
+    /// exception of a failed run, is cancelled if the run was cancelled, and otherwise completes.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// The callbacks registered on the function's cancellation token run on another thread, so this method does not
+    /// block while they run.
+    /// </para>
+    /// <para>
+    /// After <see cref="DisposeAsync"/>, this method does not cancel anything. It returns a task that ends as the last
+    /// run ended.
+    /// </para>
+    /// </remarks>
+    public async Task StopAsync()
     {
         Task task;
+        Task cancellation;
         lock (this.sync)
         {
-            // Once this is set no restart can begin, so the task we return is the last run there will be.
+            // Once this is set no restart can begin, so the task we wait for is the last run there will be.
             this.stopping = true;
             task = this.processingTask;
+
+            // CancelAsync runs the token's callbacks on another thread, so they do not run while we hold the lock.
+            // Cancelling under the lock means DisposeAsync cannot dispose the source between the check and the call.
+            cancellation = this.disposed ? Task.CompletedTask : this.cancellationTokenSource.CancelAsync();
         }
 
-        // Cancel outside the lock, so that callbacks registered on the token do not run while we hold it.
-        this.cancellationTokenSource.Cancel();
-        return task;
+        await cancellation.ConfigureAwait(false);
+        await task.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Stops a running function, waits for it to terminate, and releases the resources of the runner.
+    /// </summary>
+    /// <returns>A task which completes when the function terminates and the runner has released its resources.</returns>
+    /// <remarks>
+    /// <para>
+    /// Unlike <see cref="StopAsync"/>, the returned task does not report how the last run ended: it completes even
+    /// if the run failed or was cancelled. Call <see cref="StopAsync"/> first if you need the outcome.
+    /// </para>
+    /// <para>
+    /// Calling this method more than once has no effect after the first call.
+    /// </para>
+    /// </remarks>
+    [SuppressMessage(
+        "Roslynator",
+        "RCS1075:Avoid empty catch clause that catches System.Exception",
+        Justification = "DisposeAsync must not throw the outcome of the run. StopAsync reports it to callers that need it.")]
+    public async ValueTask DisposeAsync()
+    {
+        Task task;
+        Task cancellation;
+        lock (this.sync)
+        {
+            if (this.disposed)
+            {
+                return;
+            }
+
+            this.disposed = true;
+            this.stopping = true;
+            task = this.processingTask;
+            cancellation = this.cancellationTokenSource.CancelAsync();
+        }
+
+        try
+        {
+            await cancellation.ConfigureAwait(false);
+            await task.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Disposal only waits for the run to end. StopAsync reports the outcome to callers that need it.
+        }
+
+        // The run has ended and no restart can begin, so nothing uses the source any more.
+        this.cancellationTokenSource.Dispose();
     }
 
     private static OperationCanceledException GetCancellation(Task cancelledTask)
@@ -124,7 +200,7 @@ public sealed class ReliableTaskRunner
         Task task;
         try
         {
-            task = runFunction(this.cancellationTokenSource.Token);
+            task = runFunction(this.cancellationToken);
         }
         catch (Exception ex)
         {
@@ -142,8 +218,8 @@ public sealed class ReliableTaskRunner
 
     private void AttachFailureContinuation(Task task, Func<CancellationToken, Task> runFunction, IRetryPolicy retryPolicy)
     {
-        // The continuation is cancelled when StopAsync cancels the token, so it only runs for a failure, or a
-        // cancellation, that the operation brought on itself (for example an HttpClient timeout).
+        // The continuation is cancelled when StopAsync or DisposeAsync cancels the token, so it only runs for a
+        // failure, or a cancellation, that the operation brought on itself (for example an HttpClient timeout).
         task.ContinueWith(
         t =>
         {
@@ -165,7 +241,7 @@ public sealed class ReliableTaskRunner
                 this.Restart(runFunction, retryPolicy);
             }
         },
-        this.cancellationTokenSource.Token,
+        this.cancellationToken,
         TaskContinuationOptions.NotOnRanToCompletion,
         TaskScheduler.Current);
     }
