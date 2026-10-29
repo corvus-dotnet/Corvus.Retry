@@ -87,8 +87,9 @@ public sealed record CircuitBreakerOptions
     /// </para>
     /// <para>
     /// When <see cref="CircuitBreaker.Isolate"/> or <see cref="CircuitBreaker.Close"/> calls it, the callback runs with
-    /// no <see cref="SynchronizationContext"/>. If it awaits, the continuation runs on the thread pool. Do not use a
-    /// callback that must continue on a custom <see cref="TaskScheduler"/>.
+    /// no <see cref="SynchronizationContext"/>, and with <see cref="TaskScheduler.Default"/> as the current scheduler. If
+    /// it awaits, the continuation runs on the thread pool. Do not use a callback that must continue on a custom
+    /// <see cref="TaskScheduler"/>.
     /// </para>
     /// </remarks>
     public Func<CircuitStateChange, ValueTask>? OnStateChanged { get; init; }

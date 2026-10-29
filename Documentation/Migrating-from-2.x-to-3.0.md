@@ -121,7 +121,7 @@ Version 3.0 has no `Retrying` event and no `OnRetrying` method. Use a callback:
 | `strategy.Retrying += handler` with `Retriable` | The `onRetry` parameter of the `Retriable` overloads that have all the parameters, or `ReliabilityPipelineOptions.OnRetry` if you move the call to a `ReliabilityPipeline` |
 | `strategy.Retrying += handler` with `RetryTask` | None. `RetryTask` has no retry callback. Use `Retriable` or `ReliabilityPipeline` in the operation, if you must have a callback. |
 
-The callback is `Func<RetryEventArgs, ValueTask>`. `Retriable` and the pipeline await it before the delay. An exception from the callback stops the call. The synchronous `Retry` overloads wait for the callback. They run the callback with no `SynchronizationContext`. Thus, if the callback awaits on a UI thread, it continues on the thread pool, and a deadlock does not occur.
+The callback is `Func<RetryEventArgs, ValueTask>`. `Retriable` and the pipeline await it before the delay. An exception from the callback stops the call. The synchronous `Retry` overloads wait for the callback. They run the callback with no `SynchronizationContext`, and with `TaskScheduler.Default` as the current scheduler. Thus, if the callback awaits on a UI thread, or on a scheduler that runs one task at a time, it continues on the thread pool, and a deadlock does not occur.
 
 `RetryEventArgs` has these changes:
 

@@ -289,7 +289,7 @@ These rules apply to the breaker:
 - A test call that started before `Isolate()`, `Close()` or a subsequent break does not change the state of the circuit. A test call that ends after `Close()` is not counted in the new window.
 - The circuit goes from `Open` to `HalfOpen` on the first call after the break, not at the end of the break. Until that call, `State` gives `Open`.
 - The breaker measures time with the monotonic timestamp of its `TimeProvider`. A change to the system clock does not change the window or the break.
-- The breaker calls `OnStateChanged` after it releases its lock. A pipeline awaits the callback. `Isolate()` and `Close()` wait until the callback completes, thus the callback must be fast. They run the callback with no `SynchronizationContext`. Thus, a callback that awaits on a UI thread does not cause a deadlock. An exception from the callback stops the call.
+- The breaker calls `OnStateChanged` after it releases its lock. A pipeline awaits the callback. `Isolate()` and `Close()` wait until the callback completes, thus the callback must be fast. They run the callback with no `SynchronizationContext`, and with `TaskScheduler.Default` as the current scheduler. Thus, a callback that awaits on a UI thread, or on a scheduler that runs one task at a time, does not cause a deadlock. An exception from the callback stops the call.
 
 The breaker is inside the retry part. Thus, a rejection is a failure of one attempt, and the strategy and the policy decide if the pipeline retries it:
 
@@ -396,7 +396,7 @@ The overloads that have a cancellation token obey these rules:
 - The token stops a delay immediately.
 - `Retriable` does not retry an `OperationCanceledException` that the token caused.
 
-`Retriable` awaits `onRetry` before each delay. The synchronous `Retry` overloads wait for the callback. They run it with no `SynchronizationContext`, thus a callback that awaits continues on the thread pool. An exception from the callback stops the call.
+`Retriable` awaits `onRetry` before each delay. The synchronous `Retry` overloads wait for the callback. They run it with no `SynchronizationContext`, and with `TaskScheduler.Default` as the current scheduler, thus a callback that awaits continues on the thread pool. An exception from the callback stops the call.
 
 `Retriable` has no timeouts and no result retries. For these functions, use `ReliabilityPipeline`.
 

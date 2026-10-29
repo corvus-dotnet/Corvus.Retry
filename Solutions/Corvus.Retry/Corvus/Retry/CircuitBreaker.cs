@@ -139,7 +139,8 @@ public sealed class CircuitBreaker
     /// </summary>
     /// <remarks>
     /// If the circuit is not isolated already, this calls <see cref="CircuitBreakerOptions.OnStateChanged"/>, and waits
-    /// until the callback completes. The callback runs with no <see cref="SynchronizationContext"/>.
+    /// until the callback completes. The callback runs with no <see cref="SynchronizationContext"/>, and with
+    /// <see cref="TaskScheduler.Default"/> as the current scheduler.
     /// </remarks>
     public void Isolate()
     {
@@ -162,7 +163,8 @@ public sealed class CircuitBreaker
     /// </summary>
     /// <remarks>
     /// If the circuit is not closed already, this calls <see cref="CircuitBreakerOptions.OnStateChanged"/>, and waits
-    /// until the callback completes. The callback runs with no <see cref="SynchronizationContext"/>.
+    /// until the callback completes. The callback runs with no <see cref="SynchronizationContext"/>, and with
+    /// <see cref="TaskScheduler.Default"/> as the current scheduler.
     /// </remarks>
     public void Close()
     {

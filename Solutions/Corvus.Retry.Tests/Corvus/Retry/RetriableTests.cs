@@ -815,8 +815,9 @@ public class RetriableTests
         Assert.AreEqual("The operation returned a null task.", consulted.Message);
     }
 
-    // Retriable: the callback of the synchronous Retry "runs with no SynchronizationContext. If it awaits, the
-    // continuation runs on the thread pool", so a call from a single-threaded context whose thread is blocked completes.
+    // Retriable: the callback of the synchronous Retry "runs with no SynchronizationContext, and with
+    // TaskScheduler.Default as the current scheduler. If it awaits, the continuation runs on the thread pool", so a call
+    // from a single-threaded context whose thread is blocked completes.
     [TestMethod]
     [DataRow(RetryShape.Action)]
     [DataRow(RetryShape.Function)]
@@ -848,6 +849,51 @@ public class RetriableTests
         Assert.AreEqual(2, op.Invocations);
         Assert.IsNull(contextInCallback);
         Assert.IsTrue(contextIsCurrent);
+    }
+
+    // An await with no SynchronizationContext captures TaskScheduler.Current. A scheduler that runs one task at a time,
+    // whose task waits for the callback, would get the continuation and never run it. So the callback also runs with
+    // TaskScheduler.Default as the current scheduler.
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    public async Task WhenTheOnRetryCallbackOfRetryAwaitsOnAnExclusiveScheduler_TheCallCompletes(RetryShape shape)
+    {
+        var op = new FlakyOperation(1);
+        TaskScheduler? schedulerInCallback = null;
+        async ValueTask OnRetry(RetryEventArgs args)
+        {
+            schedulerInCallback = TaskScheduler.Current;
+            await Task.Yield();
+        }
+
+        TaskScheduler scheduler = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
+        Task<(string? Result, TaskScheduler SchedulerAfter)> call = Task.Factory.StartNew(
+            () =>
+            {
+                string? result;
+                if (shape == RetryShape.Action)
+                {
+                    Retriable.Retry(() => { op.Invoke(); }, CancellationToken.None, new Count(3), new AnyExceptionPolicy(), OnRetry);
+                    result = null;
+                }
+                else
+                {
+                    result = Retriable.Retry(op.Invoke, CancellationToken.None, new Count(3), new AnyExceptionPolicy(), OnRetry);
+                }
+
+                return (result, TaskScheduler.Current);
+            },
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            scheduler);
+
+        (string? result, TaskScheduler schedulerAfter) = await call.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+
+        Assert.AreEqual(shape == RetryShape.Function ? "attempt-2" : null, result);
+        Assert.AreEqual(2, op.Invocations);
+        Assert.AreSame(TaskScheduler.Default, schedulerInCallback);
+        Assert.AreSame(scheduler, schedulerAfter);
     }
 
     // Not inlined, so that its frame is in the stack trace of the exception it throws.

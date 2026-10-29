@@ -46,8 +46,9 @@ not do the steps in the guide, your project can fail to compile, or your retries
   breaker does not count the call. A test call that ends in this way does not keep the circuit half-open. A test call
   that started before `Isolate()`, `Close()` or a subsequent break does not change the state of the circuit, and a
   test call that ends after `Close()` is not counted in the new sampling window.
-- `Isolate()` and `Close()` run `OnStateChanged` with no `SynchronizationContext`. Thus, a callback that awaits does not
-  cause a deadlock on a UI thread.
+- `Isolate()` and `Close()` run `OnStateChanged` with no `SynchronizationContext`, and with `TaskScheduler.Default` as
+  the current scheduler. Thus, a callback that awaits does not cause a deadlock on a UI thread, or on a scheduler that
+  runs one task at a time.
 - `ReliabilityPipelineOptions.Hedging` starts more attempts in parallel when an attempt is slow or fails.
   `HedgingOptions`, `HedgingEventArgs` and `ReliabilityPipelineOptions<T>.HedgingActionGenerator` are new.
 - Hedging runs attempt 1 on the thread of the caller. Attempts 2 and higher start on the thread pool. Thus, an attempt
@@ -83,8 +84,8 @@ not do the steps in the guide, your project can fail to compile, or your retries
 - `Retriable` has overloads for `Func<CancellationToken, Task<T>>` and `Func<CancellationToken, Task>`. The token
   goes to the operation.
 - The `Retriable` overloads that have all the parameters have an optional `onRetry` callback. The callback receives
-  the attempt numbers. The synchronous `Retry` overloads run the callback with no `SynchronizationContext`. If the
-  callback awaits, it continues on the thread pool.
+  the attempt numbers. The synchronous `Retry` overloads run the callback with no `SynchronizationContext`, and with
+  `TaskScheduler.Default` as the current scheduler. If the callback awaits, it continues on the thread pool.
 - `RetryEventArgs` has the properties `Result`, `AttemptNumber` and `NextAttemptNumber`.
 - `ReliableTaskRunner` implements `IAsyncDisposable`. Use `await using` to stop the runner at the end of a scope.
 - `ReliableTaskRunner.Run(runFunction, IRetryStrategy restartStrategy, IRetryPolicy retryPolicy)` waits before each

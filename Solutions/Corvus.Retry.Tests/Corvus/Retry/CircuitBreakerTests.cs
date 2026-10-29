@@ -977,6 +977,55 @@ public class CircuitBreakerTests
     }
 
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task IsolateAndCloseCompleteWhenOnStateChangedAwaitsOnAnExclusiveScheduler(bool close)
+    {
+        TaskScheduler? schedulerInCallback = null;
+        CircuitBreaker breaker = this.NewBreaker(o => o with
+        {
+            OnStateChanged = async change =>
+            {
+                schedulerInCallback = TaskScheduler.Current;
+                await Task.Yield();
+                await this.Record(change).ConfigureAwait(false);
+            },
+        });
+        if (close)
+        {
+            breaker.Isolate();
+        }
+
+        // The scheduler runs one task at a time, and that task waits for the callback, so a continuation that is queued
+        // to the scheduler never runs. An await captures TaskScheduler.Current when there is no SynchronizationContext.
+        TaskScheduler scheduler = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
+        (CircuitState state, TaskScheduler schedulerAfter) = await Task.Factory.StartNew(
+            () =>
+            {
+                if (close)
+                {
+                    breaker.Close();
+                }
+                else
+                {
+                    breaker.Isolate();
+                }
+
+                return (breaker.State, TaskScheduler.Current);
+            },
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            scheduler).WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        CircuitState expected = close ? CircuitState.Closed : CircuitState.Isolated;
+        Assert.AreEqual(expected, state);
+        Assert.AreSame(TaskScheduler.Default, schedulerInCallback);
+        Assert.AreSame(scheduler, schedulerAfter);
+        Assert.AreEqual(new CircuitStateChange(close ? CircuitState.Isolated : CircuitState.Closed, expected, null), this.Changes[^1]);
+        Assert.HasCount(close ? 2 : 1, this.Changes);
+    }
+
+    [TestMethod]
     [DataRow(false, false)]
     [DataRow(true, false)]
     [DataRow(false, true)]

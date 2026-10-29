@@ -178,7 +178,8 @@ public static class Retriable
     /// <param name="onRetry">
     /// An optional callback that is called before the delay of each retry. It is not called for the final failure. If
     /// it returns a task that is not complete, the thread waits for it. An exception from the callback stops the retries.
-    /// The callback runs with no <see cref="SynchronizationContext"/>. If it awaits, the continuation runs on the thread pool.
+    /// The callback runs with no <see cref="SynchronizationContext"/>, and with <see cref="TaskScheduler.Default"/> as the
+    /// current scheduler. If it awaits, the continuation runs on the thread pool.
     /// </param>
     /// <returns>The result of the function.</returns>
     /// <exception cref="OperationCanceledException">The token was cancelled.</exception>
@@ -354,7 +355,8 @@ public static class Retriable
     /// <param name="onRetry">
     /// An optional callback that is called before the delay of each retry. It is not called for the final failure. If
     /// it returns a task that is not complete, the thread waits for it. An exception from the callback stops the retries.
-    /// The callback runs with no <see cref="SynchronizationContext"/>. If it awaits, the continuation runs on the thread pool.
+    /// The callback runs with no <see cref="SynchronizationContext"/>, and with <see cref="TaskScheduler.Default"/> as the
+    /// current scheduler. If it awaits, the continuation runs on the thread pool.
     /// </param>
     /// <exception cref="OperationCanceledException">The token was cancelled.</exception>
     public static void Retry(Action func, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, Func<RetryEventArgs, ValueTask>? onRetry = null)

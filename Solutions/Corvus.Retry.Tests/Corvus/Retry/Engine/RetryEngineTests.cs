@@ -780,6 +780,42 @@ public class RetryEngineTests
     }
 
     [TestMethod]
+    public async Task WhenTheCallbackOfTheSynchronousRetryAwaits_ACallOnAnExclusiveSchedulerCompletesAndKeepsTheScheduler()
+    {
+        var op = new FlakyOperation(1);
+        TaskScheduler? schedulerInCallback = null;
+        TaskScheduler scheduler = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
+
+        // The scheduler runs one task at a time, and that task waits for the callback, so a continuation that is queued
+        // to the scheduler never runs. An await captures TaskScheduler.Current when there is no SynchronizationContext.
+        Task<(string Result, TaskScheduler SchedulerAfter)> call = Task.Factory.StartNew(
+            () =>
+            {
+                string result = RetryEngine.Run<RetryOperations.FuncOperation<string>, string>(
+                    new(op.Invoke),
+                    CancellationToken.None,
+                    new Count(3),
+                    AnyExceptionPolicy.Default,
+                    new RecordingFakeTimeProvider(),
+                    async _ =>
+                    {
+                        schedulerInCallback = TaskScheduler.Current;
+                        await Task.Yield();
+                    });
+                return (result, TaskScheduler.Current);
+            },
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            scheduler);
+
+        (string result, TaskScheduler schedulerAfter) = await call.WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual("attempt-2", result);
+        Assert.AreSame(TaskScheduler.Default, schedulerInCallback);
+        Assert.AreSame(scheduler, schedulerAfter);
+    }
+
+    [TestMethod]
     public void TheSynchronousLoopRethrowsACancellationThatTheCallerCausedWithoutConsultingThePolicy()
     {
         using var cts = new CancellationTokenSource();

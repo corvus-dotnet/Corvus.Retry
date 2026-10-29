@@ -361,7 +361,8 @@ internal static class RetryEngine
     /// <param name="timeProvider">The time provider for the delays.</param>
     /// <param name="onRetry">
     /// A callback that the engine calls before each delay, or <see langword="null"/>. If the callback returns a task
-    /// that is not complete, the thread waits for it. The callback runs with no <see cref="SynchronizationContext"/>.
+    /// that is not complete, the thread waits for it. The callback runs with no <see cref="SynchronizationContext"/>,
+    /// and with <see cref="TaskScheduler.Default"/> as the current scheduler.
     /// </param>
     /// <returns>The result of the first attempt that succeeds.</returns>
     /// <exception cref="OperationCanceledException">The caller's token was cancelled.</exception>
