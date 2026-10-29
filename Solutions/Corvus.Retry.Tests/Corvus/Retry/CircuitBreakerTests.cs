@@ -825,7 +825,9 @@ public class CircuitBreakerTests
     }
 
     [TestMethod]
-    public async Task IsolateCompletesWhenOnStateChangedAwaitsOnASingleThreadedSynchronizationContext()
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task IsolateAndCloseCompleteWhenOnStateChangedAwaitsOnASingleThreadedSynchronizationContext(bool close)
     {
         SynchronizationContext? contextInCallback = null;
         CircuitBreaker breaker = this.NewBreaker(o => o with
@@ -837,19 +839,111 @@ public class CircuitBreakerTests
                 await this.Record(change).ConfigureAwait(false);
             },
         });
+        if (close)
+        {
+            breaker.Isolate();
+        }
 
         // The thread of the context waits for the callback, so a continuation that is posted to the context never runs.
         (CircuitState state, bool contextIsCurrent) = await BlockedThreadSynchronizationContext.RunOnBlockedThread(
             () =>
             {
-                breaker.Isolate();
+                if (close)
+                {
+                    breaker.Close();
+                }
+                else
+                {
+                    breaker.Isolate();
+                }
+
                 return breaker.State;
             }).WaitAsync(WaitLimit).ConfigureAwait(false);
 
-        Assert.AreEqual(CircuitState.Isolated, state);
+        CircuitState expected = close ? CircuitState.Closed : CircuitState.Isolated;
+        Assert.AreEqual(expected, state);
         Assert.IsNull(contextInCallback);
         Assert.IsTrue(contextIsCurrent);
-        Assert.AreEqual(new CircuitStateChange(CircuitState.Closed, CircuitState.Isolated, null), Assert.ContainsSingle(this.Changes));
+        Assert.AreEqual(new CircuitStateChange(close ? CircuitState.Isolated : CircuitState.Closed, expected, null), this.Changes[^1]);
+        Assert.HasCount(close ? 2 : 1, this.Changes);
+    }
+
+    [TestMethod]
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    [DataRow(false, true)]
+    [DataRow(true, true)]
+    public async Task WhenOnStateChangedThrowsDuringIsolateOrClose_TheMethodThrowsThatExceptionAndTheStateHasChanged(
+        bool close, bool awaitsOnASingleThreadedSynchronizationContext)
+    {
+        CircuitState target = close ? CircuitState.Closed : CircuitState.Isolated;
+        InvalidCastException callbackFailure = new("Callback failed");
+        CircuitBreaker breaker = this.NewBreaker(o => o with
+        {
+            OnStateChanged = change => change.To != target
+                ? this.Record(change)
+                : awaitsOnASingleThreadedSynchronizationContext
+                    ? this.RecordThenThrowAfterYieldAsync(change, callbackFailure)
+                    : this.RecordThenThrow(change, callbackFailure),
+        });
+        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        if (close)
+        {
+            breaker.Isolate();
+        }
+
+        void Act()
+        {
+            if (close)
+            {
+                breaker.Close();
+            }
+            else
+            {
+                breaker.Isolate();
+            }
+        }
+
+        Exception? thrown;
+        if (awaitsOnASingleThreadedSynchronizationContext)
+        {
+            (thrown, bool contextIsCurrent) = await BlockedThreadSynchronizationContext.RunOnBlockedThread(
+                () =>
+                {
+                    try
+                    {
+                        Act();
+                        return null;
+                    }
+                    catch (Exception ex)
+                    {
+                        return ex;
+                    }
+                }).WaitAsync(WaitLimit).ConfigureAwait(false);
+
+            // The context is back after the exception.
+            Assert.IsTrue(contextIsCurrent);
+        }
+        else
+        {
+            thrown = Assert.ThrowsExactly<InvalidCastException>(Act);
+        }
+
+        Assert.AreSame(callbackFailure, thrown);
+        Assert.AreEqual(target, breaker.State);
+        Assert.AreEqual(new CircuitStateChange(close ? CircuitState.Isolated : CircuitState.Closed, target, null), this.Changes[^1]);
+
+        // A later call sees the new state.
+        if (close)
+        {
+            await SucceedAsync(pipeline, 1).ConfigureAwait(false);
+            Assert.AreEqual((1, 0), breaker.GetCounts());
+        }
+        else
+        {
+            await Assert.ThrowsExactlyAsync<IsolatedCircuitException>(
+                () => pipeline.ExecuteAsync(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        }
     }
 
     [TestMethod]
@@ -1158,6 +1252,13 @@ public class CircuitBreakerTests
     private ValueTask RecordThenThrow(CircuitStateChange change, Exception exception)
     {
         this.Record(change);
+        throw exception;
+    }
+
+    private async ValueTask RecordThenThrowAfterYieldAsync(CircuitStateChange change, Exception exception)
+    {
+        await Task.Yield();
+        await this.Record(change).ConfigureAwait(false);
         throw exception;
     }
 
