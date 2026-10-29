@@ -1,9 +1,9 @@
 # Corvus.Retry
 
 Retry support for synchronous and asynchronous operations, and a self-restarting host for long-running tasks, with
-pluggable retry policies and strategies. It targets `netstandard2.0` and `net10.0`.
+pluggable retry policies and strategies.
 
-Corvus.Retry was written before [Polly](https://github.com/App-vNext/Polly). For new code, we suggest you look at Polly.
+This package targets `net10.0`. If your project targets `netstandard2.0` or a different framework, use version 2.x.
 
 ## Usage
 

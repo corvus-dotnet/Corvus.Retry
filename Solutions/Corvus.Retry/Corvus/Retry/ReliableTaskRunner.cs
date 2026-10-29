@@ -27,7 +27,7 @@ namespace Corvus.Retry
         private readonly CancellationTokenSource cancellationTokenSource;
 
         // Guards processingTask and stopping, so that StopAsync and a restart cannot interleave.
-        private readonly object sync = new object();
+        private readonly Lock sync = new();
         private Task processingTask;
         private bool stopping;
 
@@ -51,10 +51,7 @@ namespace Corvus.Retry
         /// <returns>An instance of a runner which can be used to control the long-running function.</returns>
         public static ReliableTaskRunner Run(Func<CancellationToken, Task> runFunction)
         {
-            if (runFunction is null)
-            {
-                throw new ArgumentNullException(nameof(runFunction));
-            }
+            ArgumentNullException.ThrowIfNull(runFunction);
 
             return Run(runFunction, AnyExceptionPolicy.Default);
         }
@@ -67,15 +64,8 @@ namespace Corvus.Retry
         /// <returns>An instance of a runner which can be used to control the long-running function.</returns>
         public static ReliableTaskRunner Run(Func<CancellationToken, Task> runFunction, IRetryPolicy retryPolicy)
         {
-            if (runFunction is null)
-            {
-                throw new ArgumentNullException(nameof(runFunction));
-            }
-
-            if (retryPolicy is null)
-            {
-                throw new ArgumentNullException(nameof(retryPolicy));
-            }
+            ArgumentNullException.ThrowIfNull(runFunction);
+            ArgumentNullException.ThrowIfNull(retryPolicy);
 
             return new ReliableTaskRunner(runFunction, retryPolicy);
         }

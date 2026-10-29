@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-These changes are planned for 2.0.0.
+These changes are planned for 3.0.0.
+
+### Added
+
+### Changed
+
+### Removed
+
+## [2.0.0]
 
 ### Added
 
@@ -155,7 +163,8 @@ These changes are planned for 2.0.0.
 
 - First release: `Retriable`, `RetryTask`, `ReliableTaskRunner`, retry strategies and retry policies.
 
-[Unreleased]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.7...HEAD
+[Unreleased]: https://github.com/corvus-dotnet/Corvus.Retry/compare/2.0.0...HEAD
+[2.0.0]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.7...2.0.0
 [1.0.7]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.6...1.0.7
 [1.0.6]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.5...1.0.6
 [1.0.5]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.4...1.0.5

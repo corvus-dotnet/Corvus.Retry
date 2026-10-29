@@ -20,10 +20,7 @@ namespace Corvus.Retry.Strategies
         /// <inheritdoc/>
         public override TimeSpan PrepareToRetry(Exception lastException)
         {
-            if (lastException is null)
-            {
-                throw new ArgumentNullException(nameof(lastException));
-            }
+            ArgumentNullException.ThrowIfNull(lastException);
 
             return TimeSpan.Zero;
         }

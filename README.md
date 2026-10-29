@@ -3,9 +3,9 @@
 [![GitHub license](https://img.shields.io/badge/License-Apache%202-blue.svg)](https://raw.githubusercontent.com/corvus-dotnet/Corvus.Retry/main/LICENSE)
 [![IMM](https://imm.endjin.com/api/imm/github/corvus-dotnet/Corvus.Retry/total?cache=false)](https://imm.endjin.com/api/imm/github/corvus-dotnet/Corvus.Retry/total?cache=false)
 
-This provides support for retriable and reliable/long running methods. This was written before https://github.com/App-vNext/Polly was invented. For new code, we suggest you look at Polly.
+This provides support for retriable and reliable/long running methods.
 
-It targets `netstandard2.0` and `net10.0`.
+This package targets `net10.0`. If your project targets `netstandard2.0` or a different framework, use version 2.x.
 
 ## Features
 

@@ -16,23 +16,18 @@ namespace Corvus.Retry.Policies
     /// </remarks>
     public class AggregatePolicy : IRetryPolicy
     {
-        private List<IRetryPolicy>? policies;
-
         /// <summary>
         /// Gets the collection of policies to be aggregated.
         /// </summary>
         public List<IRetryPolicy> Policies
         {
-            get => this.policies ??= new List<IRetryPolicy>();
+            get => field ??= [];
         }
 
         /// <inheritdoc/>
         public bool CanRetry(Exception exception)
         {
-            if (exception is null)
-            {
-                throw new ArgumentNullException(nameof(exception));
-            }
+            ArgumentNullException.ThrowIfNull(exception);
 
             // A plain loop rather than LINQ, so that deciding allocates nothing.
             List<IRetryPolicy> policies = this.Policies;

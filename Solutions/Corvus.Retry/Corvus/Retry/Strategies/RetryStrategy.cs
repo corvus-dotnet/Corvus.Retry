@@ -32,7 +32,7 @@ namespace Corvus.Retry.Strategies
         {
             get
             {
-                return new AggregateException(this.exceptions ?? (IEnumerable<Exception>)Array.Empty<Exception>());
+                return new AggregateException(this.exceptions ?? []);
             }
         }
 
@@ -58,12 +58,9 @@ namespace Corvus.Retry.Strategies
         /// <remarks>This will flatten an aggregate exception into the list.</remarks>
         protected void AddException(Exception exception)
         {
-            if (exception is null)
-            {
-                throw new ArgumentNullException(nameof(exception));
-            }
+            ArgumentNullException.ThrowIfNull(exception);
 
-            List<Exception> exceptions = this.exceptions ??= new List<Exception>();
+            List<Exception> exceptions = this.exceptions ??= [];
             if (exception is AggregateException aggregateException)
             {
                 exceptions.AddRange(aggregateException.InnerExceptions);

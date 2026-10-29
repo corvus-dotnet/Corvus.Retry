@@ -15,15 +15,6 @@ namespace Corvus.Retry.Strategies
     /// </remarks>
     public class Backoff : RetryStrategy
     {
-#if !NET6_0_OR_GREATER
-        // Seeds each thread's generator. On .NET Framework, Random instances created close together share a time-based
-        // seed, so clients failing together would calculate the same "random" delay and retry in lockstep.
-        private static readonly Random Seeds = new();
-
-        [ThreadStatic]
-        private static Random? threadRandom;
-#endif
-
         private readonly int maxTries;
 
         private int tryCount;
@@ -45,10 +36,7 @@ namespace Corvus.Retry.Strategies
         /// <remarks>The  minimum backoff is 1 second, and the maximum backoff is 30 seconds.</remarks>
         public Backoff(int maxTries, TimeSpan deltaBackoff)
         {
-            if (maxTries <= 0)
-            {
-                throw new ArgumentException("Max tries must be > 0", nameof(maxTries));
-            }
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxTries);
 
             this.maxTries = maxTries;
             this.DeltaBackoff = deltaBackoff;
@@ -101,10 +89,7 @@ namespace Corvus.Retry.Strategies
         /// <inheritdoc/>
         public override TimeSpan PrepareToRetry(Exception lastException)
         {
-            if (lastException is null)
-            {
-                throw new ArgumentNullException(nameof(lastException));
-            }
+            ArgumentNullException.ThrowIfNull(lastException);
 
             this.AddException(lastException);
 
@@ -127,22 +112,7 @@ namespace Corvus.Retry.Strategies
         /// </summary>
         private static int NextRandom(int minValue, int maxValue)
         {
-#if NET6_0_OR_GREATER
             return Random.Shared.Next(minValue, maxValue);
-#else
-            if (threadRandom is null)
-            {
-                int seed;
-                lock (Seeds)
-                {
-                    seed = Seeds.Next();
-                }
-
-                threadRandom = new Random(seed);
-            }
-
-            return threadRandom.Next(minValue, maxValue);
-#endif
         }
     }
 }

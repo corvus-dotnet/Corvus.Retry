@@ -75,7 +75,7 @@ namespace Corvus.Retry.Strategies
         [DataRow(-1)]
         public void WhenMaxTriesIsNotPositive_TheConstructorThrows(int maxTries)
         {
-            ArgumentException ex = Assert.ThrowsExactly<ArgumentException>(() => new Incremental(maxTries, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)));
+            ArgumentOutOfRangeException ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new Incremental(maxTries, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)));
 
             Assert.AreEqual("maxTries", ex.ParamName);
         }

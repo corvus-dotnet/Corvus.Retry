@@ -22,10 +22,7 @@ namespace Corvus.Retry.Strategies
         /// <param name="maxTries">The maximum number of times the method will be tried.</param>
         public Linear(TimeSpan periodicity, int maxTries)
         {
-            if (maxTries <= 0)
-            {
-                throw new ArgumentException("Max tries must be > 0", nameof(maxTries));
-            }
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxTries);
 
             this.periodicity = periodicity;
             this.maxTries = maxTries;
@@ -43,10 +40,7 @@ namespace Corvus.Retry.Strategies
         /// <inheritdoc/>
         public override TimeSpan PrepareToRetry(Exception lastException)
         {
-            if (lastException is null)
-            {
-                throw new ArgumentNullException(nameof(lastException));
-            }
+            ArgumentNullException.ThrowIfNull(lastException);
 
             this.AddException(lastException);
 
