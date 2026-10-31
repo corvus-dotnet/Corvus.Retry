@@ -620,21 +620,20 @@ This policy does not retry an exception. Use it to stop the retries without a ch
 ```csharp
 IRetryPolicy policy = isDebuggingOrWhatever ? new DoNotRetryPolicy() : AnyExceptionPolicy.Default;
 
-var result = Retriable.Retry(() => DoSomething(), CancellationToken.None, new Count(10), policy);
+SomeResult result = Retriable.Retry(() => DoSomething(), CancellationToken.None, new Count(10), policy);
 ```
 ##### `AggregatePolicy`
 This policy retries an exception only if all its child policies accept the exception.
 
 ```csharp
-var aggregatePolicy =
-  new AggregatePolicy
-  {
+AggregatePolicy aggregatePolicy = new()
+{
     Policies =
     {
-      new CustomPolicy1(),
-      new CustomPolicy2(),
+        new CustomPolicy1(),
+        new CustomPolicy2(),
     },
-  };
+};
 ```
 
 An `AggregatePolicy` with no child policies retries all exceptions, because no child refuses the retry. `RetryPolicies.All` gives the same result, and cannot change after you make it.
@@ -835,7 +834,7 @@ Run the interactive launcher, every demo in order, or any demo directly, from th
     dotnet run Examples/menu.cs -- --all
     dotnet run Examples/http-client-resilience.cs
 
-See the [demos README](Examples/README.md) for the full list. Each demo takes between 2 and 13 seconds after the first build.
+See the [demos README](Examples/README.md) for the full list. Each demo takes up to about 12 seconds after the first build.
 
 ## Benchmarks
 

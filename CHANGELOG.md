@@ -124,8 +124,9 @@ not do the steps in the guide, your project can fail to compile, or your retries
 - The benchmarks measure `Run` and `RunValueTask` of the factories, the fallback, the circuit breaker, hedging, the new strategies and the new
   policies. `DelayBenchmarks` replaces `SleepBenchmarks`.
 - The `Examples` folder has sixteen demos, each a single-file .NET 10 app that renders what the library did
-  with Spectre.Console, and an interactive launcher (`dotnet run Examples/menu.cs`). They replace the three
-  samples in `Documentation/Examples`, and need no network access. See `Examples/README.md`.
+  with Spectre.Console, and an interactive launcher (`dotnet run Examples/menu.cs`). They cover each public
+  feature, including `RetryHandler` and `AddRetryHandler`, replace the three samples in `Documentation/Examples`,
+  and need no network access. See `Examples/README.md`.
 - ADR 0002 records the decision to use `TimeProvider`. It replaces ADR 0001. ADR 0003 records the decision to follow
   `TaskFactory`, not a pipeline.
 - The [migration guide from Polly](Documentation/Migrating-from-Polly.md) tells how to replace Polly with Corvus.Retry.

@@ -43,6 +43,7 @@ requests, such as POST, get one attempt. To retry a POST, pass a predicate:
 ## More information
 
 - [Documentation and samples](https://github.com/corvus-dotnet/Corvus.Retry#readme)
+- [A runnable demo of the handler, with a named and a typed client](https://github.com/corvus-dotnet/Corvus.Retry/blob/main/Examples/http-handler.cs)
 - [Changelog](https://github.com/corvus-dotnet/Corvus.Retry/blob/main/CHANGELOG.md)
 - [Issues](https://github.com/corvus-dotnet/Corvus.Retry/issues)
 

@@ -1,6 +1,6 @@
 # Migrating from Polly to Corvus.Retry 3.0
 
-This guide tells you how to replace Polly with Corvus.Retry 3.0. It gives the Corvus.Retry item for each Polly item, the primary differences, and three worked examples.
+This guide tells you how to replace Polly with Corvus.Retry 3.0. It gives the Corvus.Retry item for each Polly item, the primary differences, and three worked examples. The [`Examples`](../Examples) folder has runnable demos of each feature: `http-client-resilience.cs` and `http-handler.cs` show the two HttpClient options of example 2, and `composed-factories.cs` shows a retry around a hedged call.
 
 Corvus.Retry does not copy the API of Polly. It follows the `TaskFactory` of .NET: you make a configured `RetryTaskFactory`, keep it in a field, and call its `Run` method. The [README](../README.md) tells how to use each type. [ADR 0003](adr/0003-follow-taskfactory-not-a-pipeline.md) gives the reasons for this design.
 
@@ -256,7 +256,7 @@ private readonly RetryTaskFactory<HttpResponseMessage> retries = new(
 
 HttpResponseMessage result = await this.retries.Run(ct =>
 {
-    var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/api/push")
+    HttpRequestMessage request = new(HttpMethod.Post, $"{BaseUrl}/api/push")
     {
         Content = new StringContent(requestContent),
     };

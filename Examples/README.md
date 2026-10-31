@@ -18,6 +18,9 @@ Every demo is self-contained and works offline. The dependency it retries agains
 the retry behaviour is the only thing that varies. Where randomness is the point, as with jitter, the
 footnote says so; otherwise the output is repeatable.
 
+The demos name every type and use target-typed `new`, as the library does, so each line shows what it makes.
+`var` appears only on a LINQ query. The `.editorconfig` in this folder records the rule.
+
 ## The demos
 
 | File | What it shows |
