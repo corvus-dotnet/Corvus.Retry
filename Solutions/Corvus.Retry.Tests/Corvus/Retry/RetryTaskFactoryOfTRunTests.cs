@@ -436,6 +436,206 @@ public class RetryTaskFactoryOfTRunTests
         Assert.AreEqual("operation", thrown.ParamName);
     }
 
+    [TestMethod]
+    public void RunRejectsANullOperation()
+    {
+        RetryTaskFactory<Response> factory = CreateFactory(new Count(3));
+
+        ArgumentNullException thrown = Assert.ThrowsExactly<ArgumentNullException>(() => factory.Run(null!));
+
+        Assert.AreEqual("operation", thrown.ParamName);
+    }
+
+    [TestMethod]
+    public async Task WithRun_A503ResultIsRetriedAndA200ResultIsNot()
+    {
+        var responses = new ResponseSequence(503, 200, 503);
+        RetryTaskFactory<Response> factory = CreateFactory(new Count(3));
+
+        Response result = await factory.Run(responses.NextTaskAsync).WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual(200, result.StatusCode);
+        Assert.AreEqual(2, responses.Invocations);
+        Assert.IsFalse(result.Disposed);
+    }
+
+    [TestMethod]
+    public async Task WithRun_EachRejectedResultIsDisposedAfterTheCallback()
+    {
+        var responses = new ResponseSequence(503, 503, 200);
+        RetryTaskFactory<Response> factory = CreateFactory(
+            new Count(3),
+            args =>
+            {
+                var response = (Response)args.Result!;
+                responses.Log.Add($"callback {args.AttemptNumber}, disposed: {response.Disposed}");
+                return ValueTask.CompletedTask;
+            });
+
+        Response result = await factory.Run(responses.NextTaskAsync).WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreSequenceEqual(
+            new[] { "callback 1, disposed: False", "dispose 1", "callback 2, disposed: False", "dispose 2" },
+            responses.Log);
+        Assert.IsTrue(responses.Returned[0].Disposed);
+        Assert.IsTrue(responses.Returned[1].Disposed);
+        Assert.IsFalse(result.Disposed);
+    }
+
+    [TestMethod]
+    public async Task WithRun_WhenNoRetriesRemain_TheLastResultIsReturnedAndNotDisposed()
+    {
+        var responses = new ResponseSequence(503, 503, 503);
+        RetryTaskFactory<Response> factory = CreateFactory(new Count(3));
+
+        Response result = await factory.Run(responses.NextTaskAsync).WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreSame(responses.Returned[2], result);
+        Assert.IsFalse(result.Disposed);
+        Assert.IsTrue(responses.Returned[0].Disposed);
+        Assert.IsTrue(responses.Returned[1].Disposed);
+    }
+
+    [TestMethod]
+    public async Task WithRun_ARejectedResultOfAnAsynchronousOperationIsDisposedBeforeTheRetry()
+    {
+        var responses = new ResponseSequence(503, 200);
+        RetryTaskFactory<Response> factory = CreateFactory(new Count(3));
+
+        async Task<Response> OperationAsync(CancellationToken cancellationToken)
+        {
+            await Task.Yield();
+            responses.Log.Add($"attempt {responses.Invocations + 1}");
+            return await responses.NextTaskAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        Response result = await factory.Run(OperationAsync).WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual(200, result.StatusCode);
+        Assert.AreSequenceEqual(new[] { "attempt 1", "dispose 1", "attempt 2" }, responses.Log);
+    }
+
+    [TestMethod]
+    public async Task WithRun_ThePolicyIsNotConsultedForAResultThatIsAFailure()
+    {
+        var responses = new ResponseSequence(503, 200);
+        var policy = new RecordingRetryPolicy(false);
+        var factory = new RetryTaskFactory<Response>
+        {
+            Strategy = new Count(3),
+            Policy = policy,
+            CanRetryResult = IsServerError,
+        };
+
+        Response result = await factory.Run(responses.NextTaskAsync).WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual(200, result.StatusCode);
+        Assert.IsEmpty(policy.Consulted);
+    }
+
+    [TestMethod]
+    public async Task WithRun_ARejectedResultIsDisposedWhenCanRetryResultThrows()
+    {
+        var responses = new ResponseSequence(503, 200);
+        var predicateFailure = new FormatException("The predicate failed");
+        var factory = new RetryTaskFactory<Response>
+        {
+            Strategy = new Count(3),
+            CanRetryResult = _ => throw predicateFailure,
+        };
+
+        FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(() => factory.Run(responses.NextTaskAsync)).ConfigureAwait(false);
+
+        Assert.AreSame(predicateFailure, thrown);
+        Assert.IsTrue(Assert.ContainsSingle(responses.Returned).Disposed);
+    }
+
+    [TestMethod]
+    public async Task WithRun_TheFallbackReceivesTheLastRejectedResult()
+    {
+        var responses = new ResponseSequence(503, 503);
+        FallbackEventArgs<Response>? received = null;
+        var factory = new RetryTaskFactory<Response>
+        {
+            Strategy = new Count(2),
+            CanRetryResult = IsServerError,
+            Fallback = new(_ => new ValueTask<Response>(new Response(200, 0, [])))
+            {
+                AppliesToResult = IsServerError,
+                OnFallback = args =>
+                {
+                    received = args;
+                    return ValueTask.CompletedTask;
+                },
+            },
+        };
+
+        Response result = await factory.Run(responses.NextTaskAsync).WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual(200, result.StatusCode);
+        Assert.AreSame(responses.Returned[1], received!.Value.Result);
+        Assert.IsTrue(responses.Returned[0].Disposed);
+        Assert.IsTrue(responses.Returned[1].Disposed);
+    }
+
+    [TestMethod]
+    public async Task WithRun_AnOperationThatReturnsANullTaskFailsTheAttempt()
+    {
+        int invocations = 0;
+        var factory = new RetryTaskFactory<string> { Strategy = new Count(3) };
+
+        string result = await factory.Run(_ => Interlocked.Increment(ref invocations) == 1 ? null! : Task.FromResult("ok")).WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        // The null task is a failure that the policy accepts, so the attempt is retried.
+        Assert.AreEqual("ok", result);
+        Assert.AreEqual(2, invocations);
+    }
+
+    [TestMethod]
+    public void RunAndRunValueTaskOfAFactoryForATaskThrowBeforeTheOperationRuns()
+    {
+        int invocations = 0;
+        var factory = new RetryTaskFactory<Task<int>>();
+
+        NotSupportedException fromRun = Assert.ThrowsExactly<NotSupportedException>(
+            () => factory.Run(_ =>
+            {
+                invocations++;
+                return Task.FromResult(Task.FromResult(1));
+            }));
+        NotSupportedException fromRunValueTask = Assert.ThrowsExactly<NotSupportedException>(
+            () => factory.RunValueTask(_ =>
+            {
+                invocations++;
+                return new ValueTask<Task<int>>(Task.FromResult(1));
+            }));
+
+        Assert.AreEqual(0, invocations);
+        Assert.AreEqual(
+            "RetryTask<T> cannot retry a function that returns a task: the task completes when the function returns, before the operation ends. Use the result type of the task as T with Run or RunValueTask, or use Retriable.RetryAsync.",
+            fromRun.Message);
+        Assert.AreEqual(fromRun.Message, fromRunValueTask.Message);
+    }
+
+    [TestMethod]
+    public async Task WithRun_TheFirstAttemptRunsOnTheCallersThreadUntilItsFirstAwait()
+    {
+        int callerThread = Environment.CurrentManagedThreadId;
+        int attemptThread = 0;
+        var factory = new RetryTaskFactory<string>();
+
+        Task<string> call = factory.Run(_ =>
+        {
+            attemptThread = Environment.CurrentManagedThreadId;
+            return Task.FromResult("ok");
+        });
+
+        // The attempt ran before Run returned, on this thread.
+        Assert.AreEqual(callerThread, attemptThread);
+        Assert.IsTrue(call.IsCompletedSuccessfully);
+        Assert.AreEqual("ok", await call.ConfigureAwait(false));
+    }
+
     private static bool IsServerError(Response response) => response.StatusCode >= 500;
 
     private static RetryTaskFactory<Response> CreateFactory(IRetryStrategy strategy, Func<RetryEventArgs, ValueTask>? onRetry = null)
@@ -486,6 +686,11 @@ public class RetryTaskFactoryOfTRunTests
             var response = new Response(statusCodes[this.Returned.Count], this.Returned.Count + 1, this.Log) { DisposeFailure = this.DisposeFailure };
             this.Returned.Add(response);
             return new ValueTask<Response>(response);
+        }
+
+        public Task<Response> NextTaskAsync(CancellationToken cancellationToken)
+        {
+            return this.NextAsync(cancellationToken).AsTask();
         }
     }
 }
