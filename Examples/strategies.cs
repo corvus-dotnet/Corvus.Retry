@@ -55,14 +55,14 @@ StrategyRow[] rows =
 ];
 
 const int Columns = 6;
-var table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+Table table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn(new TableColumn("Strategy").NoWrap()).AddColumn(new TableColumn("Calls").Centered());
-for (var retry = 1; retry <= Columns; retry++)
+for (int retry = 1; retry <= Columns; retry++)
 {
     table.AddColumn(new TableColumn($"R{retry}").RightAligned().Padding(1, 0, 0, 0));
 }
 
-foreach (var row in rows)
+foreach (StrategyRow row in rows)
 {
     if (row.Strategy is null)
     {
@@ -70,7 +70,7 @@ foreach (var row in rows)
         continue;
     }
 
-    var delays = Sequence(row.Strategy, row.Results);
+    List<TimeSpan> delays = Sequence(row.Strategy, row.Results);
     List<string> cells = new() { Markup.Escape(row.Name) + (row.Random ? " [grey]*[/]" : ""), $"[white]{delays.Count + 1}[/]" };
     cells.AddRange(delays.Take(Columns).Select(Format));
     if (cells.Count < Columns + 2)
@@ -91,10 +91,10 @@ AnsiConsole.WriteLine();
 // Decorrelated jitter picks each delay between the base delay and three times the previous one, so it needs each
 // returned delay fed back as the next RetryAttempt.PreviousDelay, exactly as the library does during a call.
 AnsiConsole.Write(new Rule("[mediumpurple]RetryStrategies.Exponential(retries: 5, baseDelay: 1 s, maxDelay: 20 s)[/]").LeftJustified());
-var plain = Sequence(RetryStrategies.Exponential(retries: 5, baseDelay: s(1), maxDelay: s(20)));
-var jittered = Sequence(RetryStrategies.Exponential(retries: 5, baseDelay: s(1), maxDelay: s(20), useJitter: true));
-var chart = new BarChart().Width(70).Label("[white]delay before each retry, in seconds[/]");
-for (var i = 0; i < plain.Count; i++)
+List<TimeSpan> plain = Sequence(RetryStrategies.Exponential(retries: 5, baseDelay: s(1), maxDelay: s(20)));
+List<TimeSpan> jittered = Sequence(RetryStrategies.Exponential(retries: 5, baseDelay: s(1), maxDelay: s(20), useJitter: true));
+BarChart chart = new BarChart().Width(70).Label("[white]delay before each retry, in seconds[/]");
+for (int i = 0; i < plain.Count; i++)
 {
     chart.AddItem($"retry {i + 1}", Math.Round(plain[i].TotalSeconds, 1), Color.Grey);
     chart.AddItem($"  jitter", Math.Round(jittered[i].TotalSeconds, 1), Color.MediumPurple);
@@ -107,9 +107,9 @@ AnsiConsole.MarkupLine($"[grey]  Total wait: {plain.Sum(d => d.TotalSeconds):0.0
 static List<TimeSpan> Sequence(IRetryStrategy strategy, HttpResponseMessage[]? results = null)
 {
     List<TimeSpan> delays = new();
-    var previous = TimeSpan.Zero;
+    TimeSpan previous = TimeSpan.Zero;
     HttpRequestException failure = new("simulated failure");
-    for (var attempt = 1; attempt <= 20; attempt++)
+    for (int attempt = 1; attempt <= 20; attempt++)
     {
         object? result = results is not null && attempt <= results.Length ? results[attempt - 1] : null;
         if (strategy.GetRetryDelay(new RetryAttempt(attempt, result is null ? failure : null, result, previous)) is not TimeSpan delay)

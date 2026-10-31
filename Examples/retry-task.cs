@@ -9,6 +9,7 @@
 //
 //   dotnet run Examples/retry-task.cs
 
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 
 using Spectre.Console;
@@ -36,7 +37,7 @@ AnsiConsole.Write(new Rule("[orange1]RetryTask<T>.Run: one asynchronous call, th
 // Compare Retriable.RetryAsync, which has the same signature and makes 10 tries. The operation gets a token, and the
 // first try runs on the caller's thread until its first await, as the operation would without retries.
 FlakyClient summary = new("summary", failures: 2, workMs: 0);
-var oneOff = Stopwatch.StartNew();
+Stopwatch oneOff = Stopwatch.StartNew();
 string headline = await RetryTask<string>.Run(ct => summary.BuildAsync(ct));
 AnsiConsole.MarkupLineInterpolated($"  RetryTask<string>.Run: [white]{headline}[/] after [white]{summary.Attempts}[/] attempts, {oneOff.ElapsedMilliseconds} ms");
 
@@ -63,8 +64,8 @@ AnsiConsole.WriteLine();
 AnsiConsole.Write(new Rule("[orange1]StartNew: eight synchronous operations on the thread pool[/]").LeftJustified());
 
 // Constant: the same 150 ms before each retry, at most 5 retries (6 attempts), so every operation here recovers.
-var strategy = RetryStrategies.Constant(retries: 5, delay: TimeSpan.FromMilliseconds(150));
-var policy = RetryPolicies.For<TransientException>();
+IRetryStrategy strategy = RetryStrategies.Constant(retries: 5, delay: TimeSpan.FromMilliseconds(150));
+IRetryPolicy policy = RetryPolicies.For<TransientException>();
 
 // A configured factory holds the strategy and the policy, as new TaskFactory(...) holds its options. Keep it in a
 // field. The StartNew overloads without a strategy or a policy use the factory's.
@@ -72,17 +73,17 @@ RetryTaskFactory<string> reports = new(strategy, policy);
 
 int[] failures = [0, 3, 1, 4, 2, 0, 3, 1];
 var clients = failures.Select((f, i) => new FlakyClient($"report {i + 1}", f)).ToArray();
-var total = Stopwatch.StartNew();
+Stopwatch total = Stopwatch.StartNew();
 List<Task> started = new();
 
 await AnsiConsole.Progress()
     .Columns(new TaskDescriptionColumn(), new ProgressBarColumn(), new ElapsedTimeColumn())
     .StartAsync(async ctx =>
     {
-        foreach (var client in clients)
+        foreach (FlakyClient client in clients)
         {
             // The bar fills one sixth per attempt and jumps to full when the operation succeeds.
-            var bar = ctx.AddTask(client.Name, maxValue: 6);
+            ProgressTask bar = ctx.AddTask(client.Name, maxValue: 6);
             client.OnAttempt = succeeded => bar.Value = succeeded ? 6 : bar.Value + 1;
 
             // StartNew has the same shape as Task<T>.Factory.StartNew. An async lambda here is a compile error (CS0619):
@@ -99,11 +100,11 @@ await AnsiConsole.Progress()
         await Task.WhenAll(started);
     });
 
-var results = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+Table results = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn("operation").AddColumn(new TableColumn("attempts").RightAligned()).AddColumn("status").AddColumn("result");
 foreach (var (client, task) in clients.Zip(started))
 {
-    var result = task is Task<string> withResult ? withResult.Result : "(an Action: no result)";
+    string result = task is Task<string> withResult ? withResult.Result : "(an Action: no result)";
     results.AddRow(client.Name, $"{client.Attempts}", $"[green]{task.Status}[/]", Markup.Escape(result));
 }
 
@@ -117,11 +118,11 @@ AnsiConsole.Write(new Rule("[orange1]When the retries run out[/]").LeftJustified
 // LongRunning: a hint to the scheduler that the operation blocks its thread for a long time, so it gets its own thread
 // instead of a thread-pool thread. The retries keep the option.
 FlakyClient broken = new("report 9", failures: int.MaxValue);
-var doomed = reports.StartNew(broken.Build, TaskCreationOptions.LongRunning);
+Task<string> doomed = reports.StartNew(broken.Build, TaskCreationOptions.LongRunning);
 
 // RetryTask keeps at most 100 failures: the first 99 and the last. 150 tries with no delay show the cap.
 FlakyClient hopeless = new("report 10", failures: int.MaxValue, workMs: 0);
-var capped = reports.StartNew(hopeless.Build, new Count(150));
+Task<string> capped = reports.StartNew(hopeless.Build, new Count(150));
 
 await AnsiConsole.Status().StartAsync("report 9 retries on its own thread…", async _ =>
 {
@@ -137,11 +138,11 @@ await AnsiConsole.Status().StartAsync("report 9 retries on its own thread…", a
 });
 
 Tree faults = new("[orange1]Faulted tasks[/]");
-foreach (var (name, task, client) in new[] { ("report 9 (6 tries)", doomed, broken), ("report 10 (150 tries)", capped, hopeless) })
+foreach ((string name, Task<string> task, FlakyClient client) in new[] { ("report 9 (6 tries)", doomed, broken), ("report 10 (150 tries)", capped, hopeless) })
 {
     // task.Exception wraps the AggregateException of the tries; its InnerExceptions are the failures, in order.
-    var inner = ((AggregateException)task.Exception!.InnerException!).InnerExceptions;
-    var node = faults.AddNode(
+    ReadOnlyCollection<Exception> inner = ((AggregateException)task.Exception!.InnerException!).InnerExceptions;
+    TreeNode node = faults.AddNode(
         $"{name}: Status = [red]{task.Status}[/], {client.Attempts} attempts, AggregateException.InnerExceptions.Count = [white]{inner.Count}[/]");
     node.AddNode($"[grey][[0]][/] {Markup.Escape(inner[0].Message)}");
     if (inner.Count > 2)
@@ -188,7 +189,7 @@ public sealed class FlakyClient(string name, int failures, int workMs = 120)
 
     public string Build()
     {
-        var attempt = Interlocked.Increment(ref this.attempts);
+        int attempt = Interlocked.Increment(ref this.attempts);
         if (workMs > 0)
         {
             Thread.Sleep(workMs);

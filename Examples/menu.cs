@@ -12,7 +12,7 @@ using System.Diagnostics;
 
 using Spectre.Console;
 
-var demos = new (string Name, string File, string Blurb)[]
+(string Name, string File, string Blurb)[] demos = new (string Name, string File, string Blurb)[]
 {
     ("Retry basics", "retry-basics.cs", "Retriable, the onRetry callback, cancellation and giving up"),
     ("Strategies", "strategies.cs", "Every delay sequence side by side, tries versus retries, jitter"),
@@ -43,7 +43,7 @@ AnsiConsole.WriteLine();
 // interactive terminal, so without one the launcher lists the demos instead of prompting.
 if (args.Length > 0 || !AnsiConsole.Profile.Capabilities.Interactive || Console.IsInputRedirected)
 {
-    var selected = args.Contains("--all") || args.Length == 0
+    (string Name, string File, string Blurb)[] selected = args.Contains("--all") || args.Length == 0
         ? demos
         : demos.Where(d => args.Any(a => string.Equals(a, d.Name, StringComparison.OrdinalIgnoreCase)
                                       || string.Equals(a, d.File, StringComparison.OrdinalIgnoreCase)
@@ -52,7 +52,7 @@ if (args.Length > 0 || !AnsiConsole.Profile.Capabilities.Interactive || Console.
     if (selected.Length == 0)
     {
         AnsiConsole.MarkupLine("[red]No demo matches the arguments.[/] Use [white]--all[/], or one of:");
-        foreach (var d in demos)
+        foreach ((string Name, string File, string Blurb) d in demos)
         {
             AnsiConsole.MarkupLineInterpolated($"  [white]{Path.GetFileNameWithoutExtension(d.File)}[/]  [grey]{d.Blurb}[/]");
         }
@@ -66,16 +66,16 @@ if (args.Length > 0 || !AnsiConsole.Profile.Capabilities.Interactive || Console.
         AnsiConsole.WriteLine();
     }
 
-    var summary = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+    Table summary = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
         .AddColumn("[white]Demo[/]")
         .AddColumn(new TableColumn("[white]Exit code[/]").RightAligned())
         .AddColumn(new TableColumn("[white]Time[/]").RightAligned());
     int failures = 0;
 
-    foreach (var d in selected)
+    foreach ((string Name, string File, string Blurb) d in selected)
     {
         AnsiConsole.Write(new Rule($"[green]{Markup.Escape(d.Name)}[/]"));
-        var watch = Stopwatch.StartNew();
+        Stopwatch watch = Stopwatch.StartNew();
         int exitCode = Run(dir, d.File);
         watch.Stop();
         failures += exitCode == 0 ? 0 : 1;
@@ -98,7 +98,7 @@ const string quit = "Quit";
 
 while (true)
 {
-    var choice = AnsiConsole.Prompt(
+    string choice = AnsiConsole.Prompt(
         new SelectionPrompt<string>()
             .Title("Choose a [green]demo[/] to run:")
             .PageSize(18)
@@ -112,7 +112,7 @@ while (true)
         break;
     }
 
-    var demo = demos.First(d => d.Name == choice);
+    (string Name, string File, string Blurb) demo = demos.First(d => d.Name == choice);
 
     AnsiConsole.WriteLine();
     AnsiConsole.Write(new Rule($"[green]{Markup.Escape(demo.Name)}[/]"));
@@ -140,7 +140,7 @@ static int Run(string dir, string file)
 
     try
     {
-        using var process = Process.Start(start);
+        using Process? process = Process.Start(start);
         process!.WaitForExit();
         return process.ExitCode;
     }

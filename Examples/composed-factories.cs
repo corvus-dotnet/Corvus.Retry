@@ -88,7 +88,7 @@ RetryTaskFactory<string> outer = new(
 };
 
 Tree root = new("[mediumpurple]outer.Run(ct => inner.Run(service.GetPriceAsync, ct))[/]");
-foreach (var (title, mode) in new[]
+foreach ((string? title, ServiceMode mode) in new[]
 {
     ("Call 1: the service has a bad moment", ServiceMode.FailTwiceThenRecover),
     ("Call 2: the service goes down", ServiceMode.Down),
@@ -96,18 +96,18 @@ foreach (var (title, mode) in new[]
 })
 {
     service.Mode = mode;
-    var callNode = root.AddNode($"[white]{title}[/]");
+    TreeNode callNode = root.AddNode($"[white]{title}[/]");
     trace.Start(callNode);
-    var outerAttempt = 0;
+    int outerAttempt = 0;
 
     // The outer operation is one whole hedged call. It passes its own token on, so the outer AttemptTimeout and the
     // caller's cancellation reach every hedged attempt.
-    var answer = await outer.Run(async ct =>
+    string answer = await outer.Run(async ct =>
     {
         trace.BeginOuterAttempt(++outerAttempt);
         try
         {
-            var value = await inner.Run(c => service.GetPriceAsync(trace, c), ct);
+            string value = await inner.Run(c => service.GetPriceAsync(trace, c), ct);
             trace.Add($"[green]inner factory returned \"{value}\"[/]");
             return value;
         }
@@ -129,7 +129,7 @@ foreach (var (title, mode) in new[]
 AnsiConsole.Write(root);
 AnsiConsole.WriteLine();
 
-var layers = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+Table layers = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn("layer").AddColumn("part").AddColumn("what it did in these three calls");
 layers.AddRow("outer", "Fallback", $"answered {trace.Fallbacks} calls with the cached price");
 layers.AddRow("outer", "Retry: Exponential, TransientHttp", $"retried {trace.Retries} whole hedged calls; did not retry the open circuit");
@@ -167,8 +167,8 @@ public sealed class ScriptedService
 
     public async Task<string> GetPriceAsync(Trace trace, CancellationToken cancellationToken)
     {
-        var number = ++this.Requests;
-        var fails = this.Mode == ServiceMode.Down || ++this.requestsInMode <= 2;
+        int number = ++this.Requests;
+        bool fails = this.Mode == ServiceMode.Down || ++this.requestsInMode <= 2;
         await Task.Delay(80, cancellationToken);
         if (fails)
         {

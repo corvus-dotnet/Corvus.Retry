@@ -54,7 +54,7 @@ RetryTaskFactory<HttpResponseMessage> retries = new(
     TotalTimeout = TimeSpan.FromSeconds(10),
     OnRetry = args =>
     {
-        var response = (HttpResponseMessage?)args.Result;
+        HttpResponseMessage? response = (HttpResponseMessage?)args.Result;
         string outcome = response is null ? Markup.Escape(args.LastException?.GetType().Name ?? "?") : $"{(int)response.StatusCode}";
         string why = response?.Headers.RetryAfter is not null ? "[white]Retry-After[/]" : "strategy";
         log.Add($"  [red]attempt {args.AttemptNumber}: {outcome}[/] at {clock.ElapsedMilliseconds} ms, retry in {args.DelayBeforeRetry.TotalMilliseconds:F0} ms ({why})");
@@ -169,7 +169,7 @@ using (HttpClient client = new(new RetryHandler(guarded, down)) { BaseAddress = 
 {
     // Call 1: 503, 503, and the circuit opens; the third attempt is rejected, TransientHttp does not retry a
     // CircuitRejectedException, and the fallback answers. Call 2: rejected at once, no request, the fallback answers.
-    for (var call = 1; call <= 2; call++)
+    for (int call = 1; call <= 2; call++)
     {
         string body = await RunAsync("GET /products/42", () => client.GetStringAsync("products/42"));
         Show($"6{(call == 1 ? "a" : "b")}. GET /products/42 while the service is down, call {call}: breaker and fallback", down, body, Color.Orange1);
@@ -181,15 +181,15 @@ RetryTaskFactory<HttpResponseMessage> timed = new(RetryStrategies.Constant(retri
 {
     AttemptTimeout = TimeSpan.FromMilliseconds(300),
 };
-var exceptions = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+Table exceptions = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn("Cause").AddColumn("Exception").AddColumn("Detail").AddColumn(new TableColumn("Requests").RightAligned()).AddColumn(new TableColumn("Time").RightAligned());
 
 // a. The factory's attempt timeout, on both attempts. The handler throws RetryTimeoutException, and HttpClient passes it on.
 ScriptedHandler hanging = new(Step.Hang());
 using (HttpClient client = new(new RetryHandler(timed, hanging)) { BaseAddress = new("https://catalogue.example/") })
 {
-    var watch = Stopwatch.StartNew();
-    var (type, detail) = await CatchAsync(() => client.GetAsync("products/42"));
+    Stopwatch watch = Stopwatch.StartNew();
+    (string type, string detail) = await CatchAsync(() => client.GetAsync("products/42"));
     exceptions.AddRow("AttemptTimeout 300 ms, twice", type, detail, $"{hanging.Calls.Count}", $"{watch.ElapsedMilliseconds} ms");
 }
 
@@ -199,8 +199,8 @@ using (HttpClient client = new(new RetryHandler(timed, hanging)) { BaseAddress =
 ScriptedHandler hangingToo = new(Step.Hang());
 using (HttpClient client = new(new RetryHandler(timed, hangingToo)) { BaseAddress = new("https://catalogue.example/"), Timeout = TimeSpan.FromMilliseconds(500) })
 {
-    var watch = Stopwatch.StartNew();
-    var (type, detail) = await CatchAsync(() => client.GetAsync("products/42"));
+    Stopwatch watch = Stopwatch.StartNew();
+    (string type, string detail) = await CatchAsync(() => client.GetAsync("products/42"));
     exceptions.AddRow("HttpClient.Timeout 500 ms", type, detail, $"{hangingToo.Calls.Count}", $"{watch.ElapsedMilliseconds} ms");
 }
 
@@ -209,7 +209,7 @@ ScriptedHandler hangingStill = new(Step.Hang());
 using (HttpClient client = new(new RetryHandler(timed, hangingStill)) { BaseAddress = new("https://catalogue.example/") })
 {
     using CancellationTokenSource caller = new(TimeSpan.FromMilliseconds(150));
-    var watch = Stopwatch.StartNew();
+    Stopwatch watch = Stopwatch.StartNew();
     string type = "none", detail = "returned";
     try
     {
@@ -250,7 +250,7 @@ static async Task<(string Type, string Detail)> CatchAsync(Func<Task<HttpRespons
 {
     try
     {
-        using var response = await call();
+        using HttpResponseMessage response = await call();
         return ("none", $"{(int)response.StatusCode}");
     }
     catch (RetryTimeoutException ex)
@@ -266,7 +266,7 @@ static async Task<(string Type, string Detail)> CatchAsync(Func<Task<HttpRespons
 void Show(string title, ScriptedHandler handler, string result, Color colour)
 {
     AnsiConsole.Write(new Rule($"[deepskyblue1]{Markup.Escape(title)}[/]").LeftJustified());
-    foreach (var line in log)
+    foreach (string line in log)
     {
         AnsiConsole.MarkupLine(line);
     }
@@ -338,7 +338,7 @@ internal sealed class ScriptedHandler(params Step[] steps) : HttpMessageHandler
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        var step = steps[Math.Min(this.Calls.Count, steps.Length - 1)];
+        Step step = steps[Math.Min(this.Calls.Count, steps.Length - 1)];
         this.Calls.Add($"{request.Method} {step.Description}");
         return step.Respond(cancellationToken);
     }

@@ -51,7 +51,7 @@ RetryTaskFactory<HttpResponseMessage> factory = new(
     {
         // For a result-caused retry, Result holds the rejected response and LastException is null. The response is
         // still alive here: the factory disposes it only after this callback, so you can log its body.
-        var response = (TrackedResponse)args.Result!;
+        TrackedResponse response = (TrackedResponse)args.Result!;
         retries[args.AttemptNumber] = new(
             args.LastException is null ? "Result" : "LastException",
             args.DelayBeforeRetry,
@@ -60,21 +60,21 @@ RetryTaskFactory<HttpResponseMessage> factory = new(
     },
 };
 
-var clock = Stopwatch.StartNew();
-var final = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync(
+Stopwatch clock = Stopwatch.StartNew();
+HttpResponseMessage final = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync(
     "Calling GET /products/KT-100 (the 429 asks for a 1 s wait)…",
     _ => factory.Run(ct => client.GetAsync("products/KT-100", ct)));
-var total = clock.Elapsed;
+TimeSpan total = clock.Elapsed;
 
-var table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+Table table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn("#").AddColumn(new TableColumn("At").RightAligned()).AddColumn("Status").AddColumn("Retry-After")
     .AddColumn("OnRetry got").AddColumn(new TableColumn("Delay").RightAligned()).AddColumn("Disposed");
 
-foreach (var sent in handler.Sent)
+foreach (SentRequest sent in handler.Sent)
 {
-    var retryAfter = sent.Response.Headers.RetryAfter?.Delta is { } delta ? $"{delta.TotalSeconds:F0} s" : "-";
-    var status = ((int)sent.Response.StatusCode).ToString();
-    if (retries.TryGetValue(sent.Attempt, out var retry))
+    string retryAfter = sent.Response.Headers.RetryAfter?.Delta is { } delta ? $"{delta.TotalSeconds:F0} s" : "-";
+    string status = ((int)sent.Response.StatusCode).ToString();
+    if (retries.TryGetValue(sent.Attempt, out RetryObservation? retry))
     {
         // "no → yes": alive while OnRetry ran, disposed by the factory before the next attempt.
         table.AddRow(
@@ -100,7 +100,7 @@ AnsiConsole.WriteLine();
 
 using (final)
 {
-    var body = await final.Content.ReadAsStringAsync();
+    string body = await final.Content.ReadAsStringAsync();
     AnsiConsole.MarkupLine($"  [green]{(int)final.StatusCode} {final.StatusCode}[/] after {handler.Sent.Count} attempts in {total.TotalSeconds:F1} s");
     AnsiConsole.MarkupLine($"  [grey]{Markup.Escape(body)}[/]");
 }
@@ -140,7 +140,7 @@ sealed class ScriptedHandler(params (HttpStatusCode Status, TimeSpan? RetryAfter
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         this.clock.Start();
-        var (status, retryAfter) = script[Math.Min(this.Sent.Count, script.Length - 1)];
+        (HttpStatusCode status, TimeSpan? retryAfter) = script[Math.Min(this.Sent.Count, script.Length - 1)];
         TrackedResponse response = new(status)
         {
             RequestMessage = request,

@@ -17,8 +17,8 @@ AnsiConsole.Write(new Rule("[hotpink]50 clients, one outage, the same backoff[/]
 AnsiConsole.WriteLine();
 
 const int Clients = 50;
-var bucket = TimeSpan.FromMilliseconds(250);
-var window = TimeSpan.FromSeconds(8);
+TimeSpan bucket = TimeSpan.FromMilliseconds(250);
+TimeSpan window = TimeSpan.FromSeconds(8);
 
 AnsiConsole.Write(new Panel(
         $"At t = 0 a database fails, and [white]{Clients}[/] clients see the error at the same instant. Each retries " +
@@ -29,22 +29,22 @@ AnsiConsole.WriteLine();
 
 // One strategy instance serves every client: a strategy keeps no state for a call. The delays are computed, not
 // waited for, so the demo shows a 30-second outage in an instant.
-var plain = RetryStrategies.Exponential(retries: 5, baseDelay: TimeSpan.FromSeconds(1));
-var jittered = RetryStrategies.Exponential(retries: 5, baseDelay: TimeSpan.FromSeconds(1), useJitter: true);
+IRetryStrategy plain = RetryStrategies.Exponential(retries: 5, baseDelay: TimeSpan.FromSeconds(1));
+IRetryStrategy jittered = RetryStrategies.Exponential(retries: 5, baseDelay: TimeSpan.FromSeconds(1), useJitter: true);
 
 // Decorrelated jitter draws each delay from the base delay up to three times the previous one, so without a cap a
 // client can wait minutes. maxDelay keeps the spread but bounds the wait.
-var capped = RetryStrategies.Exponential(retries: 5, baseDelay: TimeSpan.FromSeconds(1), maxDelay: TimeSpan.FromSeconds(8), useJitter: true);
+IRetryStrategy capped = RetryStrategies.Exponential(retries: 5, baseDelay: TimeSpan.FromSeconds(1), maxDelay: TimeSpan.FromSeconds(8), useJitter: true);
 
-var plainInstants = Enumerable.Range(0, Clients).SelectMany(_ => RetryInstants(plain)).ToList();
-var jitteredInstants = Enumerable.Range(0, Clients).SelectMany(_ => RetryInstants(jittered)).ToList();
-var cappedInstants = Enumerable.Range(0, Clients).SelectMany(_ => RetryInstants(capped)).ToList();
+List<TimeSpan> plainInstants = Enumerable.Range(0, Clients).SelectMany(_ => RetryInstants(plain)).ToList();
+List<TimeSpan> jitteredInstants = Enumerable.Range(0, Clients).SelectMany(_ => RetryInstants(jittered)).ToList();
+List<TimeSpan> cappedInstants = Enumerable.Range(0, Clients).SelectMany(_ => RetryInstants(capped)).ToList();
 
-var plainBuckets = Histogram(plainInstants, bucket);
-var jitteredBuckets = Histogram(jitteredInstants, bucket);
-var cappedBuckets = Histogram(cappedInstants, bucket);
+Dictionary<long, int> plainBuckets = Histogram(plainInstants, bucket);
+Dictionary<long, int> jitteredBuckets = Histogram(jitteredInstants, bucket);
+Dictionary<long, int> cappedBuckets = Histogram(cappedInstants, bucket);
 
-var grid = new Grid().AddColumn().AddColumn();
+Grid grid = new Grid().AddColumn().AddColumn();
 grid.AddRow(
     Chart("[white]No jitter[/]", plainBuckets, Color.Grey),
     Chart("[hotpink]useJitter: true[/]", jitteredBuckets, Color.HotPink));
@@ -52,7 +52,7 @@ AnsiConsole.MarkupLine($"[grey]  Retries reaching the database in each {bucket.T
 AnsiConsole.Write(grid);
 AnsiConsole.WriteLine();
 
-var summary = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+Table summary = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn("").AddColumn(new TableColumn("No jitter").RightAligned()).AddColumn(new TableColumn("useJitter: true").RightAligned())
     .AddColumn(new TableColumn("+ maxDelay: 8 s").RightAligned());
 summary.AddRow("Retries in total", $"{plainInstants.Count}", $"{jitteredInstants.Count}", $"{cappedInstants.Count}");
@@ -70,9 +70,9 @@ AnsiConsole.MarkupLine("[grey]  Uncapped jitter can push the last retry minutes 
 static IEnumerable<TimeSpan> RetryInstants(IRetryStrategy strategy)
 {
     HttpRequestException failure = new("connection refused");
-    var now = TimeSpan.Zero;
-    var previous = TimeSpan.Zero;
-    for (var attempt = 1; strategy.GetRetryDelay(new RetryAttempt(attempt, failure, null, previous)) is TimeSpan delay; attempt++)
+    TimeSpan now = TimeSpan.Zero;
+    TimeSpan previous = TimeSpan.Zero;
+    for (int attempt = 1; strategy.GetRetryDelay(new RetryAttempt(attempt, failure, null, previous)) is TimeSpan delay; attempt++)
     {
         now += delay;
         previous = delay;
@@ -86,7 +86,7 @@ static Dictionary<long, int> Histogram(IEnumerable<TimeSpan> instants, TimeSpan 
 
 BarChart Chart(string label, Dictionary<long, int> buckets, Color color)
 {
-    var chart = new BarChart().Width(38).Label(label).WithMaxValue(Clients);
+    BarChart chart = new BarChart().Width(38).Label(label).WithMaxValue(Clients);
     for (long slot = 0; slot < window.Ticks / bucket.Ticks; slot++)
     {
         chart.AddItem($"{TimeSpan.FromTicks(slot * bucket.Ticks).TotalSeconds:0.00} s", buckets.GetValueOrDefault(slot), color);

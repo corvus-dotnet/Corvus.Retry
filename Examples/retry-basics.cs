@@ -30,11 +30,11 @@ AnsiConsole.WriteLine();
 // 1. The defaults: RetryStrategies.Default (a shared Count(10): ten tries, no delay) and AnyExceptionPolicy.
 AnsiConsole.Write(new Rule("[aqua]1. The defaults[/]").LeftJustified());
 FlakyService syncService = new("inventory", failuresBeforeSuccess: 3);
-var reply = Retriable.Retry(() => syncService.Ping());
+string reply = Retriable.Retry(() => syncService.Ping());
 AnsiConsole.MarkupLine($"  [grey]Retry:[/]      [white]{Markup.Escape(reply)}[/] after [white]{syncService.Calls}[/] calls");
 
 FlakyService asyncService = new("pricing", failuresBeforeSuccess: 3);
-var asyncReply = await Retriable.RetryAsync(() => asyncService.PingAsync());
+string asyncReply = await Retriable.RetryAsync(() => asyncService.PingAsync());
 AnsiConsole.MarkupLine($"  [grey]RetryAsync:[/] [white]{Markup.Escape(asyncReply)}[/] after [white]{asyncService.Calls}[/] calls");
 AnsiConsole.MarkupLine("[grey]  Ten tries and no delay by default: three failures cost nothing visible.[/]");
 AnsiConsole.WriteLine();
@@ -42,11 +42,11 @@ AnsiConsole.WriteLine();
 // 2. A strategy with a delay, and onRetry to watch each retry. RetryStrategies.Constant counts retries, not tries:
 // retries: 3 allows four calls. A 200 ms pause gives the service time to recover instead of hammering it.
 AnsiConsole.Write(new Rule("[aqua]2. RetryStrategies.Constant(retries: 3, delay: 200 ms) with onRetry[/]").LeftJustified());
-var attempts = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+Table attempts = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn("Attempt").AddColumn("Outcome").AddColumn("Next attempt").AddColumn(new TableColumn("Delay").RightAligned())
     .AddColumn(new TableColumn("Elapsed").RightAligned());
 FlakyService constantService = new("orders", failuresBeforeSuccess: 3);
-var stopwatch = Stopwatch.StartNew();
+Stopwatch stopwatch = Stopwatch.StartNew();
 string? constantReply = null;
 
 await ShowLiveAsync(attempts, async refresh =>

@@ -1,0 +1,9 @@
+# The demos name every type, except where the right-hand side is a LINQ query. Each demo is a file-based app, so this
+# file is the only editor configuration that applies to it.
+root = true
+
+[*.cs]
+csharp_style_var_for_built_in_types = false:warning
+csharp_style_var_when_type_is_apparent = false:warning
+csharp_style_var_elsewhere = false:warning
+csharp_style_implicit_object_creation_when_type_is_apparent = true:warning

@@ -37,8 +37,8 @@ Func<FallbackEventArgs<HttpResponseMessage>, ValueTask> logFailure = async args 
     }
     else if (args.Result is TrackedResponse response)
     {
-        var disposed = response.IsDisposed;
-        var body = await response.Content.ReadAsStringAsync(args.CancellationToken);
+        bool disposed = response.IsDisposed;
+        string body = await response.Content.ReadAsStringAsync(args.CancellationToken);
         journal.Add($"OnFallback read {body}, disposed: {YesNo(disposed)}");
     }
 };
@@ -87,7 +87,7 @@ RetryTaskFactory<HttpResponseMessage> auditedFactory = new(factory)
     },
 };
 
-var table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+Table table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn("Scenario").AddColumn("What happened").AddColumn("Returned");
 
 await AnsiConsole.Status().StartAsync("Asking the catalogue service…", async _ =>
@@ -110,7 +110,7 @@ async Task Run(string scenario, RetryTaskFactory<HttpResponseMessage> target, Be
     string value;
     try
     {
-        using var response = await target.Run(ct => service.GetPriceAsync(ct));
+        using HttpResponseMessage response = await target.Run(ct => service.GetPriceAsync(ct));
         value = $"[green]{Markup.Escape(await response.Content.ReadAsStringAsync())}[/]";
     }
     catch (Exception ex)

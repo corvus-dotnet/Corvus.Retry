@@ -30,7 +30,7 @@ AnsiConsole.Write(new Panel(
     .Header("[white]The problem[/]").Border(BoxBorder.Rounded).BorderColor(Color.Grey));
 AnsiConsole.WriteLine();
 
-var wallClock = Stopwatch.StartNew();
+Stopwatch wallClock = Stopwatch.StartNew();
 
 // ---- Test 1: the call succeeds on the sixth attempt, after five Backoff delays ----
 
@@ -51,12 +51,12 @@ RetryTaskFactory factory = new()
 
 // Act. Start the call, but do not await it yet: it is about to wait for the first delay. GetAsync returns a ValueTask,
 // so the call uses RunValueTask. For an operation that returns a Task, use Run.
-var call = factory.RunValueTask(service.GetAsync).AsTask();
+Task<string> call = factory.RunValueTask(service.GetAsync).AsTask();
 
-var steps = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+Table steps = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn("retry").AddColumn(new TableColumn("Backoff delay").RightAligned())
     .AddColumn("1 ms early").AddColumn("after Advance(delay)").AddColumn(new TableColumn("fake clock").RightAligned());
-for (var retry = 1; retry <= 5; retry++)
+for (int retry = 1; retry <= 5; retry++)
 {
     // THE PITFALL: Advance only fires timers that exist. OnRetry runs BEFORE the factory creates the delay timer,
     // so a test that advances from OnRetry, or as soon as OnRetry signals, can move the clock first; the timer is
@@ -64,12 +64,12 @@ for (var retry = 1; retry <= 5; retry++)
     // narrows the race but does not close it. The safe pattern: wait until the library has created the timer.
     await time.WaitForTimersAsync(retry);
 
-    var delay = delays[retry - 1];
-    var callsBefore = service.Calls;
+    TimeSpan delay = delays[retry - 1];
+    int callsBefore = service.Calls;
 
     // Task.Delay measures whole milliseconds, so "just too early" is one millisecond short, not one tick.
     time.Advance(delay - TimeSpan.FromMilliseconds(1));
-    var early = service.Calls == callsBefore ? "[green]✓ still waiting[/]" : "[red]✗ started early[/]";
+    string early = service.Calls == callsBefore ? "[green]✓ still waiting[/]" : "[red]✗ started early[/]";
 
     time.Advance(TimeSpan.FromMilliseconds(1));
     if (retry < 5)
@@ -81,7 +81,7 @@ for (var retry = 1; retry <= 5; retry++)
         await call;
     }
 
-    var outcome = service.Calls == callsBefore + 1
+    string outcome = service.Calls == callsBefore + 1
         ? $"[green]✓ attempt {service.Calls} ran, {(retry < 5 ? "failed" : "succeeded")}[/]"
         : "[red]✗ no attempt[/]";
     steps.AddRow($"{retry}", $"{delay.TotalSeconds:F1} s", early, outcome, $"{time.Elapsed:m\\:ss\\.f}");
@@ -106,14 +106,14 @@ RetryTaskFactory timeoutFactory = new()
 };
 
 // Act. The attempt timeout is a timer too, so the same rule applies: wait for it, then advance.
-var hung = timeoutFactory.Run(ct => Task.Delay(Timeout.Infinite, ct));
+Task hung = timeoutFactory.Run(ct => Task.Delay(Timeout.Infinite, ct));
 await time2.WaitForTimersAsync(1);
 time2.Advance(TimeSpan.FromSeconds(29.999));
-var stillRunning = !hung.IsCompleted;
+bool stillRunning = !hung.IsCompleted;
 time2.Advance(TimeSpan.FromMilliseconds(1));
 
 // Assert.
-var timeout = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).AddColumn("check").AddColumn("outcome");
+Table timeout = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).AddColumn("check").AddColumn("outcome");
 timeout.AddRow("after 29.999 s", stillRunning ? "[green]✓ the attempt is still running[/]" : "[red]✗ already finished[/]");
 try
 {
@@ -148,14 +148,14 @@ CircuitBreaker breaker = new(
 RetryTaskFactory guarded = new(new DoNotRetry(), AnyExceptionPolicy.Default) { CircuitBreaker = breaker, TimeProvider = time3 };
 
 // Act and assert, step by step. Each call is one attempt that fails or succeeds at once.
-var breakerStart = time3.GetUtcNow();
-var circuit = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+DateTimeOffset breakerStart = time3.GetUtcNow();
+Table circuit = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn("step").AddColumn(new TableColumn("fake clock").RightAligned()).AddColumn("outcome").AddColumn("State");
 
 async Task Step(string step, params bool[] calls)
 {
-    var outcome = "";
-    foreach (var succeeds in calls)
+    string outcome = "";
+    foreach (bool succeeds in calls)
     {
         try
         {
@@ -227,11 +227,11 @@ public sealed class TimerAwareFakeTimeProvider : FakeTimeProvider
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
         // Count the timer only once the base class has scheduled it, so a test that sees the count can advance.
-        var timer = base.CreateTimer(callback, state, dueTime, period);
+        ITimer timer = base.CreateTimer(callback, state, dueTime, period);
         lock (this.gate)
         {
             this.created++;
-            foreach (var waiter in this.waiters.Where(w => w.Count <= this.created).ToList())
+            foreach ((int Count, TaskCompletionSource Signal) waiter in this.waiters.Where(w => w.Count <= this.created).ToList())
             {
                 waiter.Signal.TrySetResult();
                 this.waiters.Remove(waiter);

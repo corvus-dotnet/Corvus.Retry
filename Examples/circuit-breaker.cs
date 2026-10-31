@@ -28,7 +28,7 @@ AnsiConsole.Write(new Panel(
     .Header("[white]The problem[/]").Border(BoxBorder.Rounded).BorderColor(Color.Grey));
 AnsiConsole.WriteLine();
 
-var clock = Stopwatch.StartNew();
+Stopwatch clock = Stopwatch.StartNew();
 List<(TimeSpan At, CircuitStateChange Change)> changes = new();
 // The settings are constructor parameters, because the breaker starts its clock when it is constructed.
 CircuitBreaker breaker = new(
@@ -57,19 +57,19 @@ RetryTaskFactory factoryB = new(new DoNotRetry(), AnyExceptionPolicy.Default) { 
 
 InventoryService service = new();
 List<CallRecord> calls = new();
-var callCount = 0;
+int callCount = 0;
 
 await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("Driving the inventory service…", async _ =>
 {
     Phase("The service is healthy");
-    foreach (var (name, factory) in new[] { ("A", factoryA), ("B", factoryB), ("A", factoryA), ("B", factoryB) })
+    foreach ((string name, RetryTaskFactory factory) in new[] { ("A", factoryA), ("B", factoryB), ("A", factoryA), ("B", factoryB) })
     {
         await Call(name, factory);
     }
 
     Phase("The service goes down");
     service.IsDown = true;
-    foreach (var (name, factory) in new[] { ("B", factoryB), ("A", factoryA), ("B", factoryB), ("A", factoryA) })
+    foreach ((string name, RetryTaskFactory factory) in new[] { ("B", factoryB), ("A", factoryA), ("B", factoryB), ("A", factoryA) })
     {
         await Call(name, factory);
     }
@@ -77,21 +77,21 @@ await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("Driving the i
     // The failure that opened the circuit came through A, but B is rejected at once: they share the breaker.
     Phase("Open: B fails fast too");
     await Call("B", factoryB);
-    for (var i = 0; i < 4; i++)
+    for (int i = 0; i < 4; i++)
     {
         await Task.Delay(200);
         await Call(i % 2 == 0 ? "A" : "B", i % 2 == 0 ? factoryA : factoryB);
     }
 
     // Wait out the rest of the break. The service recovers meanwhile, but is slow on its first call.
-    var opened = changes.Last().At;
-    var remaining = opened + TimeSpan.FromMilliseconds(1100) - clock.Elapsed;
+    TimeSpan opened = changes.Last().At;
+    TimeSpan remaining = opened + TimeSpan.FromMilliseconds(1100) - clock.Elapsed;
     await Task.Delay(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
     service.IsDown = false;
     service.LatencyMs = 300;
 
     Phase("Half-open: one test call");
-    var testCall = Call("A", factoryA, " (test call)");
+    Task testCall = Call("A", factoryA, " (test call)");
     await Task.Delay(100);
     await Call("B", factoryB);
     await testCall;
@@ -107,15 +107,15 @@ await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("Driving the i
     // policy refuses a 404, so each one counts as a success and the circuit stays closed.
     Phase("A 404 is not a failure: the policy refuses it");
     service.IsMissing = true;
-    foreach (var (name, factory) in new[] { ("A", factoryA), ("B", factoryB), ("A", factoryA), ("B", factoryB) })
+    foreach ((string name, RetryTaskFactory factory) in new[] { ("A", factoryA), ("B", factoryB), ("A", factoryA), ("B", factoryB) })
     {
         await Call(name, factory);
     }
 });
 
-var log = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).Title("[hotpink]Call log[/]")
+Table log = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).Title("[hotpink]Call log[/]")
     .AddColumn("#").AddColumn(new TableColumn("At").RightAligned()).AddColumn("Via").AddColumn("Outcome").AddColumn("RetryAfter").AddColumn("Circuit");
-foreach (var call in calls)
+foreach (CallRecord call in calls)
 {
     if (call.Via.Length == 0)
     {
@@ -129,11 +129,11 @@ foreach (var call in calls)
 AnsiConsole.Write(log);
 AnsiConsole.WriteLine();
 
-var timeline = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).Title("[hotpink]OnStateChanged[/]")
+Table timeline = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).Title("[hotpink]OnStateChanged[/]")
     .AddColumn(new TableColumn("At").RightAligned()).AddColumn("From").AddColumn("To").AddColumn("LastException");
-foreach (var (at, change) in changes)
+foreach ((TimeSpan at, CircuitStateChange change) in changes)
 {
-    var cause = change.LastException is { } ex ? $"{ex.GetType().Name}: {ex.Message}" : "-";
+    string cause = change.LastException is { } ex ? $"{ex.GetType().Name}: {ex.Message}" : "-";
     timeline.AddRow(Seconds(at), Coloured(change.From), Coloured(change.To), Markup.Escape(cause));
 }
 
@@ -147,13 +147,13 @@ AnsiConsole.MarkupLine("[grey]  The 404s are calls that succeeded, as far as the
 // overlapping calls are listed in the order in which they started.
 async Task Call(string name, RetryTaskFactory factory, string note = "")
 {
-    var number = ++callCount;
-    var at = clock.Elapsed;
+    int number = ++callCount;
+    TimeSpan at = clock.Elapsed;
     calls.Add(new(number, at, name, "pending", "", default));
-    var index = calls.Count - 1;
+    int index = calls.Count - 1;
 
     string outcome;
-    var retryAfter = "";
+    string retryAfter = "";
     try
     {
         await factory.Run(ct => service.GetStockAsync(ct));

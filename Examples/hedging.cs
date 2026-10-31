@@ -52,13 +52,13 @@ List<double> plainTimes = new();
 List<double> hedgedTimes = new();
 List<CallLog> hedgedCalls = new();
 
-var total = Stopwatch.StartNew();
+Stopwatch total = Stopwatch.StartNew();
 await AnsiConsole.Progress()
     .Columns(new TaskDescriptionColumn(), new ProgressBarColumn(), new ElapsedTimeColumn())
     .StartAsync(async ctx =>
     {
-        var plainBar = ctx.AddTask("without hedging", maxValue: Calls);
-        var hedgedBar = ctx.AddTask("with hedging", maxValue: Calls);
+        ProgressTask plainBar = ctx.AddTask("without hedging", maxValue: Calls);
+        ProgressTask hedgedBar = ctx.AddTask("with hedging", maxValue: Calls);
 
         // The two runs go side by side to save time; inside each run the calls are sequential.
         await Task.WhenAll(
@@ -76,7 +76,7 @@ await AnsiConsole.Progress()
             }));
     });
 
-var comparison = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+Table comparison = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn("").AddColumn(new TableColumn("median").RightAligned()).AddColumn(new TableColumn("p90").RightAligned())
     .AddColumn(new TableColumn("max").RightAligned()).AddColumn(new TableColumn("total").RightAligned());
 comparison.AddRow(StatsRow("without hedging", plainTimes, "grey"));
@@ -88,15 +88,15 @@ AnsiConsole.WriteLine();
 await Task.Delay(100);
 
 // One hedged call, attempt by attempt: the first call in which attempt 1 was slow and attempt 2 won.
-var slowIndex = hedgedCalls.FindIndex(c => c.Attempts is [{ Slow: true }, { Outcome: "won" }, ..]);
+int slowIndex = hedgedCalls.FindIndex(c => c.Attempts is [{ Slow: true }, { Outcome: "won" }, ..]);
 if (slowIndex >= 0)
 {
-    var call = hedgedCalls[slowIndex];
+    CallLog call = hedgedCalls[slowIndex];
     Tree tree = new($"[deepskyblue1]Hedged call {slowIndex + 1}[/] answered in {call.Attempts.Min(a => a.EndedAtMs ?? double.MaxValue):F0} ms");
-    foreach (var attempt in call.Attempts)
+    foreach (AttemptLog attempt in call.Attempts)
     {
-        var colour = attempt.Outcome == "won" ? "green" : attempt.Outcome == "cancelled" ? "grey" : "yellow";
-        var node = tree.AddNode(
+        string colour = attempt.Outcome == "won" ? "green" : attempt.Outcome == "cancelled" ? "grey" : "yellow";
+        TreeNode node = tree.AddNode(
             $"attempt {attempt.Number}: started at {attempt.StartedAtMs:F0} ms, latency {attempt.LatencyMs} ms → [{colour}]{attempt.Outcome}[/]");
         var hedge = hedgingEvents.FirstOrDefault(e => e.Call == slowIndex + 1 && e.Args.AttemptNumber == attempt.Number);
         if (hedge.Call != 0)
@@ -125,15 +125,15 @@ HedgedTaskFactory<string> regional = new(extraAttempts: 1, stagger: TimeSpan.Fro
     OperationForAttempt = attempt => attempt == 1 ? null : ct => regions.GetAsync("us", ct),
 };
 
-var regionTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+Table regionTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn("eu behaves").AddColumn("OnHedgedAttempt LastException").AddColumn("answered by")
     .AddColumn(new TableColumn("time").RightAligned());
-foreach (var behaviour in new[] { "fast", "slow", "fails" })
+foreach (string? behaviour in new[] { "fast", "slow", "fails" })
 {
     regions.EuBehaviour = behaviour;
     hedgeCause = null;
-    var watch = Stopwatch.StartNew();
-    var answer = await regional.Run(ct => regions.GetAsync("eu", ct));
+    Stopwatch watch = Stopwatch.StartNew();
+    string answer = await regional.Run(ct => regions.GetAsync("eu", ct));
     regionTable.AddRow(behaviour, Markup.Escape(hedgeCause ?? "no hedge"), $"[deepskyblue1]{answer}[/]", $"{watch.ElapsedMilliseconds} ms");
 }
 
@@ -146,8 +146,8 @@ AnsiConsole.WriteLine();
 // wait for the stagger. Both attempts run the operation given to Run.
 AnsiConsole.Write(new Rule("[deepskyblue1]HedgedTask<T>.Run: the default factory[/]").LeftJustified());
 regions.EuBehaviour = "fails once";
-var oneOff = Stopwatch.StartNew();
-var oneOffAnswer = await HedgedTask<string>.Run(ct => regions.GetAsync("eu", ct));
+Stopwatch oneOff = Stopwatch.StartNew();
+string oneOffAnswer = await HedgedTask<string>.Run(ct => regions.GetAsync("eu", ct));
 AnsiConsole.MarkupLineInterpolated($"  eu fails once: answered by [deepskyblue1]{oneOffAnswer}[/] on attempt 2 in {oneOff.ElapsedMilliseconds} ms, not after the 2 s stagger");
 AnsiConsole.WriteLine();
 
@@ -179,18 +179,18 @@ HedgedTaskFactory<Reply> statusAware = new(extraAttempts: 1, stagger: TimeSpan.F
     },
 };
 
-var statusTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+Table statusTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn("eu says").AddColumn("us says").AddColumn("hedge started").AddColumn("OnFallback saw").AddColumn("answered by")
     .AddColumn(new TableColumn("time").RightAligned());
-foreach (var (eu, us) in new[] { ("200", "200"), ("503", "200"), ("503", "503") })
+foreach ((string eu, string us) in new[] { ("200", "200"), ("503", "200"), ("503", "503") })
 {
     regions.EuBehaviour = eu;
     regions.UsBehaviour = us;
     hedgeCause = null;
     fallbackSaw = null;
-    var watch = Stopwatch.StartNew();
-    var reply = await statusAware.Run(ct => regions.GetReplyAsync("eu", ct));
-    var hedgeStarted = hedgeCause is null ? "no hedge" : "at once, after the 503";
+    Stopwatch watch = Stopwatch.StartNew();
+    Reply reply = await statusAware.Run(ct => regions.GetReplyAsync("eu", ct));
+    string hedgeStarted = hedgeCause is null ? "no hedge" : "at once, after the 503";
     statusTable.AddRow(eu, us, hedgeStarted, fallbackSaw ?? "-", $"[deepskyblue1]{reply.Status} from {reply.Region}[/]", $"{watch.ElapsedMilliseconds} ms");
 }
 
@@ -201,9 +201,9 @@ AnsiConsole.MarkupLine($"[grey]  The operation must be idempotent. Whole demo: {
 
 static async Task RunAsync(int calls, ProgressTask bar, List<double> times, Func<Task> call)
 {
-    for (var i = 0; i < calls; i++)
+    for (int i = 0; i < calls; i++)
     {
-        var watch = Stopwatch.StartNew();
+        Stopwatch watch = Stopwatch.StartNew();
         await call();
         times.Add(watch.Elapsed.TotalMilliseconds);
         bar.Increment(1);
@@ -212,7 +212,7 @@ static async Task RunAsync(int calls, ProgressTask bar, List<double> times, Func
 
 static string[] StatsRow(string name, List<double> times, string colour)
 {
-    var sorted = times.Order().ToArray();
+    double[] sorted = times.Order().ToArray();
     return
     [
         $"[{colour}]{name}[/]",
@@ -311,7 +311,7 @@ public sealed class RegionService
 
     public async Task<string> GetAsync(string region, CancellationToken cancellationToken)
     {
-        var behaviour = region == "eu" ? this.EuBehaviour : this.UsBehaviour;
+        string behaviour = region == "eu" ? this.EuBehaviour : this.UsBehaviour;
         if (behaviour == "fails" || (behaviour == "fails once" && !this.euHasFailed))
         {
             this.euHasFailed = true;
@@ -325,7 +325,7 @@ public sealed class RegionService
 
     public async Task<Reply> GetReplyAsync(string region, CancellationToken cancellationToken)
     {
-        var behaviour = region == "eu" ? this.EuBehaviour : this.UsBehaviour;
+        string behaviour = region == "eu" ? this.EuBehaviour : this.UsBehaviour;
         await Task.Delay(region == "eu" ? 80 : 120, cancellationToken);
         return new(behaviour == "503" ? 503 : 200, region);
     }

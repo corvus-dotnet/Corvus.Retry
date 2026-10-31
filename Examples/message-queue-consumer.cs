@@ -27,19 +27,19 @@ AnsiConsole.Write(new Panel(
     .Header("[white]The problem[/]").Border(BoxBorder.Rounded).BorderColor(Color.Grey));
 AnsiConsole.WriteLine();
 
-var clock = Stopwatch.StartNew();
+Stopwatch clock = Stopwatch.StartNew();
 SimulatedQueue queue = new(count: 20);
 OrderConsumer consumer = new(queue, clock);
 
 // No limit on the number of restarts, because the consumer must keep going; the delay starts at 200 ms and doubles,
 // and maxDelay caps it at 1 s so that a recovered store is not left idle for long.
-var restartStrategy = RetryStrategies.Exponential(retries: int.MaxValue, baseDelay: TimeSpan.FromMilliseconds(200), maxDelay: TimeSpan.FromSeconds(1));
+IRetryStrategy restartStrategy = RetryStrategies.Exponential(retries: int.MaxValue, baseDelay: TimeSpan.FromMilliseconds(200), maxDelay: TimeSpan.FromSeconds(1));
 
 // Restart after anything except a poison message: reading that message again cannot succeed.
-var restartPolicy = RetryPolicies.For<PoisonMessageException>().Not();
+IRetryPolicy restartPolicy = RetryPolicies.For<PoisonMessageException>().Not();
 
 AnsiConsole.Write(new Rule("[orange1]1. Run(runFunction, restartStrategy, retryPolicy)[/]").LeftJustified());
-await using (var runner = ReliableTaskRunner.Run(consumer.RunAsync, restartStrategy, restartPolicy))
+await using (ReliableTaskRunner runner = ReliableTaskRunner.Run(consumer.RunAsync, restartStrategy, restartPolicy))
 {
     await consumer.Poisoned.Task;
 
@@ -58,13 +58,13 @@ await using (var runner = ReliableTaskRunner.Run(consumer.RunAsync, restartStrat
     }
 }
 
-var summary = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).Title("[orange1]Runs[/]")
+Table summary = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).Title("[orange1]Runs[/]")
     .AddColumn("Run").AddColumn(new TableColumn("Started").RightAligned()).AddColumn(new TableColumn("Processed").RightAligned())
     .AddColumn("Ended with").AddColumn(new TableColumn("Delay before restart").RightAligned());
-for (var i = 0; i < consumer.Runs.Count; i++)
+for (int i = 0; i < consumer.Runs.Count; i++)
 {
-    var run = consumer.Runs[i];
-    var delay = i + 1 < consumer.Runs.Count ? $"{(consumer.Runs[i + 1].Started - run.Ended).TotalMilliseconds:F0} ms" : "[red]refused[/]";
+    RunRecord run = consumer.Runs[i];
+    string delay = i + 1 < consumer.Runs.Count ? $"{(consumer.Runs[i + 1].Started - run.Ended).TotalMilliseconds:F0} ms" : "[red]refused[/]";
     summary.AddRow(run.Number.ToString(), $"{run.Started.TotalMilliseconds:F0} ms", run.Processed.ToString(), $"[red]{run.Error}[/]", delay);
 }
 
@@ -81,7 +81,7 @@ AnsiConsole.Write(new Rule("[orange1]2. Run(runFunction) and a graceful shutdown
 // The simplest overload restarts at once after every failure, with no limit. If the loop failed at each start (the
 // store is down), it would restart continuously and use a whole processor core: see the CAUTION in the README.
 // Use it only for a loop that handles its own errors.
-await using (var runner = ReliableTaskRunner.Run(consumer.RunAsync))
+await using (ReliableTaskRunner runner = ReliableTaskRunner.Run(consumer.RunAsync))
 {
     await consumer.Drained.Task;
     AnsiConsole.MarkupLine("  [grey]The queue is empty and the loop is waiting for orders. Stopping the runner.[/]");
@@ -125,7 +125,7 @@ internal sealed class SimulatedQueue(int count)
 
     public void DeadLetter()
     {
-        if (this.messages.TryDequeue(out var id))
+        if (this.messages.TryDequeue(out int id))
         {
             this.DeadLetters.Add(id);
         }
@@ -156,7 +156,7 @@ internal sealed class OrderConsumer(SimulatedQueue queue, Stopwatch clock)
         {
             while (true)
             {
-                if (!queue.TryPeek(out var id))
+                if (!queue.TryPeek(out int id))
                 {
                     this.Drained.TrySetResult();
                     await Task.Delay(50, cancellationToken);
@@ -180,7 +180,7 @@ internal sealed class OrderConsumer(SimulatedQueue queue, Stopwatch clock)
         {
             run.Ended = clock.Elapsed;
             run.Error = ex.GetType().Name;
-            queue.TryPeek(out var id);
+            queue.TryPeek(out int id);
             Log(run, $"order {id:00}", $"[red]{ex.GetType().Name}: {Markup.Escape(ex.Message)}[/]");
             if (ex is PoisonMessageException)
             {

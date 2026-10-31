@@ -29,15 +29,15 @@ AnsiConsole.WriteLine();
 
 // Up to 8 retries, from 100 ms; maxDelay caps the growth so that the app checks again at least every 800 ms, and
 // jitter stops a fleet of containers that started together from all knocking at the same moment.
-var strategy = RetryStrategies.Exponential(retries: 8, baseDelay: TimeSpan.FromMilliseconds(100), maxDelay: TimeSpan.FromMilliseconds(800), useJitter: true);
+IRetryStrategy strategy = RetryStrategies.Exponential(retries: 8, baseDelay: TimeSpan.FromMilliseconds(100), maxDelay: TimeSpan.FromMilliseconds(800), useJitter: true);
 
 // The driver throws its own exception type for every error. The socket error is inside it, so For<SocketException>
 // never sees it; ForInner looks through the InnerException chain.
-var policy = RetryPolicies.ForInner<SocketException>();
+IRetryPolicy policy = RetryPolicies.ForInner<SocketException>();
 
 // 1. Which policy matches what the driver throws?
-var sample = StartingDatabase.Refused("db:5432");
-var policies = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+InvalidOperationException sample = StartingDatabase.Refused("db:5432");
+Table policies = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .Title("[springgreen3]The driver throws InvalidOperationException, wrapping a SocketException[/]")
     .AddColumn("Policy").AddColumn("CanRetry").AddColumn("Why");
 policies.AddRow("For<SocketException>()", Verdict(RetryPolicies.For<SocketException>().CanRetry(sample)), "it examines only the outer exception");
@@ -48,9 +48,9 @@ AnsiConsole.WriteLine();
 // 2. The database refuses five connections, and then accepts one.
 List<(int Attempt, string Error, TimeSpan Delay, long AtMs)> attempts = new();
 StartingDatabase database = new(refusals: 5);
-var clock = Stopwatch.StartNew();
+Stopwatch clock = Stopwatch.StartNew();
 
-var connection = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("connecting to db:5432", ctx =>
+Connection connection = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("connecting to db:5432", ctx =>
     Retriable.RetryAsync(
         ct => database.OpenAsync(ct),
         CancellationToken.None,
@@ -64,16 +64,16 @@ var connection = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsy
             return ValueTask.CompletedTask;
         }));
 
-var table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).Title("[springgreen3]Connecting while the database starts[/]")
+Table table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).Title("[springgreen3]Connecting while the database starts[/]")
     .AddColumn("#").AddColumn("Driver threw").AddColumn(new TableColumn("Failed at").RightAligned()).AddColumn(new TableColumn("Wait").RightAligned());
-foreach (var (attempt, error, delay, atMs) in attempts)
+foreach ((int attempt, string? error, TimeSpan delay, long atMs) in attempts)
 {
     table.AddRow(attempt.ToString(), error, $"{atMs} ms", $"{delay.TotalMilliseconds:F0} ms");
 }
 
 table.AddRow((attempts.Count + 1).ToString(), $"[green]connected to {connection.Host}[/]", $"{clock.ElapsedMilliseconds} ms", "-");
 AnsiConsole.Write(table);
-var waited = TimeSpan.FromTicks(attempts.Sum(a => a.Delay.Ticks));
+TimeSpan waited = TimeSpan.FromTicks(attempts.Sum(a => a.Delay.Ticks));
 AnsiConsole.MarkupLine($"  Waited [springgreen3]{waited.TotalMilliseconds:F0} ms[/] in total, over [springgreen3]{attempts.Count}[/] retries; the other {8 - attempts.Count} retries were not needed.");
 AnsiConsole.WriteLine();
 

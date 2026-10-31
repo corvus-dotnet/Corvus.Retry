@@ -41,8 +41,8 @@ AnsiConsole.WriteLine();
     ("OCE", "OperationCanceledException from the caller's own token"),
 ];
 
-var legend = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).AddColumn("Code").AddColumn("Exception thrown");
-foreach (var (code, description) in exceptions)
+Table legend = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).AddColumn("Code").AddColumn("Exception thrown");
+foreach ((string? code, string? description) in exceptions)
 {
     legend.AddRow($"[orange1]{code}[/]", Markup.Escape(description));
 }
@@ -51,7 +51,7 @@ AnsiConsole.Write(legend);
 AnsiConsole.WriteLine();
 
 // Retry a server error (5xx) but not a client error (4xx): the status code says whether the fault is ours.
-var serverErrors = RetryPolicies.FromPredicate(ex => ex is HttpRequestException { StatusCode: HttpStatusCode code } && (int)code >= 500);
+IRetryPolicy serverErrors = RetryPolicies.FromPredicate(ex => ex is HttpRequestException { StatusCode: HttpStatusCode code } && (int)code >= 500);
 
 (string Name, IRetryPolicy Policy)[] policies =
 [
@@ -76,16 +76,16 @@ var serverErrors = RetryPolicies.FromPredicate(ex => ex is HttpRequestException 
     ("new TooManyRequestsPolicy()", new TooManyRequestsPolicy()),
 ];
 
-var matrix = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).AddColumn(new TableColumn("Policy").NoWrap());
-foreach (var (code, _) in exceptions)
+Table matrix = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).AddColumn(new TableColumn("Policy").NoWrap());
+foreach ((string code, string _) in exceptions)
 {
     matrix.AddColumn(new TableColumn(code).Centered().Padding(1, 0, 0, 0));
 }
 
-foreach (var (name, policy) in policies)
+foreach ((string? name, IRetryPolicy? policy) in policies)
 {
     List<string> cells = new() { Markup.Escape(name) };
-    foreach (var (code, _) in exceptions)
+    foreach ((string code, string _) in exceptions)
     {
         cells.Add(Retries(policy, code) ? "[green]✓[/]" : "[red]✗[/]");
     }
@@ -102,9 +102,9 @@ AnsiConsole.WriteLine();
 // The live run: a service that is overloaded (503) for two calls and then reports a permanent 404. The strategy allows
 // five retries, but serverErrors refuses the 404, so Retriable stops at once and rethrows it.
 AnsiConsole.Write(new Rule("[orange1]Live: FromPredicate(5xx) with Constant(retries: 5, 150 ms)[/]").LeftJustified());
-var attempts = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+Table attempts = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn("Attempt").AddColumn("Service said").AddColumn("Policy").AddColumn(new TableColumn("Next").RightAligned());
-var calls = 0;
+int calls = 0;
 await ShowLiveAsync(attempts, async refresh =>
 {
     try
@@ -140,7 +140,7 @@ AnsiConsole.MarkupLine($"[grey]  {calls} calls of the 6 permitted: the 404 is pe
 static bool Retries(IRetryPolicy policy, string code)
 {
     using CancellationTokenSource caller = new();
-    var calls = 0;
+    int calls = 0;
     try
     {
         Retriable.Retry(() => { calls++; Throw(code, caller); }, caller.Token, new Count(2), policy);

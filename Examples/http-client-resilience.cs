@@ -37,8 +37,8 @@ AnsiConsole.WriteLine();
 List<Row> log = new();
 List<string> circuitChanges = new();
 Stopwatch clock = new();
-var fellBack = false;
-var run = 0;
+bool fellBack = false;
+int run = 0;
 StatusContext? spinner = null;
 
 // One breaker for the service, shared by every request. It opens when three calls in four fail, but only after it
@@ -114,7 +114,7 @@ await SendAsync("Run 2: the body breaks after the headers", new ScriptedHandler(
 await SendAsync("Run 3: the service stays down", new ScriptedHandler(Step.Status(HttpStatusCode.ServiceUnavailable)));
 
 AnsiConsole.Write(new Rule("[deepskyblue1]Circuit breaker[/]").LeftJustified());
-foreach (var change in circuitChanges)
+foreach (string change in circuitChanges)
 {
     AnsiConsole.MarkupLine($"  [orange1]{Markup.Escape(change)}[/]");
 }
@@ -134,7 +134,7 @@ async Task SendAsync(string title, ScriptedHandler handler)
     clock.Restart();
     using HttpClient client = new(handler) { BaseAddress = new("https://catalogue.example/") };
 
-    using var response = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync(
+    using HttpResponseMessage response = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync(
         "GET /products/42",
         async ctx =>
         {
@@ -147,17 +147,17 @@ async Task SendAsync(string title, ScriptedHandler handler)
         log.Add(Row.ForLast(log.Count + 1, response, null, clock.ElapsedMilliseconds, fellBack: false));
     }
 
-    var table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).Title($"[deepskyblue1]{title}[/]")
+    Table table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).Title($"[deepskyblue1]{title}[/]")
         .AddColumn("#").AddColumn("Handler did").AddColumn("Outcome").AddColumn(new TableColumn("Ended at").RightAligned())
         .AddColumn(new TableColumn("Delay").RightAligned()).AddColumn("Why");
-    foreach (var row in log)
+    foreach (Row row in log)
     {
-        var did = row.Attempt <= handler.Calls.Count ? handler.Calls[row.Attempt - 1] : "[grey]not called[/]";
+        string did = row.Attempt <= handler.Calls.Count ? handler.Calls[row.Attempt - 1] : "[grey]not called[/]";
         table.AddRow(row.Attempt.ToString(), did, row.Outcome, $"{row.AtMs} ms", row.Delay, row.Why);
     }
 
     AnsiConsole.Write(table);
-    var body = await response.Content.ReadAsStringAsync();
+    string body = await response.Content.ReadAsStringAsync();
     AnsiConsole.Write(new Panel(Markup.Escape(body))
         .Header(fellBack ? "[orange1]Body (from the fallback)[/]" : "[green]Body (from the service)[/]")
         .Border(BoxBorder.Rounded).BorderColor(fellBack ? Color.Orange1 : Color.Green));
@@ -169,8 +169,8 @@ internal sealed record Row(int Attempt, string Outcome, long AtMs, string Delay,
 {
     public static Row ForRetry(RetryEventArgs args, long atMs)
     {
-        var response = args.Result as HttpResponseMessage;
-        var why = response?.Headers.RetryAfter is not null ? "[white]Retry-After[/]" : "strategy";
+        HttpResponseMessage? response = args.Result as HttpResponseMessage;
+        string why = response?.Headers.RetryAfter is not null ? "[white]Retry-After[/]" : "strategy";
         return new(args.AttemptNumber, Describe(response, args.LastException), atMs, $"{args.DelayBeforeRetry.TotalMilliseconds:F0} ms", why);
     }
 
@@ -241,7 +241,7 @@ internal sealed class ScriptedHandler(params Step[] steps) : HttpMessageHandler
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        var step = steps[Math.Min(this.Calls.Count, steps.Length - 1)];
+        Step step = steps[Math.Min(this.Calls.Count, steps.Length - 1)];
         this.Calls.Add(step.Description);
         return step.Respond(cancellationToken);
     }

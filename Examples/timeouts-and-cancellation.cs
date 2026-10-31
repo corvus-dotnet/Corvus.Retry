@@ -41,9 +41,9 @@ AnsiConsole.WriteLine();
         Policy = Recording(asked, RetryPolicies.For<RetryTimeoutException>().Or<HttpRequestException>()),
     };
 
-    var verdict = await RunAsync("Calling the pricing service", async () =>
+    string verdict = await RunAsync("Calling the pricing service", async () =>
     {
-        var price = await factory.Run(ct => service.GetPriceAsync(ct));
+        decimal price = await factory.Run(ct => service.GetPriceAsync(ct));
         return $"[green]Returned £{price:0.00}[/] after {service.Attempts.Count} attempts.";
     });
 
@@ -61,8 +61,8 @@ AnsiConsole.WriteLine();
         Strategy = RetryStrategies.Exponential(retries: 3, baseDelay: TimeSpan.FromMilliseconds(200)),
     };
 
-    var clock = Stopwatch.StartNew();
-    var verdict = await RunAsync("Calling the pricing service", async () =>
+    Stopwatch clock = Stopwatch.StartNew();
+    string verdict = await RunAsync("Calling the pricing service", async () =>
     {
         try
         {
@@ -96,7 +96,7 @@ AnsiConsole.WriteLine();
 
     // The user navigates away 250 ms into the first attempt, before the attempt timeout.
     using CancellationTokenSource caller = new(TimeSpan.FromMilliseconds(250));
-    var verdict = await RunAsync("Calling the pricing service", async () =>
+    string verdict = await RunAsync("Calling the pricing service", async () =>
     {
         try
         {
@@ -130,15 +130,15 @@ static IRetryPolicy Recording(List<string> asked, IRetryPolicy inner) =>
 // Draws the attempts as a timeline. One character is 40 ms, so that the table fits in 80 columns.
 static void Render(string title, PricingService service, string verdict, string note)
 {
-    var (idle, busy) = AnsiConsole.Profile.Capabilities.Unicode ? ('·', '█') : ('.', '#');
-    var table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).Title($"[orange1]{Markup.Escape(title)}[/]")
+    (char idle, char busy) = AnsiConsole.Profile.Capabilities.Unicode ? ('·', '█') : ('.', '#');
+    Table table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).Title($"[orange1]{Markup.Escape(title)}[/]")
         .AddColumn("Attempt").AddColumn(new TableColumn("Started").RightAligned()).AddColumn(new TableColumn("Ended").RightAligned())
         .AddColumn("Outcome").AddColumn("Timeline (40 ms/char)");
 
-    foreach (var attempt in service.Attempts)
+    foreach (AttemptRecord attempt in service.Attempts)
     {
-        var start = (int)(attempt.Started.TotalMilliseconds / 40);
-        var length = Math.Max(1, (int)((attempt.Ended - attempt.Started).TotalMilliseconds / 40));
+        int start = (int)(attempt.Started.TotalMilliseconds / 40);
+        int length = Math.Max(1, (int)((attempt.Ended - attempt.Started).TotalMilliseconds / 40));
         table.AddRow(
             attempt.Number.ToString(),
             $"{attempt.Started.TotalMilliseconds:F0} ms",
@@ -168,9 +168,9 @@ sealed class PricingService(int[] latencies, bool fail = false)
     public async Task<decimal> GetPriceAsync(CancellationToken cancellationToken)
     {
         this.clock ??= Stopwatch.StartNew();
-        var number = this.Attempts.Count + 1;
-        var started = this.clock.Elapsed;
-        var latency = latencies[Math.Min(number - 1, latencies.Length - 1)];
+        int number = this.Attempts.Count + 1;
+        TimeSpan started = this.clock.Elapsed;
+        int latency = latencies[Math.Min(number - 1, latencies.Length - 1)];
         try
         {
             await Task.Delay(latency, cancellationToken);
