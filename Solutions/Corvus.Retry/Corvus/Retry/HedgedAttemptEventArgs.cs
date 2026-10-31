@@ -7,7 +7,8 @@ namespace Corvus.Retry;
 using System;
 
 /// <summary>
-/// The cause of a hedged attempt, which <see cref="HedgingOptions.OnHedging"/> receives.
+/// The cause of a hedged attempt, which <see cref="HedgedTaskFactory.OnHedgedAttempt"/> and
+/// <see cref="HedgedTaskFactory{T}.OnHedgedAttempt"/> receive.
 /// </summary>
 /// <param name="AttemptNumber">The number of the attempt that is about to start. The first hedged attempt is 2.</param>
 /// <param name="LastException">
