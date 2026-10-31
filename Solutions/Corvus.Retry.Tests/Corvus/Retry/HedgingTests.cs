@@ -682,6 +682,126 @@ public class HedgingTests
     }
 
     [TestMethod]
+    public async Task AnOperationForAttemptThatFaultsAsynchronously_IsAFailureThatStartsTheNextAttempt()
+    {
+        // OperationForAttempt gives Task operations, which the factory adapts for the engine. The failure of a task
+        // that faults after its first await is the outcome of that attempt.
+        var failure = new InvalidOperationException("The other endpoint failed");
+        int primaryCalls = 0;
+        HedgedTaskFactory<string> factory = this.NewFactory<string>(
+            stagger: Timeout.InfiniteTimeSpan,
+            extraAttempts: 2,
+            operationForAttempt: attempt => attempt == 2
+                ? async _ =>
+                {
+                    await Task.Yield();
+                    throw failure;
+                }
+                : null);
+
+        string result = await factory.Run(
+            _ => ++primaryCalls == 1 ? throw new InvalidOperationException("Primary failed") : Task.FromResult("primary")).WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual("primary", result);
+        Assert.AreEqual(2, primaryCalls);
+        Assert.AreEqual(new HedgedAttemptEventArgs(3, failure), this.HedgingEvents[1]);
+    }
+
+    [TestMethod]
+    public async Task AnOperationForAttemptThatCompletesLater_CanWinWithItsResult()
+    {
+        var other = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        HedgedTaskFactory<string> factory = this.NewFactory<string>(
+            stagger: HedgingDelay,
+            operationForAttempt: attempt => attempt == 2 ? _ => other.Task : null);
+
+        Task<string> call = factory.Run(NeverCompletesAsync);
+        this.fake.Advance(HedgingDelay);
+        await this.WaitUntilAsync(() => this.HedgingEvents.Count == 1).ConfigureAwait(false);
+        other.SetResult("other endpoint");
+
+        Assert.AreEqual("other endpoint", await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+    }
+
+    [TestMethod]
+    public async Task AnOperationForAttemptThatReturnsANullTask_FailsThatAttempt()
+    {
+        HedgedTaskFactory<string> factory = this.NewFactory<string>(
+            stagger: Timeout.InfiniteTimeSpan,
+            extraAttempts: 2,
+            operationForAttempt: attempt => attempt == 2 ? _ => null! : null);
+        int primaryCalls = 0;
+
+        string result = await factory.Run(
+            _ => ++primaryCalls == 1 ? throw new FormatException("Primary failed") : Task.FromResult("primary")).WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        // The null task is a failure that the policy accepts, so attempt 3 starts, and it uses the primary operation.
+        Assert.AreEqual("primary", result);
+        HedgedAttemptEventArgs third = this.HedgingEvents[1];
+        Assert.AreEqual(3, third.AttemptNumber);
+        Assert.AreEqual("The operation returned a null task.", Assert.IsInstanceOfType<InvalidOperationException>(third.LastException).Message);
+    }
+
+    [TestMethod]
+    public async Task WhenOperationForAttemptReturnsNullForEveryAttempt_EachAttemptUsesThePrimaryOperation()
+    {
+        var generatorCalls = new List<int>();
+        var op = new FlakyOperation(2);
+        HedgedTaskFactory<string> factory = this.NewFactory<string>(
+            stagger: Timeout.InfiniteTimeSpan,
+            extraAttempts: 2,
+            operationForAttempt: RecordingGenerator<string>(generatorCalls));
+
+        string result = await factory.Run(_ => op.InvokeAsyncReturning()).WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual("attempt-3", result);
+        Assert.AreEqual(3, op.Invocations);
+        Assert.AreSequenceEqual(new[] { 1, 2, 3 }, Generated(generatorCalls));
+    }
+
+    [TestMethod]
+    public async Task ResultIsFailureRejectsAResultOfATaskThatCompletesLater_AndTheNextAttemptWins()
+    {
+        var log = new List<string>();
+        var rejected = new Response(503, log);
+        var first = new TaskCompletionSource<Response>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var op = new ScriptedOperation<Response>(_ => first.Task, Succeeds(new Response(200, log)));
+        HedgedTaskFactory<Response> factory = this.NewFactory<Response>(
+            stagger: Timeout.InfiniteTimeSpan,
+            resultIsFailure: r => r.StatusCode >= 500);
+
+        Task<Response> call = factory.Run(op.InvokeAsync);
+        Assert.IsFalse(call.IsCompleted);
+        first.SetResult(rejected);
+
+        Response result = await call.WaitAsync(WaitLimit).ConfigureAwait(false);
+        Assert.AreEqual(200, result.StatusCode);
+        Assert.IsTrue(rejected.Disposed);
+
+        // A rejected result is not an exception, so the callback gets no exception.
+        Assert.AreEqual(new HedgedAttemptEventArgs(2, null), Assert.ContainsSingle(this.HedgingEvents));
+    }
+
+    [TestMethod]
+    public async Task TheNonGenericFactoryDisposesTheResultOfAnAttemptThatLoses()
+    {
+        var loser = new Disposable("loser");
+        var winner = new Disposable("winner");
+        var first = new TaskCompletionSource<Disposable>(TaskCreationOptions.RunContinuationsAsynchronously);
+        int invocations = 0;
+        var factory = new HedgedTaskFactory(stagger: HedgingDelay) { TimeProvider = this.fake };
+
+        Task<Disposable> call = factory.Run(_ => Interlocked.Increment(ref invocations) == 1 ? first.Task : Task.FromResult(winner));
+        this.fake.Advance(HedgingDelay);
+
+        Assert.AreSame(winner, await call.WaitAsync(WaitLimit).ConfigureAwait(false));
+        first.SetResult(loser);
+        await loser.WhenDisposed.WaitAsync(WaitLimit).ConfigureAwait(false);
+        Assert.AreEqual(1, loser.DisposeCount);
+        Assert.IsFalse(winner.Disposed);
+    }
+
+    [TestMethod]
     [DataRow(0)]
     [DataRow(-1)]
     [DataRow(11)]
