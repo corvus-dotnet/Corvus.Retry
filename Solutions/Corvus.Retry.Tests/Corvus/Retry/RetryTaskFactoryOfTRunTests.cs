@@ -1,4 +1,4 @@
-// <copyright file="ReliabilityPipelineOfTTests.cs" company="Endjin Limited">
+// <copyright file="RetryTaskFactoryOfTRunTests.cs" company="Endjin Limited">
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
@@ -17,12 +17,12 @@ using Corvus.Retry.Time;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
-/// A <see cref="ReliabilityPipeline{T}"/> treats a result that <see cref="ReliabilityPipelineOptions{T}.ShouldRetryResult"/>
+/// A <see cref="RetryTaskFactory{T}"/> treats a result that <see cref="RetryTaskFactory{T}.CanRetryResult"/>
 /// rejects as a failure: the strategy, the callback and the delay apply, the policy does not, the rejected result is
 /// disposed after the callback, and the last result is returned when no retries remain.
 /// </summary>
 [TestClass]
-public class ReliabilityPipelineOfTTests
+public class RetryTaskFactoryOfTRunTests
 {
     private static readonly TimeSpan WaitLimit = TimeSpan.FromSeconds(10);
 
@@ -30,9 +30,9 @@ public class ReliabilityPipelineOfTTests
     public async Task A503ResultIsRetriedAndA200ResultIsNot()
     {
         var responses = new ResponseSequence(503, 200, 503);
-        ReliabilityPipeline<Response> pipeline = CreatePipeline(new Count(3));
+        RetryTaskFactory<Response> factory = CreateFactory(new Count(3));
 
-        Response result = await pipeline.ExecuteAsync(responses.NextAsync).ConfigureAwait(false);
+        Response result = await factory.RunValueTask(responses.NextAsync).ConfigureAwait(false);
 
         Assert.AreEqual(200, result.StatusCode);
         Assert.AreEqual(2, responses.Invocations);
@@ -42,9 +42,9 @@ public class ReliabilityPipelineOfTTests
     public async Task A200ResultOnTheFirstAttemptIsReturnedWithoutRetry()
     {
         var responses = new ResponseSequence(200, 503);
-        ReliabilityPipeline<Response> pipeline = CreatePipeline(new Count(3));
+        RetryTaskFactory<Response> factory = CreateFactory(new Count(3));
 
-        Response result = await pipeline.ExecuteAsync(responses.NextAsync).ConfigureAwait(false);
+        Response result = await factory.RunValueTask(responses.NextAsync).ConfigureAwait(false);
 
         Assert.AreSame(responses.Returned[0], result);
         Assert.AreEqual(1, responses.Invocations);
@@ -55,7 +55,7 @@ public class ReliabilityPipelineOfTTests
     public async Task EachRejectedResultIsDisposedAfterTheCallback()
     {
         var responses = new ResponseSequence(503, 503, 200);
-        ReliabilityPipeline<Response> pipeline = CreatePipeline(
+        RetryTaskFactory<Response> factory = CreateFactory(
             new Count(3),
             args =>
             {
@@ -64,7 +64,7 @@ public class ReliabilityPipelineOfTTests
                 return ValueTask.CompletedTask;
             });
 
-        Response result = await pipeline.ExecuteAsync(responses.NextAsync).ConfigureAwait(false);
+        Response result = await factory.RunValueTask(responses.NextAsync).ConfigureAwait(false);
 
         Assert.AreSequenceEqual(
             new[] { "callback 1, disposed: False", "dispose 1", "callback 2, disposed: False", "dispose 2" },
@@ -78,9 +78,9 @@ public class ReliabilityPipelineOfTTests
     public async Task WhenNoRetriesRemain_TheLastResultIsReturnedAndNotDisposed()
     {
         var responses = new ResponseSequence(503, 503, 503);
-        ReliabilityPipeline<Response> pipeline = CreatePipeline(new Count(3));
+        RetryTaskFactory<Response> factory = CreateFactory(new Count(3));
 
-        Response result = await pipeline.ExecuteAsync(responses.NextAsync).ConfigureAwait(false);
+        Response result = await factory.RunValueTask(responses.NextAsync).ConfigureAwait(false);
 
         Assert.AreSame(responses.Returned[2], result);
         Assert.AreEqual(503, result.StatusCode);
@@ -94,7 +94,7 @@ public class ReliabilityPipelineOfTTests
     {
         var responses = new ResponseSequence(503, 200);
         var calls = new List<RetryEventArgs>();
-        ReliabilityPipeline<Response> pipeline = CreatePipeline(
+        RetryTaskFactory<Response> factory = CreateFactory(
             new Count(3),
             args =>
             {
@@ -102,7 +102,7 @@ public class ReliabilityPipelineOfTTests
                 return ValueTask.CompletedTask;
             });
 
-        await pipeline.ExecuteAsync(responses.NextAsync).ConfigureAwait(false);
+        await factory.RunValueTask(responses.NextAsync).ConfigureAwait(false);
 
         RetryEventArgs call = Assert.ContainsSingle(calls);
         Assert.AreSame(responses.Returned[0], call.Result);
@@ -120,14 +120,14 @@ public class ReliabilityPipelineOfTTests
         tooManyRequests.Headers.RetryAfter = new RetryConditionHeaderValue(fiveSeconds);
         using var ok = new HttpResponseMessage(HttpStatusCode.OK);
         int invocations = 0;
-        var pipeline = new ReliabilityPipeline<HttpResponseMessage>(new ReliabilityPipelineOptions<HttpResponseMessage>
+        var factory = new RetryTaskFactory<HttpResponseMessage>
         {
             Strategy = RetryStrategies.RetryAfter(RetryStrategies.Constant(3, TimeSpan.FromSeconds(1)), fake),
-            ShouldRetryResult = RetryPolicies.IsTransientHttpResponse,
+            CanRetryResult = RetryPolicies.IsTransientHttpResponse,
             TimeProvider = fake,
-        });
+        };
 
-        Task<HttpResponseMessage> call = pipeline.ExecuteAsync(
+        Task<HttpResponseMessage> call = factory.RunValueTask(
             _ => new ValueTask<HttpResponseMessage>(Interlocked.Increment(ref invocations) == 1 ? tooManyRequests : ok)).AsTask();
 
         Assert.IsFalse(call.IsCompleted);
@@ -145,14 +145,14 @@ public class ReliabilityPipelineOfTTests
     {
         var responses = new ResponseSequence(503, 200);
         var policy = new RecordingRetryPolicy(false);
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        var factory = new RetryTaskFactory<Response>
         {
             Strategy = new Count(3),
             Policy = policy,
-            ShouldRetryResult = IsServerError,
-        });
+            CanRetryResult = IsServerError,
+        };
 
-        Response result = await pipeline.ExecuteAsync(responses.NextAsync).ConfigureAwait(false);
+        Response result = await factory.RunValueTask(responses.NextAsync).ConfigureAwait(false);
 
         Assert.AreEqual(200, result.StatusCode);
         Assert.IsEmpty(policy.Consulted);
@@ -163,15 +163,15 @@ public class ReliabilityPipelineOfTTests
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
         var policy = new RecordingRetryPolicy(false);
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new Count(3),
             Policy = policy,
-            ShouldRetryResult = _ => true,
-        });
+            CanRetryResult = _ => true,
+        };
 
         InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask()).ConfigureAwait(false);
+            () => factory.RunValueTask(_ => new ValueTask<string>(op.Invoke())).AsTask()).ConfigureAwait(false);
 
         Assert.AreSame(op.LastThrown, thrown);
         Assert.AreEqual(1, op.Invocations);
@@ -179,12 +179,12 @@ public class ReliabilityPipelineOfTTests
     }
 
     [TestMethod]
-    public async Task WhenShouldRetryResultIsNull_NoResultIsAFailure()
+    public async Task WhenCanRetryResultIsNull_NoResultIsAFailure()
     {
         var responses = new ResponseSequence(503, 200);
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response> { Strategy = new Count(3) });
+        var factory = new RetryTaskFactory<Response> { Strategy = new Count(3) };
 
-        Response result = await pipeline.ExecuteAsync(responses.NextAsync).ConfigureAwait(false);
+        Response result = await factory.RunValueTask(responses.NextAsync).ConfigureAwait(false);
 
         Assert.AreEqual(503, result.StatusCode);
         Assert.AreEqual(1, responses.Invocations);
@@ -192,34 +192,34 @@ public class ReliabilityPipelineOfTTests
     }
 
     [TestMethod]
-    public async Task AnExceptionFromShouldRetryResultStopsTheCall()
+    public async Task AnExceptionFromCanRetryResultStopsTheCall()
     {
         var responses = new ResponseSequence(503, 200);
         var predicateFailure = new FormatException("The predicate failed");
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        var factory = new RetryTaskFactory<Response>
         {
             Strategy = new Count(3),
-            ShouldRetryResult = _ => throw predicateFailure,
-        });
+            CanRetryResult = _ => throw predicateFailure,
+        };
 
         FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
-            () => pipeline.ExecuteAsync(responses.NextAsync).AsTask()).ConfigureAwait(false);
+            () => factory.RunValueTask(responses.NextAsync).AsTask()).ConfigureAwait(false);
 
         Assert.AreSame(predicateFailure, thrown);
         Assert.AreEqual(1, responses.Invocations);
     }
 
     [TestMethod]
-    public async Task AResultIsDisposedWhenShouldRetryResultThrows()
+    public async Task AResultIsDisposedWhenCanRetryResultThrows()
     {
         var responses = new ResponseSequence(503, 200);
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        var factory = new RetryTaskFactory<Response>
         {
             Strategy = new Count(3),
-            ShouldRetryResult = _ => throw new FormatException("The predicate failed"),
-        });
+            CanRetryResult = _ => throw new FormatException("The predicate failed"),
+        };
 
-        await Assert.ThrowsExactlyAsync<FormatException>(() => pipeline.ExecuteAsync(responses.NextAsync).AsTask()).ConfigureAwait(false);
+        await Assert.ThrowsExactlyAsync<FormatException>(() => factory.RunValueTask(responses.NextAsync).AsTask()).ConfigureAwait(false);
 
         Assert.IsTrue(Assert.ContainsSingle(responses.Returned).Disposed);
     }
@@ -229,10 +229,10 @@ public class ReliabilityPipelineOfTTests
     {
         using var cts = new CancellationTokenSource();
         var responses = new ResponseSequence(503, 200);
-        ReliabilityPipeline<Response> pipeline = CreatePipeline(new Count(3));
+        RetryTaskFactory<Response> factory = CreateFactory(new Count(3));
 
         OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
-            () => pipeline.ExecuteAsync(
+            () => factory.RunValueTask(
                 ct =>
                 {
                     cts.Cancel();
@@ -249,16 +249,16 @@ public class ReliabilityPipelineOfTTests
     {
         RecordingFakeTimeProvider fake = new();
         var responses = new ResponseSequence(503, 200);
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        var factory = new RetryTaskFactory<Response>
         {
             Strategy = new Count(3),
-            ShouldRetryResult = IsServerError,
+            CanRetryResult = IsServerError,
             TotalTimeout = TimeSpan.FromSeconds(1),
             TimeProvider = fake,
-        });
+        };
 
         await Assert.ThrowsExactlyAsync<RetryTimeoutException>(
-            () => pipeline.ExecuteAsync(
+            () => factory.RunValueTask(
                 ct =>
                 {
                     fake.Advance(TimeSpan.FromSeconds(2));
@@ -272,9 +272,9 @@ public class ReliabilityPipelineOfTTests
     public async Task ARejectedResultIsDisposedWhenTheRetryCallbackThrows()
     {
         var responses = new ResponseSequence(503, 200);
-        ReliabilityPipeline<Response> pipeline = CreatePipeline(new Count(3), _ => throw new FormatException("The callback failed"));
+        RetryTaskFactory<Response> factory = CreateFactory(new Count(3), _ => throw new FormatException("The callback failed"));
 
-        await Assert.ThrowsExactlyAsync<FormatException>(() => pipeline.ExecuteAsync(responses.NextAsync).AsTask()).ConfigureAwait(false);
+        await Assert.ThrowsExactlyAsync<FormatException>(() => factory.RunValueTask(responses.NextAsync).AsTask()).ConfigureAwait(false);
 
         Assert.IsTrue(Assert.ContainsSingle(responses.Returned).Disposed);
     }
@@ -283,9 +283,9 @@ public class ReliabilityPipelineOfTTests
     public async Task ARejectedResultIsDisposedWhenTheStrategyThrows()
     {
         var responses = new ResponseSequence(503, 200);
-        ReliabilityPipeline<Response> pipeline = CreatePipeline(RetryStrategies.FromDelegate(_ => throw new FormatException("The strategy failed")));
+        RetryTaskFactory<Response> factory = CreateFactory(RetryStrategies.FromDelegate(_ => throw new FormatException("The strategy failed")));
 
-        await Assert.ThrowsExactlyAsync<FormatException>(() => pipeline.ExecuteAsync(responses.NextAsync).AsTask()).ConfigureAwait(false);
+        await Assert.ThrowsExactlyAsync<FormatException>(() => factory.RunValueTask(responses.NextAsync).AsTask()).ConfigureAwait(false);
 
         Assert.IsTrue(Assert.ContainsSingle(responses.Returned).Disposed);
     }
@@ -294,20 +294,18 @@ public class ReliabilityPipelineOfTTests
     public async Task ARejectedResultIsDisposedWhenTheStateChangeCallbackOfTheBreakerThrows()
     {
         var responses = new ResponseSequence(503, 503, 200);
-        var breaker = new CircuitBreaker(new CircuitBreakerOptions
-        {
-            MinimumThroughput = 2,
-            FailureRatio = 1,
-            OnStateChanged = change => change.To == CircuitState.Open ? throw new FormatException("The callback failed") : ValueTask.CompletedTask,
-        });
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        var breaker = new CircuitBreaker(
+            failureRate: 1,
+            minimumCalls: 2,
+            onStateChanged: change => change.To == CircuitState.Open ? throw new FormatException("The callback failed") : ValueTask.CompletedTask);
+        var factory = new RetryTaskFactory<Response>
         {
             Strategy = new Count(3),
-            ShouldRetryResult = IsServerError,
+            CanRetryResult = IsServerError,
             CircuitBreaker = breaker,
-        });
+        };
 
-        await Assert.ThrowsExactlyAsync<FormatException>(() => pipeline.ExecuteAsync(responses.NextAsync).AsTask()).ConfigureAwait(false);
+        await Assert.ThrowsExactlyAsync<FormatException>(() => factory.RunValueTask(responses.NextAsync).AsTask()).ConfigureAwait(false);
 
         Assert.HasCount(2, responses.Returned);
         Assert.IsTrue(responses.Returned.TrueForAll(r => r.Disposed));
@@ -320,14 +318,14 @@ public class ReliabilityPipelineOfTTests
         RecordingFakeTimeProvider fake = new();
         TimeSpan oneHour = TimeSpan.FromHours(1);
         var responses = new ResponseSequence(503, 200);
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        var factory = new RetryTaskFactory<Response>
         {
             Strategy = new Linear(oneHour, 3),
-            ShouldRetryResult = IsServerError,
+            CanRetryResult = IsServerError,
             TimeProvider = fake,
-        });
+        };
 
-        Task<Response> call = pipeline.ExecuteAsync(responses.NextAsync).AsTask();
+        Task<Response> call = factory.RunValueTask(responses.NextAsync).AsTask();
 
         Assert.IsFalse(call.IsCompleted);
         Assert.AreEqual(1, responses.Invocations);
@@ -345,10 +343,10 @@ public class ReliabilityPipelineOfTTests
         TimeSpan oneHour = TimeSpan.FromHours(1);
         var responses = new ResponseSequence(503, 200);
         var calls = new List<RetryEventArgs>();
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        var factory = new RetryTaskFactory<Response>
         {
             Strategy = new Linear(oneHour, 3),
-            ShouldRetryResult = IsServerError,
+            CanRetryResult = IsServerError,
             TimeProvider = fake,
             OnRetry = args =>
             {
@@ -359,9 +357,9 @@ public class ReliabilityPipelineOfTTests
 
                 return ValueTask.CompletedTask;
             },
-        });
+        };
 
-        Task<Response> call = pipeline.ExecuteAsync(responses.NextAsync).AsTask();
+        Task<Response> call = factory.RunValueTask(responses.NextAsync).AsTask();
 
         Assert.IsFalse(call.IsCompleted);
         fake.Advance(oneHour);
@@ -374,14 +372,17 @@ public class ReliabilityPipelineOfTTests
     }
 
     [TestMethod]
-    public async Task WhenTheStrategyIsNull_TheGenericPipelineMakesFourAttemptsWithTwoSecondsBeforeEachRetry()
+    public async Task WithTheStrategyOfTheEarlierPipelineDefault_TheGenericFactoryMakesFourAttemptsWithTwoSecondsBeforeEachRetry()
     {
         RecordingFakeTimeProvider fake = new();
         TimeSpan twoSeconds = TimeSpan.FromSeconds(2);
         var responses = new ResponseSequence(503, 503, 503, 503);
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response> { ShouldRetryResult = IsServerError, TimeProvider = fake });
 
-        Task<Response> call = pipeline.ExecuteAsync(responses.NextAsync).AsTask();
+        // The default strategy of a factory makes 5 tries without delay. RetryTaskFactorySettingsTests covers it. This
+        // test sets the strategy that the earlier pipeline used by default: 4 attempts, with 2 seconds before each retry.
+        var factory = new RetryTaskFactory<Response> { Strategy = new Linear(twoSeconds, 4), CanRetryResult = IsServerError, TimeProvider = fake };
+
+        Task<Response> call = factory.RunValueTask(responses.NextAsync).AsTask();
 
         for (int timers = 1; timers <= 3; timers++)
         {
@@ -404,24 +405,21 @@ public class ReliabilityPipelineOfTTests
         var disposeFailure = new FormatException("Dispose failed.");
         var responses = new ResponseSequence(503, 200) { DisposeFailure = disposeFailure };
         int actions = 0;
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        var factory = new RetryTaskFactory<Response>
         {
             Strategy = new Count(3),
-            ShouldRetryResult = IsServerError,
+            CanRetryResult = IsServerError,
             Fallback = withFallback
-                ? new FallbackOptions<Response>
+                ? new Fallback<Response>(_ =>
                 {
-                    Action = _ =>
-                    {
-                        Interlocked.Increment(ref actions);
-                        return new ValueTask<Response>(new Response(200, 0, []));
-                    },
-                }
+                    Interlocked.Increment(ref actions);
+                    return new ValueTask<Response>(new Response(200, 0, []));
+                })
                 : null,
-        });
+        };
 
         // The exception from the disposal is not an outcome of the attempts, so the fallback does not apply.
-        FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(() => pipeline.ExecuteAsync(responses.NextAsync).AsTask()).ConfigureAwait(false);
+        FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(() => factory.RunValueTask(responses.NextAsync).AsTask()).ConfigureAwait(false);
 
         Assert.AreSame(disposeFailure, thrown);
         Assert.IsTrue(Assert.ContainsSingle(responses.Returned).Disposed);
@@ -429,25 +427,25 @@ public class ReliabilityPipelineOfTTests
     }
 
     [TestMethod]
-    public void ExecuteAsyncRejectsANullOperation()
+    public void RunValueTaskRejectsANullOperation()
     {
-        ReliabilityPipeline<Response> pipeline = CreatePipeline(new Count(3));
+        RetryTaskFactory<Response> factory = CreateFactory(new Count(3));
 
-        ArgumentNullException thrown = Assert.ThrowsExactly<ArgumentNullException>(() => pipeline.ExecuteAsync(null!).AsTask());
+        ArgumentNullException thrown = Assert.ThrowsExactly<ArgumentNullException>(() => factory.RunValueTask(null!).AsTask());
 
         Assert.AreEqual("operation", thrown.ParamName);
     }
 
     private static bool IsServerError(Response response) => response.StatusCode >= 500;
 
-    private static ReliabilityPipeline<Response> CreatePipeline(IRetryStrategy strategy, Func<RetryEventArgs, ValueTask>? onRetry = null)
+    private static RetryTaskFactory<Response> CreateFactory(IRetryStrategy strategy, Func<RetryEventArgs, ValueTask>? onRetry = null)
     {
-        return new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        return new RetryTaskFactory<Response>
         {
             Strategy = strategy,
-            ShouldRetryResult = IsServerError,
+            CanRetryResult = IsServerError,
             OnRetry = onRetry,
-        });
+        };
     }
 
     // A disposable result with a status code. It writes its disposal to the log of its sequence.

@@ -1,4 +1,4 @@
-// <copyright file="ReliabilityPipelineOperationShapeTests.cs" company="Endjin Limited">
+// <copyright file="RetryTaskFactoryOperationShapeTests.cs" company="Endjin Limited">
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
@@ -12,13 +12,13 @@ using Corvus.Retry.Strategies;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
-/// Each <c>ExecuteAsync</c> method of <see cref="ReliabilityPipeline"/> and <see cref="ReliabilityPipeline{T}"/> gives the
+/// Each <c>RunValueTask</c> method of <see cref="RetryTaskFactory"/> and <see cref="RetryTaskFactory{T}"/> gives the
 /// same outcome for every <see cref="OperationShape"/>: a failure is retried and the last exception is rethrown, whether
 /// the operation throws synchronously, returns a faulted value task, or faults asynchronously; a success is returned,
 /// whether it is synchronous or asynchronous; and a rejected result is disposed.
 /// </summary>
 [TestClass]
-public class ReliabilityPipelineOperationShapeTests
+public class RetryTaskFactoryOperationShapeTests
 {
     private static readonly TimeSpan WaitLimit = TimeSpan.FromSeconds(10);
 
@@ -30,10 +30,10 @@ public class ReliabilityPipelineOperationShapeTests
     public async Task WhenTheOperationWithNoResultFailsEveryTime_ItIsRetriedAndTheLastExceptionIsThrown(OperationShape shape)
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(3) });
+        var factory = new RetryTaskFactory { Strategy = new Count(3) };
 
         InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-            () => pipeline.ExecuteAsync(PipelineOperationDriver.WithoutResult(shape, () => op.Invoke())).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+            () => factory.RunValueTask(PipelineOperationDriver.WithoutResult(shape, () => op.Invoke())).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
         Assert.AreSame(op.LastThrown, thrown);
         Assert.AreEqual(3, op.Invocations);
@@ -47,9 +47,9 @@ public class ReliabilityPipelineOperationShapeTests
     public async Task WhenTheOperationWithNoResultFailsTwice_TheThirdAttemptSucceeds(OperationShape shape)
     {
         var op = new FlakyOperation(2);
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(3) });
+        var factory = new RetryTaskFactory { Strategy = new Count(3) };
 
-        await pipeline.ExecuteAsync(PipelineOperationDriver.WithoutResult(shape, () => op.Invoke())).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
+        await factory.RunValueTask(PipelineOperationDriver.WithoutResult(shape, () => op.Invoke())).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
 
         Assert.AreEqual(3, op.Invocations);
     }
@@ -62,10 +62,10 @@ public class ReliabilityPipelineOperationShapeTests
     public async Task WhenTheOperationWithAResultFailsEveryTime_ItIsRetriedAndTheLastExceptionIsThrown(OperationShape shape)
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(3) });
+        var factory = new RetryTaskFactory { Strategy = new Count(3) };
 
         InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-            () => pipeline.ExecuteAsync(PipelineOperationDriver.WithResult(shape, op.Invoke)).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+            () => factory.RunValueTask(PipelineOperationDriver.WithResult(shape, op.Invoke)).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
         Assert.AreSame(op.LastThrown, thrown);
         Assert.AreEqual(3, op.Invocations);
@@ -79,9 +79,9 @@ public class ReliabilityPipelineOperationShapeTests
     public async Task WhenTheOperationWithAResultFailsTwice_TheResultOfTheThirdAttemptIsReturned(OperationShape shape)
     {
         var op = new FlakyOperation(2);
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(3) });
+        var factory = new RetryTaskFactory { Strategy = new Count(3) };
 
-        string result = await pipeline.ExecuteAsync(PipelineOperationDriver.WithResult(shape, op.Invoke)).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
+        string result = await factory.RunValueTask(PipelineOperationDriver.WithResult(shape, op.Invoke)).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
 
         Assert.AreEqual("attempt-3", result);
         Assert.AreEqual(3, op.Invocations);
@@ -92,13 +92,13 @@ public class ReliabilityPipelineOperationShapeTests
     [DataRow(OperationShape.CompletedValueTask)]
     [DataRow(OperationShape.AsyncBeforeAwait)]
     [DataRow(OperationShape.AsyncAfterAwait)]
-    public async Task WhenTheOperationOfTheGenericPipelineFailsEveryTime_ItIsRetriedAndTheLastExceptionIsThrown(OperationShape shape)
+    public async Task WhenTheOperationOfTheGenericFactoryFailsEveryTime_ItIsRetriedAndTheLastExceptionIsThrown(OperationShape shape)
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string> { Strategy = new Count(3) });
+        var factory = new RetryTaskFactory<string> { Strategy = new Count(3) };
 
         InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-            () => pipeline.ExecuteAsync(PipelineOperationDriver.WithResult(shape, op.Invoke)).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+            () => factory.RunValueTask(PipelineOperationDriver.WithResult(shape, op.Invoke)).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
         Assert.AreSame(op.LastThrown, thrown);
         Assert.AreEqual(3, op.Invocations);
@@ -109,28 +109,25 @@ public class ReliabilityPipelineOperationShapeTests
     [DataRow(OperationShape.CompletedValueTask)]
     [DataRow(OperationShape.AsyncBeforeAwait)]
     [DataRow(OperationShape.AsyncAfterAwait)]
-    public async Task WhenTheOperationOfTheGenericPipelineFailsEveryTime_TheFallbackReceivesTheLastException(OperationShape shape)
+    public async Task WhenTheOperationOfTheGenericFactoryFailsEveryTime_TheFallbackReceivesTheLastException(OperationShape shape)
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
         var received = new List<Exception?>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new Count(3),
-            Fallback = new FallbackOptions<string>
+            Fallback = new Fallback<string>(args =>
             {
-                Action = args =>
+                lock (received)
                 {
-                    lock (received)
-                    {
-                        received.Add(args.Exception);
-                    }
+                    received.Add(args.Exception);
+                }
 
-                    return new ValueTask<string>("fallback");
-                },
-            },
-        });
+                return new ValueTask<string>("fallback");
+            }),
+        };
 
-        string result = await pipeline.ExecuteAsync(PipelineOperationDriver.WithResult(shape, op.Invoke)).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
+        string result = await factory.RunValueTask(PipelineOperationDriver.WithResult(shape, op.Invoke)).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
 
         Assert.AreEqual("fallback", result);
         Assert.AreEqual(3, op.Invocations);
@@ -142,14 +139,14 @@ public class ReliabilityPipelineOperationShapeTests
     [DataRow(OperationShape.CompletedValueTask)]
     [DataRow(OperationShape.AsyncBeforeAwait)]
     [DataRow(OperationShape.AsyncAfterAwait)]
-    public async Task TheGenericPipelineDisposesEachRejectedResultAndReturnsTheResultItAccepts(OperationShape shape)
+    public async Task TheGenericFactoryDisposesEachRejectedResultAndReturnsTheResultItAccepts(OperationShape shape)
     {
         var results = new List<Result>();
-        var pipeline = new ReliabilityPipeline<Result>(new ReliabilityPipelineOptions<Result>
+        var factory = new RetryTaskFactory<Result>
         {
             Strategy = new Count(3),
-            ShouldRetryResult = r => !r.IsGood,
-        });
+            CanRetryResult = r => !r.IsGood,
+        };
 
         Result Next()
         {
@@ -161,7 +158,7 @@ public class ReliabilityPipelineOperationShapeTests
             }
         }
 
-        Result returned = await pipeline.ExecuteAsync(PipelineOperationDriver.WithResult(shape, Next)).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
+        Result returned = await factory.RunValueTask(PipelineOperationDriver.WithResult(shape, Next)).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
 
         Assert.HasCount(3, results);
         Assert.AreSame(results[2], returned);
@@ -175,14 +172,14 @@ public class ReliabilityPipelineOperationShapeTests
     [DataRow(OperationShape.CompletedValueTask)]
     [DataRow(OperationShape.AsyncBeforeAwait)]
     [DataRow(OperationShape.AsyncAfterAwait)]
-    public async Task WhenNoRetriesRemainForARejectedResult_TheGenericPipelineReturnsTheLastResultAndDisposesTheOthers(OperationShape shape)
+    public async Task WhenNoRetriesRemainForARejectedResult_TheGenericFactoryReturnsTheLastResultAndDisposesTheOthers(OperationShape shape)
     {
         var results = new List<Result>();
-        var pipeline = new ReliabilityPipeline<Result>(new ReliabilityPipelineOptions<Result>
+        var factory = new RetryTaskFactory<Result>
         {
             Strategy = new Count(3),
-            ShouldRetryResult = r => !r.IsGood,
-        });
+            CanRetryResult = r => !r.IsGood,
+        };
 
         Result Next()
         {
@@ -194,7 +191,7 @@ public class ReliabilityPipelineOperationShapeTests
             }
         }
 
-        Result returned = await pipeline.ExecuteAsync(PipelineOperationDriver.WithResult(shape, Next)).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
+        Result returned = await factory.RunValueTask(PipelineOperationDriver.WithResult(shape, Next)).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
 
         Assert.HasCount(3, results);
         Assert.AreSame(results[2], returned);

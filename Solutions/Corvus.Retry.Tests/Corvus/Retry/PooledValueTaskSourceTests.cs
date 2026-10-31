@@ -15,9 +15,9 @@ using Microsoft.Extensions.Time.Testing;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
-/// Each <c>ExecuteAsync</c> method of the pipelines consumes the value task of each attempt exactly once, so an operation
+/// Each <c>RunValueTask</c> method of the factories consumes the value task of each attempt exactly once, so an operation
 /// may return a value task that is backed by a pooled <see cref="IValueTaskSource{TResult}"/> or
-/// <see cref="IValueTaskSource"/>: the pipeline gets the result of each attempt one time, never uses the token after
+/// <see cref="IValueTaskSource"/>: the factory gets the result of each attempt one time, never uses the token after
 /// that, and invokes the operation again for a retry, which gets a fresh value task from the same pooled source.
 /// </summary>
 /// <remarks>
@@ -32,14 +32,14 @@ public class PooledValueTaskSourceTests
 
     public enum Method
     {
-        /// <summary><see cref="ReliabilityPipeline.ExecuteAsync(Func{CancellationToken, ValueTask}, CancellationToken)"/>.</summary>
-        PipelineWithoutResult,
+        /// <summary><see cref="RetryTaskFactory.RunValueTask(Func{CancellationToken, ValueTask}, CancellationToken)"/>.</summary>
+        FactoryWithoutResult,
 
-        /// <summary><see cref="ReliabilityPipeline.ExecuteAsync{T}(Func{CancellationToken, ValueTask{T}}, CancellationToken)"/>.</summary>
-        PipelineWithResult,
+        /// <summary><see cref="RetryTaskFactory.RunValueTask{T}(Func{CancellationToken, ValueTask{T}}, CancellationToken)"/>.</summary>
+        FactoryWithResult,
 
-        /// <summary><see cref="ReliabilityPipeline{T}.ExecuteAsync(Func{CancellationToken, ValueTask{T}}, CancellationToken)"/>.</summary>
-        GenericPipeline,
+        /// <summary><see cref="RetryTaskFactory{T}.RunValueTask(Func{CancellationToken, ValueTask{T}}, CancellationToken)"/>.</summary>
+        GenericFactory,
     }
 
     public enum Scenario
@@ -47,13 +47,13 @@ public class PooledValueTaskSourceTests
         /// <summary>The value task is complete with a result when the operation returns it.</summary>
         SynchronousSuccess,
 
-        /// <summary>The value task completes with a result on another thread, after the pipeline awaits it.</summary>
+        /// <summary>The value task completes with a result on another thread, after the factory awaits it.</summary>
         AsynchronousSuccess,
 
         /// <summary>Every attempt's value task is faulted when the operation returns it.</summary>
         SynchronousFailure,
 
-        /// <summary>Every attempt's value task faults on another thread, after the pipeline awaits it.</summary>
+        /// <summary>Every attempt's value task faults on another thread, after the factory awaits it.</summary>
         AsynchronousFailure,
 
         /// <summary>The first attempt's value task is faulted when returned; the retry completes asynchronously.</summary>
@@ -80,18 +80,24 @@ public class PooledValueTaskSourceTests
 
         // The fake time provider never advances, so an attempt timeout never expires; it only changes how the engine
         // runs each attempt (it creates a linked token for the attempt).
-        var options = new ReliabilityPipelineOptions<Payload>
+        var factory = new RetryTaskFactory
         {
             Strategy = new Count(attempts.Length),
             AttemptTimeout = withAttemptTimeout ? TimeSpan.FromHours(1) : null,
             TimeProvider = new FakeTimeProvider(),
         };
+        var factoryOfT = new RetryTaskFactory<Payload>
+        {
+            Strategy = factory.Strategy,
+            AttemptTimeout = factory.AttemptTimeout,
+            TimeProvider = factory.TimeProvider,
+        };
 
         Task<Payload?> call = method switch
         {
-            Method.PipelineWithoutResult => WithoutResultAsync(new ReliabilityPipeline(options).ExecuteAsync(_ => source.NextWithoutResult(NextAttempt()))),
-            Method.PipelineWithResult => WithResultAsync(new ReliabilityPipeline(options).ExecuteAsync(_ => source.Next(NextAttempt()))),
-            Method.GenericPipeline => WithResultAsync(new ReliabilityPipeline<Payload>(options).ExecuteAsync(_ => source.Next(NextAttempt()))),
+            Method.FactoryWithoutResult => WithoutResultAsync(factory.RunValueTask(_ => source.NextWithoutResult(NextAttempt()))),
+            Method.FactoryWithResult => WithResultAsync(factory.RunValueTask(_ => source.Next(NextAttempt()))),
+            Method.GenericFactory => WithResultAsync(factoryOfT.RunValueTask(_ => source.Next(NextAttempt()))),
             _ => throw new ArgumentOutOfRangeException(nameof(method)),
         };
 
@@ -104,7 +110,7 @@ public class PooledValueTaskSourceTests
         else
         {
             Payload? result = await call.WaitAsync(WaitLimit).ConfigureAwait(false);
-            if (method == Method.PipelineWithoutResult)
+            if (method == Method.FactoryWithoutResult)
             {
                 Assert.IsNull(result);
             }
@@ -124,7 +130,7 @@ public class PooledValueTaskSourceTests
         // Exactly one GetResult for each attempt, with that attempt's token, in order.
         Assert.AreSequenceEqual(issued, source.Calls.Where(c => c.Call == nameof(PooledSource.GetResult)).Select(c => c.Token));
 
-        // The pipeline awaited (registered a continuation) only an attempt that was not complete when it was returned.
+        // The factory awaited (registered a continuation) only an attempt that was not complete when it was returned.
         for (int i = 0; i < attempts.Length; i++)
         {
             int onCompleted = source.Calls.Count(c => c.Call == nameof(PooledSource.OnCompleted) && c.Token == issued[i]);
@@ -162,7 +168,7 @@ public class PooledValueTaskSourceTests
     // A result whose identity the test checks.
     private sealed class Payload;
 
-    // The outcome of one attempt, and whether its value task completes after the pipeline awaits it.
+    // The outcome of one attempt, and whether its value task completes after the factory awaits it.
     private sealed record Attempt(bool Asynchronous, InvalidOperationException? Exception, Payload? Result)
     {
         public static Attempt Succeeds(bool asynchronous) => new(asynchronous, null, new Payload());
@@ -243,7 +249,7 @@ public class PooledValueTaskSourceTests
                 this.pending = null;
             }
 
-            // Complete only now that the pipeline has awaited, and on another thread.
+            // Complete only now that the factory has awaited, and on another thread.
             if (toComplete is not null)
             {
                 ThreadPool.UnsafeQueueUserWorkItem(static s => s.Source.Complete(s.Attempt), (Source: this, Attempt: toComplete), preferLocal: false);

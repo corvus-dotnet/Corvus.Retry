@@ -1,4 +1,4 @@
-// <copyright file="ReliabilityPipelineTests.cs" company="Endjin Limited">
+// <copyright file="RetryTaskFactoryRunTests.cs" company="Endjin Limited">
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
@@ -15,7 +15,7 @@ using Corvus.Retry.Time;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
-/// A <see cref="ReliabilityPipeline"/> gives the operation a token that the caller and the timeouts cancel, applies the
+/// In <c>RunValueTask</c>, a <see cref="RetryTaskFactory"/> gives the operation a token that the caller and the timeouts cancel, applies the
 /// attempt timeout and the total timeout, checks the caller's token before each attempt, awaits the retry callback
 /// before the delay, keeps no state between calls, and uses the time provider of its options for every delay and
 /// timeout.
@@ -25,7 +25,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 /// operation either completes synchronously, or waits for a real infinite delay that only its token ends.
 /// </remarks>
 [TestClass]
-public class ReliabilityPipelineTests
+public class RetryTaskFactoryRunTests
 {
     private static readonly TimeSpan WaitLimit = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan OneHour = TimeSpan.FromHours(1);
@@ -39,15 +39,15 @@ public class ReliabilityPipelineTests
         RecordingFakeTimeProvider fake = new();
         using var cts = new CancellationTokenSource();
         var tokens = new List<CancellationToken>();
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+        var factory = new RetryTaskFactory
         {
             Strategy = new Count(3),
             AttemptTimeout = withTimeouts ? OneHour : null,
             TotalTimeout = withTimeouts ? OneHour : null,
             TimeProvider = fake,
-        });
+        };
 
-        Task<string> call = pipeline.ExecuteAsync(
+        Task<string> call = factory.RunValueTask(
             ct =>
             {
                 lock (tokens)
@@ -73,21 +73,21 @@ public class ReliabilityPipelineTests
     }
 
     [TestMethod]
-    public async Task WithTimeouts_TheOperationReceivesATokenThatIsNotTheCallersAndThePipelineNeverCancelsTheCallersToken()
+    public async Task WithTimeouts_TheOperationReceivesATokenThatIsNotTheCallersAndTheFactoryNeverCancelsTheCallersToken()
     {
         RecordingFakeTimeProvider fake = new();
         TimeSpan totalTimeout = TimeSpan.FromMilliseconds(100);
         using var cts = new CancellationTokenSource();
         var tokens = new List<CancellationToken>();
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+        var factory = new RetryTaskFactory
         {
             Strategy = new Count(3),
             AttemptTimeout = OneHour,
             TotalTimeout = totalTimeout,
             TimeProvider = fake,
-        });
+        };
 
-        Task<string> call = pipeline.ExecuteAsync(
+        Task<string> call = factory.RunValueTask(
             ct =>
             {
                 lock (tokens)
@@ -115,14 +115,14 @@ public class ReliabilityPipelineTests
 
     // REQ-02
     [TestMethod]
-    public async Task WithAnAttemptTimeoutOf50Milliseconds_ThePipelineMakesThreeAttemptsThenThrowsRetryTimeoutException()
+    public async Task WithAnAttemptTimeoutOf50Milliseconds_TheFactoryMakesThreeAttemptsThenThrowsRetryTimeoutException()
     {
         RecordingFakeTimeProvider fake = new();
         TimeSpan attemptTimeout = TimeSpan.FromMilliseconds(50);
         int invocations = 0;
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(3), AttemptTimeout = attemptTimeout, TimeProvider = fake });
+        var factory = new RetryTaskFactory { Strategy = new Count(3), AttemptTimeout = attemptTimeout, TimeProvider = fake };
 
-        Task<string> call = pipeline.ExecuteAsync(
+        Task<string> call = factory.RunValueTask(
             ct =>
             {
                 Interlocked.Increment(ref invocations);
@@ -148,9 +148,9 @@ public class ReliabilityPipelineTests
         RecordingFakeTimeProvider fake = new();
         TimeSpan totalTimeout = TimeSpan.FromMilliseconds(100);
         int invocations = 0;
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(3), TotalTimeout = totalTimeout, TimeProvider = fake });
+        var factory = new RetryTaskFactory { Strategy = new Count(3), TotalTimeout = totalTimeout, TimeProvider = fake };
 
-        Task<string> call = pipeline.ExecuteAsync(
+        Task<string> call = factory.RunValueTask(
             ct =>
             {
                 Interlocked.Increment(ref invocations);
@@ -173,9 +173,9 @@ public class ReliabilityPipelineTests
         RecordingFakeTimeProvider fake = new();
         TimeSpan totalTimeout = TimeSpan.FromMilliseconds(200);
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Linear(OneHour, 3), TotalTimeout = totalTimeout, TimeProvider = fake });
+        var factory = new RetryTaskFactory { Strategy = new Linear(OneHour, 3), TotalTimeout = totalTimeout, TimeProvider = fake };
 
-        Task<string> call = pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask();
+        Task<string> call = factory.RunValueTask(_ => new ValueTask<string>(op.Invoke())).AsTask();
 
         // One timer for the total timeout, and one for the delay after the first failure.
         Assert.IsFalse(call.IsCompleted);
@@ -198,9 +198,9 @@ public class ReliabilityPipelineTests
         RecordingFakeTimeProvider fake = new();
         using var cts = new CancellationTokenSource();
         var tokens = new List<CancellationToken>();
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { AttemptTimeout = OneHour, TotalTimeout = OneHour, TimeProvider = fake });
+        var factory = new RetryTaskFactory { AttemptTimeout = OneHour, TotalTimeout = OneHour, TimeProvider = fake };
 
-        Task<string> call = pipeline.ExecuteAsync(
+        Task<string> call = factory.RunValueTask(
             ct =>
             {
                 lock (tokens)
@@ -229,7 +229,7 @@ public class ReliabilityPipelineTests
         RecordingFakeTimeProvider fake = new();
         TimeSpan attemptTimeout = TimeSpan.FromMilliseconds(50);
         var tokens = new List<CancellationToken>();
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new DoNotRetry(), AttemptTimeout = attemptTimeout, TimeProvider = fake });
+        var factory = new RetryTaskFactory { Strategy = new DoNotRetry(), AttemptTimeout = attemptTimeout, TimeProvider = fake };
         var cancellations = new List<OperationCanceledException>();
 
         async ValueTask<string> OperationAsync(CancellationToken cancellationToken)
@@ -254,7 +254,7 @@ public class ReliabilityPipelineTests
             }
         }
 
-        Task<string> call = pipeline.ExecuteAsync(OperationAsync).AsTask();
+        Task<string> call = factory.RunValueTask(OperationAsync).AsTask();
 
         Assert.IsFalse(call.IsCompleted);
         await fake.WaitForTimersAsync(1).ConfigureAwait(false);
@@ -276,9 +276,9 @@ public class ReliabilityPipelineTests
         RecordingFakeTimeProvider fake = new();
         using var cts = new CancellationTokenSource();
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Linear(OneHour, 3), TimeProvider = fake });
+        var factory = new RetryTaskFactory { Strategy = new Linear(OneHour, 3), TimeProvider = fake };
 
-        Task<string> call = pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke()), cts.Token).AsTask();
+        Task<string> call = factory.RunValueTask(_ => new ValueTask<string>(op.Invoke()), cts.Token).AsTask();
 
         Assert.IsFalse(call.IsCompleted);
         Assert.AreSequenceEqual(new[] { OneHour }, fake.Delays);
@@ -298,9 +298,9 @@ public class ReliabilityPipelineTests
         using var cts = new CancellationTokenSource();
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
         var tokens = new List<CancellationToken>();
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Linear(OneHour, 3), TotalTimeout = OneHour * 10, TimeProvider = fake });
+        var factory = new RetryTaskFactory { Strategy = new Linear(OneHour, 3), TotalTimeout = OneHour * 10, TimeProvider = fake };
 
-        Task<string> call = pipeline.ExecuteAsync(
+        Task<string> call = factory.RunValueTask(
             ct =>
             {
                 tokens.Add(ct);
@@ -328,15 +328,15 @@ public class ReliabilityPipelineTests
         RecordingFakeTimeProvider fake = new();
         var cancelled = new CancellationToken(true);
         int invocations = 0;
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+        var factory = new RetryTaskFactory
         {
             AttemptTimeout = withTimeouts ? OneHour : null,
             TotalTimeout = withTimeouts ? OneHour : null,
             TimeProvider = fake,
-        });
+        };
 
         OperationCanceledException withResult = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
-            () => pipeline.ExecuteAsync(
+            () => factory.RunValueTask(
                 _ =>
                 {
                     invocations++;
@@ -345,7 +345,7 @@ public class ReliabilityPipelineTests
                 cancelled).AsTask()).ConfigureAwait(false);
 
         OperationCanceledException withoutResult = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
-            () => pipeline.ExecuteAsync(
+            () => factory.RunValueTask(
                 _ =>
                 {
                     invocations++;
@@ -360,16 +360,16 @@ public class ReliabilityPipelineTests
 
     // REQ-08
     [TestMethod]
-    public async Task OnePipelineGivesEachOfTwoSequentialCallsItsOwnAttempts()
+    public async Task OneFactoryGivesEachOfTwoSequentialCallsItsOwnAttempts()
     {
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(3) });
+        var factory = new RetryTaskFactory { Strategy = new Count(3) };
         var first = new FlakyOperation(FlakyOperation.AlwaysFails);
         var second = new FlakyOperation(FlakyOperation.AlwaysFails);
         var third = new FlakyOperation(2);
 
-        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => pipeline.ExecuteAsync(_ => new ValueTask<string>(first.Invoke())).AsTask()).ConfigureAwait(false);
-        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => pipeline.ExecuteAsync(_ => new ValueTask<string>(second.Invoke())).AsTask()).ConfigureAwait(false);
-        string result = await pipeline.ExecuteAsync(_ => new ValueTask<string>(third.Invoke())).ConfigureAwait(false);
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => factory.RunValueTask(_ => new ValueTask<string>(first.Invoke())).AsTask()).ConfigureAwait(false);
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => factory.RunValueTask(_ => new ValueTask<string>(second.Invoke())).AsTask()).ConfigureAwait(false);
+        string result = await factory.RunValueTask(_ => new ValueTask<string>(third.Invoke())).ConfigureAwait(false);
 
         Assert.AreEqual(3, first.Invocations);
         Assert.AreEqual(3, second.Invocations);
@@ -380,12 +380,12 @@ public class ReliabilityPipelineTests
     [TestMethod]
     [DataRow(2)]
     [DataRow(FlakyOperation.AlwaysFails)]
-    public async Task OnePipelineGivesEachOfEightParallelCallsItsOwnAttempts(int failures)
+    public async Task OneFactoryGivesEachOfEightParallelCallsItsOwnAttempts(int failures)
     {
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(3) });
+        var factory = new RetryTaskFactory { Strategy = new Count(3) };
         FlakyOperation[] operations = [.. Enumerable.Range(0, 8).Select(_ => new FlakyOperation(failures))];
 
-        Task<string>[] calls = [.. operations.Select(op => Task.Run(() => pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask()))];
+        Task<string>[] calls = [.. operations.Select(op => Task.Run(() => factory.RunValueTask(_ => new ValueTask<string>(op.Invoke())).AsTask()))];
         try
         {
             await Task.WhenAll(calls).WaitAsync(WaitLimit).ConfigureAwait(false);
@@ -417,7 +417,7 @@ public class ReliabilityPipelineTests
 
     // REQ-08
     [TestMethod]
-    public async Task TwoCallsThatOverlapOnOnePipelineEachGetTheirOwnAttemptsCallbacksAndFallback()
+    public async Task TwoCallsThatOverlapOnOneFactoryEachGetTheirOwnAttemptsCallbacksAndFallback()
     {
         RecordingFakeTimeProvider fake = new();
         var opA = new FlakyOperation(FlakyOperation.AlwaysFails, attempt => new InvalidOperationException($"A attempt {attempt} failed"));
@@ -425,8 +425,8 @@ public class ReliabilityPipelineTests
         var firstAttemptOfAInFlight = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var retries = new List<RetryEventArgs>();
-        var fallbacks = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var fallbacks = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new Count(3),
             TotalTimeout = OneHour,
@@ -440,19 +440,16 @@ public class ReliabilityPipelineTests
 
                 return ValueTask.CompletedTask;
             },
-            Fallback = new FallbackOptions<string>
+            Fallback = new Fallback<string>(args =>
             {
-                Action = args =>
+                lock (fallbacks)
                 {
-                    lock (fallbacks)
-                    {
-                        fallbacks.Add(args);
-                    }
+                    fallbacks.Add(args);
+                }
 
-                    return new ValueTask<string>($"fallback for {args.Exception!.Message}");
-                },
-            },
-        });
+                return new ValueTask<string>($"fallback for {args.Exception!.Message}");
+            }),
+        };
 
         // The first attempt of call A stays in flight until the test releases it. Its other attempts fail synchronously.
         ValueTask<string> OperationA(CancellationToken cancellationToken)
@@ -468,11 +465,11 @@ public class ReliabilityPipelineTests
             }
         }
 
-        Task<string> callA = pipeline.ExecuteAsync(OperationA).AsTask();
+        Task<string> callA = factory.RunValueTask(OperationA).AsTask();
         await firstAttemptOfAInFlight.Task.WaitAsync(WaitLimit).ConfigureAwait(false);
 
         // Call B runs from start to end while call A is in flight.
-        string resultB = await pipeline.ExecuteAsync(_ => new ValueTask<string>(opB.Invoke())).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
+        string resultB = await factory.RunValueTask(_ => new ValueTask<string>(opB.Invoke())).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
         Assert.IsFalse(callA.IsCompleted);
         Assert.AreEqual(1, opA.Invocations);
         releaseA.SetResult();
@@ -503,7 +500,7 @@ public class ReliabilityPipelineTests
         var op = new FlakyOperation(2);
         var calls = new List<RetryEventArgs>();
         var firstCallback = new TaskCompletionSource();
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+        var factory = new RetryTaskFactory
         {
             Strategy = new Linear(OneHour, 5),
             TimeProvider = fake,
@@ -516,11 +513,11 @@ public class ReliabilityPipelineTests
 
                 return args.AttemptNumber == 1 ? new ValueTask(firstCallback.Task) : ValueTask.CompletedTask;
             },
-        });
+        };
 
-        Task<string> call = pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask();
+        Task<string> call = factory.RunValueTask(_ => new ValueTask<string>(op.Invoke())).AsTask();
 
-        // The pipeline waits for the first callback, so no delay has started.
+        // The factory waits for the first callback, so no delay has started.
         Assert.HasCount(1, calls);
         Assert.AreEqual(0, fake.TimersCreated);
         firstCallback.SetResult();
@@ -551,15 +548,15 @@ public class ReliabilityPipelineTests
         RecordingFakeTimeProvider fake = new();
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
         var callbackFailure = new FormatException("The callback failed");
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+        var factory = new RetryTaskFactory
         {
             Strategy = new Linear(OneHour, 5),
             TimeProvider = fake,
             OnRetry = _ => throwsSynchronously ? throw callbackFailure : ValueTask.FromException(callbackFailure),
-        });
+        };
 
         FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask()).ConfigureAwait(false);
+            () => factory.RunValueTask(_ => new ValueTask<string>(op.Invoke())).AsTask()).ConfigureAwait(false);
 
         Assert.AreSame(callbackFailure, thrown);
         Assert.AreEqual(1, op.Invocations);
@@ -571,7 +568,7 @@ public class ReliabilityPipelineTests
     [DataRow("Count(1)")]
     [DataRow("DoNotRetry")]
     [DataRow("Constant(0)")]
-    public async Task WithZeroRetries_ThePipelineCallsTheOperationOneTime(string strategyName)
+    public async Task WithZeroRetries_TheFactoryCallsTheOperationOneTime(string strategyName)
     {
         IRetryStrategy strategy = strategyName switch
         {
@@ -580,10 +577,10 @@ public class ReliabilityPipelineTests
             _ => RetryStrategies.Constant(0, TimeSpan.FromSeconds(1)),
         };
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = strategy, TimeProvider = new RecordingFakeTimeProvider() });
+        var factory = new RetryTaskFactory { Strategy = strategy, TimeProvider = new RecordingFakeTimeProvider() };
 
         InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask()).ConfigureAwait(false);
+            () => factory.RunValueTask(_ => new ValueTask<string>(op.Invoke())).AsTask()).ConfigureAwait(false);
 
         Assert.AreSame(op.LastThrown, thrown);
         Assert.AreEqual(1, op.Invocations);
@@ -595,9 +592,9 @@ public class ReliabilityPipelineTests
     {
         RecordingFakeTimeProvider fake = new();
         var op = new FlakyOperation(1);
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Linear(OneHour, 2), TimeProvider = fake });
+        var factory = new RetryTaskFactory { Strategy = new Linear(OneHour, 2), TimeProvider = fake };
 
-        Task<string> call = pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask();
+        Task<string> call = factory.RunValueTask(_ => new ValueTask<string>(op.Invoke())).AsTask();
 
         Assert.IsFalse(call.IsCompleted);
         Assert.AreSequenceEqual(new[] { OneHour }, fake.Delays);
@@ -617,9 +614,9 @@ public class ReliabilityPipelineTests
         TimeSpan attemptTimeout = TimeSpan.FromMilliseconds(50);
         var policy = new RecordingRetryPolicy(true);
         var tokens = new List<CancellationToken>();
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(3), Policy = policy, AttemptTimeout = attemptTimeout, TimeProvider = fake });
+        var factory = new RetryTaskFactory { Strategy = new Count(3), Policy = policy, AttemptTimeout = attemptTimeout, TimeProvider = fake };
 
-        Task<string> call = pipeline.ExecuteAsync(
+        Task<string> call = factory.RunValueTask(
             ct =>
             {
                 lock (tokens)
@@ -649,16 +646,16 @@ public class ReliabilityPipelineTests
         RecordingFakeTimeProvider fake = new();
         TimeSpan timeout = TimeSpan.FromMilliseconds(100);
         var policy = new RecordingRetryPolicy(true);
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+        var factory = new RetryTaskFactory
         {
             Strategy = new Count(3),
             Policy = policy,
             AttemptTimeout = timeout,
             TotalTimeout = timeout,
             TimeProvider = fake,
-        });
+        };
 
-        Task<string> call = pipeline.ExecuteAsync(NeverCompletesAsync).AsTask();
+        Task<string> call = factory.RunValueTask(NeverCompletesAsync).AsTask();
 
         await fake.WaitForTimersAsync(2).ConfigureAwait(false);
         fake.Advance(timeout);
@@ -676,16 +673,16 @@ public class ReliabilityPipelineTests
     {
         var op = new FlakyOperation(1, _ => new OperationCanceledException(new CancellationToken(true)));
         var policy = new RecordingRetryPolicy(true);
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+        var factory = new RetryTaskFactory
         {
             Strategy = new Count(3),
             Policy = policy,
             AttemptTimeout = OneHour,
             TotalTimeout = OneHour,
             TimeProvider = new RecordingFakeTimeProvider(),
-        });
+        };
 
-        string result = await pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).ConfigureAwait(false);
+        string result = await factory.RunValueTask(_ => new ValueTask<string>(op.Invoke())).ConfigureAwait(false);
 
         Assert.AreEqual("attempt-2", result);
         Assert.AreSame(op.Thrown[0], Assert.ContainsSingle(policy.Consulted));
@@ -698,15 +695,15 @@ public class ReliabilityPipelineTests
         RecordingFakeTimeProvider fake = new();
         TimeSpan attemptTimeout = TimeSpan.FromMilliseconds(50);
         int invocations = 0;
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+        var factory = new RetryTaskFactory
         {
             Strategy = new Count(2),
-            Policy = RetryPolicies.Handle<TimeoutException>(),
+            Policy = RetryPolicies.For<TimeoutException>(),
             AttemptTimeout = attemptTimeout,
             TimeProvider = fake,
-        });
+        };
 
-        Task<string> call = pipeline.ExecuteAsync(
+        Task<string> call = factory.RunValueTask(
             ct => Interlocked.Increment(ref invocations) == 1 ? NeverCompletesAsync(ct) : new ValueTask<string>("done")).AsTask();
 
         await fake.WaitForTimersAsync(1).ConfigureAwait(false);
@@ -724,15 +721,15 @@ public class ReliabilityPipelineTests
         RecordingFakeTimeProvider fake = new();
         TimeSpan attemptTimeout = TimeSpan.FromMilliseconds(50);
         int invocations = 0;
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+        var factory = new RetryTaskFactory
         {
             Strategy = new Count(2),
-            Policy = RetryPolicies.Handle<InvalidOperationException>(),
+            Policy = RetryPolicies.For<InvalidOperationException>(),
             AttemptTimeout = attemptTimeout,
             TimeProvider = fake,
-        });
+        };
 
-        Task<string> call = pipeline.ExecuteAsync(
+        Task<string> call = factory.RunValueTask(
             ct =>
             {
                 Interlocked.Increment(ref invocations);
@@ -748,14 +745,17 @@ public class ReliabilityPipelineTests
     }
 
     [TestMethod]
-    public async Task WhenTheStrategyIsNull_ThePipelineMakesFourAttemptsWithTwoSecondsBeforeEachRetry()
+    public async Task WithTheStrategyOfTheEarlierPipelineDefault_TheFactoryMakesFourAttemptsWithTwoSecondsBeforeEachRetry()
     {
         RecordingFakeTimeProvider fake = new();
         TimeSpan twoSeconds = TimeSpan.FromSeconds(2);
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { TimeProvider = fake });
 
-        Task<string> call = pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask();
+        // The default strategy of a factory makes 5 tries without delay. RetryTaskFactorySettingsTests covers it. This
+        // test sets the strategy that the earlier pipeline used by default: 4 attempts, with 2 seconds before each retry.
+        var factory = new RetryTaskFactory { Strategy = new Linear(twoSeconds, 4), TimeProvider = fake };
+
+        Task<string> call = factory.RunValueTask(_ => new ValueTask<string>(op.Invoke())).AsTask();
 
         for (int timers = 1; timers <= 3; timers++)
         {
@@ -782,7 +782,7 @@ public class ReliabilityPipelineTests
         var firstAttemptGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         SynchronizationContext? onRetryContext = null;
         SynchronizationContext? secondAttemptContext = null;
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+        var factory = new RetryTaskFactory
         {
             Strategy = new Count(2),
             ContinueOnCapturedContext = continueOnCapturedContext,
@@ -791,10 +791,10 @@ public class ReliabilityPipelineTests
                 onRetryContext = SynchronizationContext.Current;
                 return DeferredValueTask.Completed();
             },
-        });
+        };
 
         // The first attempt fails on a thread with no context, after the test opens the gate. By then the call has
-        // returned, so the pipeline is awaiting the attempt. The second attempt succeeds.
+        // returned, so the factory is awaiting the attempt. The second attempt succeeds.
         ValueTask<string> WithResultAsync(CancellationToken cancellationToken)
         {
             string result;
@@ -827,8 +827,8 @@ public class ReliabilityPipelineTests
         }
 
         Task call = context.Run(() => withResult
-            ? pipeline.ExecuteAsync(WithResultAsync).AsTask()
-            : pipeline.ExecuteAsync(WithoutResultAsync).AsTask());
+            ? factory.RunValueTask(WithResultAsync).AsTask()
+            : factory.RunValueTask(WithoutResultAsync).AsTask());
         firstAttemptGate.SetResult();
 
         await call.WaitAsync(WaitLimit).ConfigureAwait(false);
@@ -841,13 +841,13 @@ public class ReliabilityPipelineTests
     [TestMethod]
     [DataRow(true)]
     [DataRow(false)]
-    public async Task ContinueOnCapturedContextControlsWhetherTheRetryOfTheGenericPipelineRunsOnTheCapturedContext(bool continueOnCapturedContext)
+    public async Task ContinueOnCapturedContextControlsWhetherTheRetryOfTheGenericFactoryRunsOnTheCapturedContext(bool continueOnCapturedContext)
     {
         var op = new FlakyOperation(1);
         var context = new ThreadPoolSynchronizationContext();
         SynchronizationContext? onRetryContext = null;
         SynchronizationContext? secondAttemptContext = null;
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new Count(2),
             ContinueOnCapturedContext = continueOnCapturedContext,
@@ -856,7 +856,7 @@ public class ReliabilityPipelineTests
                 onRetryContext = SynchronizationContext.Current;
                 return DeferredValueTask.Completed();
             },
-        });
+        };
 
         ValueTask<string> AttemptAsync(CancellationToken cancellationToken)
         {
@@ -874,7 +874,7 @@ public class ReliabilityPipelineTests
             return new ValueTask<string>(result);
         }
 
-        Task<string> call = context.Run(() => pipeline.ExecuteAsync(AttemptAsync).AsTask());
+        Task<string> call = context.Run(() => factory.RunValueTask(AttemptAsync).AsTask());
 
         Assert.AreEqual("attempt-2", await call.WaitAsync(WaitLimit).ConfigureAwait(false));
         SynchronizationContext? expected = continueOnCapturedContext ? context : null;
@@ -886,9 +886,9 @@ public class ReliabilityPipelineTests
     public void TheOperationWithNoResultCompletesSynchronouslyWhenEveryAttemptDoes()
     {
         var op = new FlakyOperation(2);
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(3) });
+        var factory = new RetryTaskFactory { Strategy = new Count(3) };
 
-        ValueTask call = pipeline.ExecuteAsync(
+        ValueTask call = factory.RunValueTask(
             _ =>
             {
                 op.Invoke();
@@ -904,9 +904,9 @@ public class ReliabilityPipelineTests
     {
         RecordingFakeTimeProvider fake = new();
         var op = new FlakyOperation(1);
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Linear(OneHour, 3), TimeProvider = fake });
+        var factory = new RetryTaskFactory { Strategy = new Linear(OneHour, 3), TimeProvider = fake };
 
-        Task call = pipeline.ExecuteAsync(
+        Task call = factory.RunValueTask(
             _ =>
             {
                 op.Invoke();
@@ -924,10 +924,10 @@ public class ReliabilityPipelineTests
     public async Task WhenTheOperationWithNoResultFailsEveryTime_TheLastExceptionIsThrown()
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new Count(3) });
+        var factory = new RetryTaskFactory { Strategy = new Count(3) };
 
         InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-            () => pipeline.ExecuteAsync(
+            () => factory.RunValueTask(
                 _ =>
                 {
                     op.Invoke();
@@ -939,14 +939,14 @@ public class ReliabilityPipelineTests
     }
 
     [TestMethod]
-    public void EachExecuteAsyncRejectsANullOperation()
+    public void EachRunValueTaskRejectsANullOperation()
     {
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions());
+        var factory = new RetryTaskFactory();
 
         ArgumentNullException withResult = Assert.ThrowsExactly<ArgumentNullException>(
-            () => pipeline.ExecuteAsync((Func<CancellationToken, ValueTask<int>>)null!).AsTask());
+            () => factory.RunValueTask((Func<CancellationToken, ValueTask<int>>)null!).AsTask());
         ArgumentNullException withoutResult = Assert.ThrowsExactly<ArgumentNullException>(
-            () => pipeline.ExecuteAsync((Func<CancellationToken, ValueTask>)null!).AsTask());
+            () => factory.RunValueTask((Func<CancellationToken, ValueTask>)null!).AsTask());
 
         Assert.AreEqual("operation", withResult.ParamName);
         Assert.AreEqual("operation", withoutResult.ParamName);

@@ -9,7 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 /// <summary>
-/// Makes pipeline operations of each <see cref="OperationShape"/> from a synchronous body, which throws for a failure
+/// Makes factory operations of each <see cref="OperationShape"/> from a synchronous body, which throws for a failure
 /// or returns for a success.
 /// </summary>
 internal static class PipelineOperationDriver

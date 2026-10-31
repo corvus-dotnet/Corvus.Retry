@@ -25,8 +25,8 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 /// </para>
 /// <para>
 /// <see cref="Retriable"/> waits through the process-wide <see cref="RetryDefaults.TimeProvider"/>, so these tests
-/// install an <see cref="ImmediateTimeProvider"/> and must not run in parallel. The pipelines receive the same provider
-/// through their options.
+/// install an <see cref="ImmediateTimeProvider"/> and must not run in parallel. The factories receive the same provider
+/// through their <c>TimeProvider</c> property.
 /// </para>
 /// </remarks>
 [TestClass]
@@ -35,9 +35,15 @@ public class AttemptCountTests
 {
     private const string RetriableRetry = "Retriable.Retry";
     private const string RetriableRetryAsync = "Retriable.RetryAsync";
-    private const string PipelineWithoutResult = "ReliabilityPipeline.ExecuteAsync";
-    private const string PipelineWithResult = "ReliabilityPipeline.ExecuteAsync<T>";
-    private const string GenericPipeline = "ReliabilityPipeline<T>.ExecuteAsync";
+    private const string FactoryRun = "RetryTaskFactory.Run";
+    private const string FactoryRunOfT = "RetryTaskFactory.Run<T>";
+    private const string GenericFactoryRun = "RetryTaskFactory<T>.Run";
+    private const string FactoryRunValueTask = "RetryTaskFactory.RunValueTask";
+    private const string FactoryRunValueTaskOfT = "RetryTaskFactory.RunValueTask<T>";
+    private const string GenericFactoryRunValueTask = "RetryTaskFactory<T>.RunValueTask";
+    private const string HedgedRun = "HedgedTaskFactory.Run";
+    private const string HedgedRunOfT = "HedgedTaskFactory.Run<T>";
+    private const string GenericHedgedRun = "HedgedTaskFactory<T>.Run";
 
     private static readonly TimeSpan WaitLimit = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan Delay = TimeSpan.FromMilliseconds(1);
@@ -88,14 +94,14 @@ public class AttemptCountTests
     private ImmediateTimeProvider time = null!;
 
     public static IEnumerable<object[]> EntryPointsAndStrategies =>
-        from entryPoint in new[] { RetriableRetry, RetriableRetryAsync, PipelineWithoutResult, PipelineWithResult, GenericPipeline }
+        from entryPoint in new[] { RetriableRetry, RetriableRetryAsync, FactoryRun, FactoryRunOfT, GenericFactoryRun, FactoryRunValueTask, FactoryRunValueTaskOfT, GenericFactoryRunValueTask }
         from strategy in Strategies.Keys
         select new object[] { entryPoint, strategy };
 
     public static IEnumerable<object[]> HedgingRows =>
-        from pipeline in new[] { PipelineWithoutResult, PipelineWithResult, GenericPipeline }
-        from maxHedgedAttempts in new[] { 1, 2, 5 }
-        select new object[] { pipeline, maxHedgedAttempts };
+        from factory in new[] { HedgedRun, HedgedRunOfT, GenericHedgedRun }
+        from extraAttempts in new[] { 1, 2, 5 }
+        select new object[] { factory, extraAttempts };
 
     [TestInitialize]
     public void Initialize() => this.time = TimeProviderFixture.Install(new ImmediateTimeProvider());
@@ -133,17 +139,14 @@ public class AttemptCountTests
 
     [TestMethod]
     [DynamicData(nameof(HedgingRows))]
-    public async Task WithHedging_WhenEveryAttemptFails_TheOperationIsInvokedMaxHedgedAttemptsPlusOneTimes_AndTheLastExceptionIsThrown(string pipeline, int maxHedgedAttempts)
+    public async Task WithHedging_WhenEveryAttemptFails_TheOperationIsInvokedExtraAttemptsPlusOneTimes_AndTheLastExceptionIsThrown(string factory, int extraAttempts)
     {
-        // An infinite delay starts the next attempt only after a failure, so the attempts run one after another, and
+        // An infinite stagger starts the next attempt only after a failure, so the attempts run one after another, and
         // the last attempt to start is the last to fail.
         using SemaphoreSlim ended = new(0);
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
-        var options = new ReliabilityPipelineOptions<string>
-        {
-            Hedging = new HedgingOptions { Delay = Timeout.InfiniteTimeSpan, MaxHedgedAttempts = maxHedgedAttempts },
-            TimeProvider = this.time,
-        };
+        var hedged = new HedgedTaskFactory(extraAttempts, Timeout.InfiniteTimeSpan) { TimeProvider = this.time };
+        var hedgedOfT = new HedgedTaskFactory<string>(extraAttempts, Timeout.InfiniteTimeSpan) { TimeProvider = this.time };
 
         string Attempt()
         {
@@ -157,19 +160,19 @@ public class AttemptCountTests
             }
         }
 
-        Task call = pipeline switch
+        Task call = factory switch
         {
-            PipelineWithoutResult => new ReliabilityPipeline(options).ExecuteAsync(_ => Ignore(Attempt())).AsTask(),
-            PipelineWithResult => new ReliabilityPipeline(options).ExecuteAsync(_ => new ValueTask<string>(Attempt())).AsTask(),
-            GenericPipeline => new ReliabilityPipeline<string>(options).ExecuteAsync(_ => new ValueTask<string>(Attempt())).AsTask(),
-            _ => throw new ArgumentOutOfRangeException(nameof(pipeline)),
+            HedgedRun => hedged.Run(_ => Ignore(Attempt()).AsTask()),
+            HedgedRunOfT => hedged.Run(_ => Task.FromResult(Attempt())),
+            GenericHedgedRun => hedgedOfT.Run(_ => Task.FromResult(Attempt())),
+            _ => throw new ArgumentOutOfRangeException(nameof(factory)),
         };
 
         InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
 
-        // HedgingOptions.MaxHedgedAttempts counts the attempts after the first. Wait until each attempt has ended
+        // The extraAttempts of a hedged factory counts the attempts after the first. Wait until each attempt has ended
         // before counting, so that the count is not taken while an attempt is still starting.
-        int expected = maxHedgedAttempts + 1;
+        int expected = extraAttempts + 1;
         for (int i = 0; i < expected; i++)
         {
             Assert.IsTrue(await ended.WaitAsync(WaitLimit).ConfigureAwait(false));
@@ -194,14 +197,18 @@ public class AttemptCountTests
 
     private Task RunAsync(string entryPoint, FlakyOperation op, IRetryStrategy strategy)
     {
-        var options = new ReliabilityPipelineOptions<string> { Strategy = strategy, TimeProvider = this.time };
+        var factory = new RetryTaskFactory { Strategy = strategy, TimeProvider = this.time };
+        var factoryOfT = new RetryTaskFactory<string> { Strategy = strategy, TimeProvider = this.time };
         return entryPoint switch
         {
             RetriableRetry => RetriableDriver.RetryAsync(RetryShape.Action, op.Invoke, CancellationToken.None, strategy, AnyExceptionPolicy.Default),
             RetriableRetryAsync => RetriableDriver.RetryAsync(RetryShape.AsyncFunctionWithToken, op.Invoke, CancellationToken.None, strategy, AnyExceptionPolicy.Default),
-            PipelineWithoutResult => new ReliabilityPipeline(options).ExecuteAsync(_ => Ignore(op.Invoke())).AsTask(),
-            PipelineWithResult => new ReliabilityPipeline(options).ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask(),
-            GenericPipeline => new ReliabilityPipeline<string>(options).ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask(),
+            FactoryRun => factory.Run(_ => Ignore(op.Invoke()).AsTask()),
+            FactoryRunOfT => factory.Run(_ => Task.FromResult(op.Invoke())),
+            GenericFactoryRun => factoryOfT.Run(_ => Task.FromResult(op.Invoke())),
+            FactoryRunValueTask => factory.RunValueTask(_ => Ignore(op.Invoke())).AsTask(),
+            FactoryRunValueTaskOfT => factory.RunValueTask(_ => new ValueTask<string>(op.Invoke())).AsTask(),
+            GenericFactoryRunValueTask => factoryOfT.RunValueTask(_ => new ValueTask<string>(op.Invoke())).AsTask(),
             _ => throw new ArgumentOutOfRangeException(nameof(entryPoint)),
         };
     }
