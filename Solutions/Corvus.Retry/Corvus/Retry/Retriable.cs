@@ -41,7 +41,7 @@ using Corvus.Retry.Strategies;
 /// </remarks>
 public static class Retriable
 {
-    private const string AsyncRetryMessage = "Retry does not retry an asynchronous operation. Use RetryAsync, or ReliabilityPipeline.ExecuteAsync for a ValueTask.";
+    private const string AsyncRetryMessage = "Retry does not retry an asynchronous operation. Use RetryAsync, or RetryTaskFactory.RunValueTask for a ValueTask.";
     private const string NestedTaskMessage = "RetryAsync received an operation that returns a task inside its task. Await the task in the operation.";
 
     /// <summary>
@@ -570,7 +570,7 @@ public static class Retriable
     /// This method is generic, so that a lambda that only throws does not bind to it. Its last parameter is a span,
     /// so that its signature is different from <see cref="Retry{TTask}(Func{TTask}, object?[])"/>.
     /// </para>
-    /// <para>Use <see cref="RetryAsync(Func{Task})"/>, or <see cref="ReliabilityPipeline.ExecuteAsync(Func{CancellationToken, ValueTask}, CancellationToken)"/>.</para>
+    /// <para>Use <see cref="RetryAsync(Func{Task})"/>, or <see cref="RetryTaskFactory.RunValueTask(Func{CancellationToken, ValueTask}, CancellationToken)"/>.</para>
     /// </remarks>
     /// <exception cref="NotSupportedException">Always. The compiler does not let a call bind to this method.</exception>
     [Obsolete(AsyncRetryMessage, error: true)]
@@ -596,7 +596,7 @@ public static class Retriable
     /// with the <see cref="ValueTask{TResult}"/> as the result. That overload does not wait for the operation, and does
     /// not retry a failure after the first <see langword="await"/>.
     /// </para>
-    /// <para>Use <see cref="RetryAsync{T}(Func{Task{T}})"/>, or <see cref="ReliabilityPipeline.ExecuteAsync{T}(Func{CancellationToken, ValueTask{T}}, CancellationToken)"/>.</para>
+    /// <para>Use <see cref="RetryAsync{T}(Func{Task{T}})"/>, or <see cref="RetryTaskFactory.RunValueTask{T}(Func{CancellationToken, ValueTask{T}}, CancellationToken)"/>.</para>
     /// </remarks>
     /// <exception cref="NotSupportedException">Always. The compiler does not let a call bind to this method.</exception>
     [Obsolete(AsyncRetryMessage, error: true)]

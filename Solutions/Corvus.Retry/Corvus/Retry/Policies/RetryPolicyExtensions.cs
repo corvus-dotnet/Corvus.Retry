@@ -74,7 +74,7 @@ public static class RetryPolicyExtensions
     /// <remarks>
     /// <para>
     /// This is the entry point through which every engine asks a policy about an <see cref="AggregateException"/>:
-    /// <see cref="Retriable"/>, the <see cref="ReliabilityPipeline"/> and <see cref="ReliabilityPipeline{T}"/> retry
+    /// <see cref="Retriable"/>, the <see cref="RetryTaskFactory"/> and <see cref="RetryTaskFactory{T}"/> retry
     /// loops, hedging, the circuit breaker, the fallback, <see cref="RetryTask"/> and <see cref="ReliableTaskRunner"/>.
     /// An engine calls it for an <see cref="AggregateException"/>, and calls <see cref="IRetryPolicy.CanRetry"/>
     /// directly for any other exception. The strategy's <see cref="Strategies.RetryAttempt.Exception"/> still

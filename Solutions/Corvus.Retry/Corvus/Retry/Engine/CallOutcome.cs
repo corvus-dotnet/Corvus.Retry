@@ -16,8 +16,8 @@ using System;
 /// <see cref="CircuitRejectedException"/>. It does not set it for an exception from a callback, a strategy or a policy.
 /// </para>
 /// <para>
-/// The fallback of <see cref="ReliabilityPipeline{T}"/> compares the exception that it catches with this value. It
-/// handles only the outcome of the attempts. A pipeline makes an instance only when it has a fallback.
+/// The fallback (<see cref="FallbackEngine"/>) compares the exception that it catches with this value. It
+/// handles only the outcome of the attempts. A factory makes an instance only for a call that has a fallback.
 /// </para>
 /// </remarks>
 internal sealed class CallOutcome

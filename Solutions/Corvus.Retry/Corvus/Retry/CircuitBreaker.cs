@@ -15,9 +15,10 @@ using Corvus.Retry.Policies;
 /// </summary>
 /// <remarks>
 /// <para>
-/// One instance holds the state of the circuit. Many pipelines and many threads can use the same instance: set it as
-/// the <see cref="ReliabilityPipelineOptions.CircuitBreaker"/> of each pipeline. The pipeline asks the breaker for permission
-/// before each attempt, so each retry is one call.
+/// One instance holds the state of the circuit. Many factories and many threads can use the same instance: set it as
+/// the <see cref="RetryTaskFactory.CircuitBreaker"/> (or the <c>CircuitBreaker</c> of <see cref="RetryTaskFactory{T}"/>,
+/// <see cref="HedgedTaskFactory"/> or <see cref="HedgedTaskFactory{T}"/>) of each factory. The factory asks the breaker
+/// for permission before each attempt, so each retry or hedged attempt is one call.
 /// </para>
 /// <para>
 /// When the circuit is closed, the breaker counts the calls and the failures in a sliding window of
@@ -31,9 +32,9 @@ using Corvus.Retry.Policies;
 /// started again.
 /// </para>
 /// <para>
-/// A failure is an exception that <see cref="Policy"/> accepts, a <see cref="RetryTimeoutException"/>,
-/// or a result that <see cref="ReliabilityPipelineOptions{T}.ShouldRetryResult"/> rejects. A cancellation by the caller is not
-/// a call and not a failure. A call that the breaker rejects is not a call.
+/// A failure is an exception that <see cref="Policy"/> accepts, a <see cref="RetryTimeoutException"/>, or a result that
+/// <see cref="RetryTaskFactory{T}.CanRetryResult"/> or <see cref="HedgedTaskFactory{T}.ResultIsFailure"/> rejects. A
+/// cancellation by the caller is not a call and not a failure. A call that the breaker rejects is not a call.
 /// </para>
 /// <para>
 /// The breaker changes its state under a lock, and calls <see cref="OnStateChanged"/> after it
