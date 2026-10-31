@@ -13,6 +13,11 @@
     <PackageVersion Include="Roslynator.Analyzers" Version="5.0.1" />
   </ItemGroup>
 
+  <ItemGroup Label="Corvus.Retry.Extensions.Http">
+    <!-- The lowest 10.0 version, so that the package does not make its users upgrade. -->
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.0" />
+  </ItemGroup>
+
   <ItemGroup Label="Benchmarks">
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
   </ItemGroup>
