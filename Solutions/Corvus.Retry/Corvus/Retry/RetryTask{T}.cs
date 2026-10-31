@@ -15,11 +15,12 @@ using Corvus.Retry.Policies;
 /// <typeparam name="T">The return type of the task.</typeparam>
 /// <remarks>
 /// <para>
-/// There are three different ways of retrying tasks in this library.
+/// There are four ways to retry an operation in this library.
 /// <list type="number">
-/// <item><see cref="RetryTask"/> and <see cref="RetryTask{T}"/> - starting a task to execute a function asynchronously, with retry</item>
-/// <item><see cref="Retriable"/> - wrapping a synchronous or asynchronous operation with retry semantics</item>
-/// <item><see cref="ReliableTaskRunner"/> -wrapping a long-running asynchronous operation in a host that ensures it continues to run even after failure. You can use <see cref="IRetryPolicy"/> to control when the task restarts.</item>
+/// <item><see cref="Retriable"/> puts retries around one call to a synchronous or an asynchronous operation.</item>
+/// <item><see cref="RetryTask"/>, <see cref="RetryTask{T}"/> and a configured <see cref="RetryTaskFactory"/> or <see cref="RetryTaskFactory{T}"/> run an asynchronous operation with <c>Run</c>, or start a synchronous function as a task with <c>StartNew</c>. A factory adds timeouts, result retries, a circuit breaker and a fallback.</item>
+/// <item><see cref="HedgedTask"/>, <see cref="HedgedTask{T}"/>, <see cref="HedgedTaskFactory"/> and <see cref="HedgedTaskFactory{T}"/> start more attempts in parallel when an attempt is slow or fails.</item>
+/// <item><see cref="ReliableTaskRunner"/> runs a long-running asynchronous operation, and starts it again when it fails. An <see cref="IRetryPolicy"/> controls the restarts.</item>
 /// </list>
 /// </para>
 /// </remarks>
