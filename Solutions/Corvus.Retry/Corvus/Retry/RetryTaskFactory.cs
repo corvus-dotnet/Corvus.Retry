@@ -1453,7 +1453,9 @@ public sealed class RetryTaskFactory
         AddIfSet(settings, canRetryResult, nameof(RetryTaskFactory<object>.CanRetryResult));
         AddIfSet(settings, fallback, nameof(RetryTaskFactory<object>.Fallback));
 
-        string names = string.Join(", ", settings);
+        string names = settings.Count == 1
+            ? settings[0]
+            : $"{string.Join(", ", settings[..^1])} and {settings[^1]}";
         throw new InvalidOperationException(settings.Count == 1
             ? $"StartNew cannot use the {names} setting of this factory. Use Run or RunValueTask, or a factory without this setting."
             : $"StartNew cannot use the {names} settings of this factory. Use Run or RunValueTask, or a factory without these settings.");
