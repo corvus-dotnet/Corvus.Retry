@@ -11,339 +11,43 @@ If you use version 2.x, read the [migration guide from 2.x to 3.0](Documentation
 
 ## Features
 
-The library has four types that retry an operation:
+Two concepts control every retry:
 
-### `ReliabilityPipeline`
-A pipeline holds all the retry settings in one immutable object. It adds timeouts, result retries, a fallback, a circuit breaker and hedging to the retries.
+- An `IRetryPolicy` decides **whether** an exception can cause a retry.
+- An `IRetryStrategy` decides **when**: the number of attempts, and the delay before each retry.
+
+The library gives these types:
+
 ### `Retriable`
-`Retriable` puts retries around a synchronous or an asynchronous operation, with a small set of parameters.
-### `RetryTask`
-`RetryTask` starts a task, as `Task.Factory.StartNew` does, and retries the operation of the task.
+`Retriable` puts retries around one synchronous or asynchronous call, with a small set of parameters.
+### `RetryTask` and `RetryTaskFactory`
+`RetryTaskFactory` is a task factory with retries. It follows .NET's own `TaskFactory`: make a configured factory, as you make `new TaskFactory(...)`, and keep it in a field. `Run` runs an asynchronous operation, as `Task.Run` does, and retries it. `StartNew` starts a synchronous function on a scheduler, as `Task.Factory.StartNew` does, and retries it. A configured factory adds timeouts, result retries, a fallback and a circuit breaker to the retries. `RetryTask.Run` and `RetryTask.Factory` use a factory with the default settings.
+### `HedgedTask` and `HedgedTaskFactory`
+`HedgedTaskFactory` starts more attempts in parallel when an attempt is slow or fails, and keeps the first acceptable outcome. Hedging is not a retry, thus it has its own types.
+### `CircuitBreaker`
+A `CircuitBreaker` stops calls to a service that fails frequently. Many factories can share one breaker.
+### `Fallback<T>`
+A `Fallback<T>` gives a value when the attempts of a factory fail.
+### `RetryHandler`
+`RetryHandler` is an `HttpMessageHandler` that applies a `RetryTaskFactory<HttpResponseMessage>` to each request of an `HttpClient`.
 ### `ReliableTaskRunner`
 `ReliableTaskRunner` runs a long-running asynchronous operation. If the operation fails, the runner starts it again.
 
+### Which entry point to use
+
+| You want to | Use | Default without settings |
+|-------------|-----|--------------------------|
+| Retry one call, and give the strategy and the policy at the call | `Retriable.Retry` or `Retriable.RetryAsync` | 10 attempts, no delay, all exceptions |
+| Retry one asynchronous call with the default settings | `RetryTask.Run` or `RetryTask<T>.Run` | 5 attempts, no delay, all exceptions |
+| Use the same settings for many calls, or use timeouts, result retries, a fallback, a circuit breaker or an `OnRetry` callback | A configured `RetryTaskFactory` or `RetryTaskFactory<T>` in a field, and its `Run` method | 5 attempts, no delay, all exceptions |
+| Start a synchronous function as a task on a scheduler, as `Task.Factory.StartNew` does | `StartNew` of a factory, or of `RetryTask.Factory` | 5 attempts, no delay, all exceptions |
+| Start parallel attempts for a slow operation | A `HedgedTaskFactory` or `HedgedTask.Run` | 1 extra attempt after 2 seconds |
+| Retry each request of an `HttpClient` | `RetryHandler` with a configured `RetryTaskFactory<HttpResponseMessage>` | Requests with a safe method only |
+| Keep a long-running operation alive | `ReliableTaskRunner` | Restart after each failure |
+
+`Retriable.RetryAsync(ct => …, cancellationToken)` and `RetryTask.Run(ct => …, cancellationToken)` have the same signature. They have different defaults: `Retriable` makes 10 attempts, and `RetryTask.Run` makes 5. Use `Retriable` when each call gives its own strategy and policy. Use `RetryTask.Run`, or a configured factory, when many calls use the same settings.
+
 ## Usage
-
-### `ReliabilityPipeline`
-
-Make one `ReliabilityPipeline` and keep it in a field. A pipeline is immutable, and many threads can use it at the same time. Each call has its own state.
-
-```csharp
-using Corvus.Retry;
-using Corvus.Retry.Policies;
-using Corvus.Retry.Strategies;
-
-ReliabilityPipeline pipeline = new(new ReliabilityPipelineOptions
-{
-    Strategy = RetryStrategies.Exponential(retries: 3, baseDelay: TimeSpan.FromMilliseconds(200), useJitter: true),
-    Policy = RetryPolicies.TransientHttp,
-    AttemptTimeout = TimeSpan.FromSeconds(5),
-});
-
-string body = await pipeline.ExecuteAsync(
-    ct => new ValueTask<string>(httpClient.GetStringAsync(uri, ct)),
-    cancellationToken);
-```
-
-The operation receives a cancellation token. The pipeline cancels this token when the caller cancels, or when a timeout expires. Give the token to all the asynchronous methods that the operation calls.
-
-#### Options
-
-`ReliabilityPipelineOptions` is an immutable record. Use a `with` expression to make a changed copy. The constructor of the pipeline examines the options, and keeps their values.
-
-| Property | Default | Description |
-|----------|---------|-------------|
-| `Strategy` | `null`: 4 attempts, with 2 seconds before each retry (`new Linear(TimeSpan.FromSeconds(2), 4)`) | The `IRetryStrategy` that gives the delay before each retry, or stops the retries. It must be `null` when `Hedging` is set. |
-| `Policy` | `AnyExceptionPolicy.Default` | The `IRetryPolicy` that accepts or refuses each exception. It applies only to exceptions. |
-| `AttemptTimeout` | `null` (no limit) | The time limit for each attempt. |
-| `TotalTimeout` | `null` (no limit) | The time limit for all the attempts and all the delays. |
-| `OnRetry` | `null` | A callback that the pipeline awaits before each delay. |
-| `CircuitBreaker` | `null` | A shared `CircuitBreaker`. See [Circuit breaker](#circuit-breaker). |
-| `Hedging` | `null` | The `HedgingOptions`. See [Hedging](#hedging). |
-| `TimeProvider` | `TimeProvider.System` | The source of the time for the delays and the timeouts. |
-| `ContinueOnCapturedContext` | `false` | If `true`, the pipeline continues on the captured context after each `await`. |
-
-`ReliabilityPipelineOptions<T>` adds these properties for a `ReliabilityPipeline<T>`:
-
-| Property | Default | Description |
-|----------|---------|-------------|
-| `ShouldRetryResult` | `null` | A predicate that returns `true` for a result that is a failure. |
-| `Fallback` | `null` | The `FallbackOptions<T>`. See [Fallback](#fallback). |
-| `HedgingActionGenerator` | `null` | A function that gives a different operation for each hedged attempt. See [Hedging](#hedging). |
-
-The constructor throws an exception for an incorrect option. The `ParamName` of the exception is the name of the property:
-
-- `ArgumentOutOfRangeException`: a timeout is zero, negative, or more than approximately 49.7 days. For no limit, use `null`, not `Timeout.InfiniteTimeSpan`.
-- `ArgumentNullException`: `Policy` or `TimeProvider` is `null`.
-- `ArgumentException`: `Hedging` and `Strategy` are set at the same time.
-- `ArgumentException`, with the `ParamName` `options`: the non-generic `ReliabilityPipeline` received a `ReliabilityPipelineOptions<T>` that sets `ShouldRetryResult`, `Fallback` or `HedgingActionGenerator`. Only `ReliabilityPipeline<T>` can use these settings.
-
-To make one attempt and no retry, set `Strategy` to `new Count(1)`, `new DoNotRetry()`, or a `RetryStrategies` method with `retries: 0`.
-
-#### Timeouts and cancellation
-
-The pipeline has two time limits:
-
-- **Attempt timeout.** When `AttemptTimeout` expires, the pipeline cancels the token of the attempt. The attempt then fails with a `RetryTimeoutException`. The strategy and the policy decide if the pipeline retries it.
-- **Total timeout.** When `TotalTimeout` expires, the pipeline cancels the token of the attempt, or stops the delay. No other attempt starts, and the call throws a `RetryTimeoutException`.
-
-`RetryTimeoutException` derives from `TimeoutException`. Its `Timeout` property gives the time limit that expired. When the total timeout expires between two attempts, the inner exception is the exception of the last attempt.
-
-The two timeouts are cooperative. The pipeline cancels the token, and then waits until the operation stops.
-
-When the caller cancels the token, the call throws an `OperationCanceledException` that carries the caller's token. The pipeline does not retry this exception, and does not give it to the policy. The token also stops a delay immediately.
-
-If the operation throws an `AggregateException`, the pipeline asks the policy about each inner exception, depth first, and retries only if the policy accepts all of them. An `AggregateException` with no inner exceptions goes to the policy itself. The strategy and `OnRetry` receive the `AggregateException` as thrown.
-
-```csharp
-ReliabilityPipeline pipeline = new(new ReliabilityPipelineOptions
-{
-    Strategy = RetryStrategies.Constant(retries: 5, delay: TimeSpan.FromSeconds(1)),
-    Policy = RetryPolicies.TransientHttp,
-    AttemptTimeout = TimeSpan.FromSeconds(10),
-    TotalTimeout = TimeSpan.FromSeconds(30),
-});
-
-using CancellationTokenSource cancellation = new();
-try
-{
-    string body = await pipeline.ExecuteAsync(
-        async ct => await httpClient.GetStringAsync(uri, ct),
-        cancellation.Token);
-}
-catch (RetryTimeoutException ex)
-{
-    Console.WriteLine($"The time limit of {ex.Timeout} expired.");
-}
-catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-{
-    Console.WriteLine("The caller cancelled the call.");
-}
-```
-
-> **Note:** A policy for one exception type does not retry attempt timeouts. An attempt timeout gives a `RetryTimeoutException`. To retry attempt timeouts, the policy must also accept `RetryTimeoutException` or `TimeoutException`, for example `RetryPolicies.Handle<HttpRequestException>().Or<TimeoutException>()`. `RetryPolicies.TransientHttp` and `AnyExceptionPolicy` accept `RetryTimeoutException`.
-
-#### Operations that return a `Task`
-
-The pipeline has only `ValueTask` overloads. With `Task` overloads, the compiler cannot select an overload for an `async` lambda (error CS0121). For a method that returns a `Task<T>`, use one of these lambdas:
-
-```csharp
-ct => new ValueTask<string>(httpClient.GetStringAsync(uri, ct))
-async ct => await httpClient.GetStringAsync(uri, ct)
-```
-
-For a method that returns a `Task`, use `ct => new ValueTask(DoAsync(ct))`.
-
-#### The retry callback
-
-The pipeline awaits `OnRetry` before each delay. The callback receives a `RetryEventArgs`:
-
-- `AttemptNumber` is the number of the attempt that failed. The first attempt is 1.
-- `NextAttemptNumber` is the number of the attempt that starts after the delay.
-- `LastException` is the exception of the attempt. It is `null` when a result caused the retry.
-- `Result` is the result that caused the retry, or `null`.
-- `DelayBeforeRetry` is the delay before the next attempt.
-
-The pipeline does not call `OnRetry` for the last failure. An exception from the callback stops the call.
-
-```csharp
-ReliabilityPipeline pipeline = new(new ReliabilityPipelineOptions
-{
-    Strategy = RetryStrategies.Linear(retries: 3, delay: TimeSpan.FromSeconds(1)),
-    OnRetry = args =>
-    {
-        Console.WriteLine($"Attempt {args.AttemptNumber} failed. Attempt {args.NextAttemptNumber} starts after {args.DelayBeforeRetry}.");
-        return ValueTask.CompletedTask;
-    },
-});
-```
-
-#### Retry a result
-
-`ReliabilityPipeline<T>` can also retry a result. If `ShouldRetryResult` returns `true`, the pipeline uses the result as a failure. The strategy, the callback and the delay then apply. The policy applies only to exceptions.
-
-- Before the next attempt, the pipeline disposes a rejected result that implements `IDisposable`. It does this after the callback.
-- If the call stops with an exception after the operation returned a result, the pipeline also disposes that result. For example, the caller cancels, the total timeout expires, or `ShouldRetryResult`, the strategy or `OnRetry` throws an exception.
-- If no retries remain, the pipeline returns the last result. It does not throw an exception.
-
-`RetryStrategies.RetryAfter` uses the `Retry-After` header of an `HttpResponseMessage` result for the delay:
-
-```csharp
-ReliabilityPipeline<HttpResponseMessage> pipeline = new(new ReliabilityPipelineOptions<HttpResponseMessage>
-{
-    Strategy = RetryStrategies.RetryAfter(RetryStrategies.Exponential(retries: 3, baseDelay: TimeSpan.FromSeconds(1))),
-    Policy = RetryPolicies.TransientHttp,
-    ShouldRetryResult = RetryPolicies.IsTransientHttpResponse,
-    AttemptTimeout = TimeSpan.FromSeconds(10),
-});
-
-using HttpResponseMessage response = await pipeline.ExecuteAsync(
-    ct => new ValueTask<HttpResponseMessage>(httpClient.GetAsync(uri, ct)),
-    cancellationToken);
-```
-
-#### Order of the parts
-
-The pipeline applies its parts in this sequence, from the outermost part to the innermost part:
-
-```text
-ExecuteAsync(operation, cancellationToken)
- └─ 1. Fallback                    ReliabilityPipelineOptions<T>.Fallback
-     └─ 2. Total timeout           TotalTimeout
-         └─ 3. Retry, or hedging   Strategy, Policy, OnRetry, ShouldRetryResult; or Hedging
-             └─ 4. Circuit breaker CircuitBreaker
-                 └─ 5. Attempt timeout  AttemptTimeout
-                     └─ 6. The operation
-```
-
-Each part is optional. If an option is `null`, the pipeline does not use that part, and does not allocate memory for it. These are the results of the sequence:
-
-- The fallback receives the outcome of the attempts. This outcome can be a `RetryTimeoutException` or a `BrokenCircuitException`.
-- The total timeout includes all the attempts and all the delays.
-- The circuit breaker counts each attempt as one call. It counts an attempt timeout as a failure.
-
-#### Fallback
-
-A fallback gives a value when the pipeline fails. It applies only to `ReliabilityPipeline<T>`.
-
-| `FallbackOptions<T>` property | Default | Description |
-|-------------------------------|---------|-------------|
-| `Action` | None (`required`) | The function that gives the fallback value. |
-| `Policy` | `AnyExceptionPolicy.Default` | The policy that selects the exceptions that get the fallback value. |
-| `ShouldFallbackResult` | `null` | A predicate that returns `true` for a result that gets the fallback value. |
-| `OnFallback` | `null` | A callback that the pipeline awaits before it calls `Action`. |
-
-```csharp
-ReliabilityPipeline<string> pipeline = new(new ReliabilityPipelineOptions<string>
-{
-    Strategy = RetryStrategies.Constant(retries: 2, delay: TimeSpan.FromMilliseconds(500)),
-    TotalTimeout = TimeSpan.FromSeconds(5),
-    Fallback = new FallbackOptions<string>
-    {
-        Action = args => ValueTask.FromResult("cached value"),
-        OnFallback = args =>
-        {
-            Console.WriteLine($"Fallback after {args.Exception?.GetType().Name}.");
-            return ValueTask.CompletedTask;
-        },
-    },
-});
-```
-
-- If the pipeline throws an exception that `Policy` accepts, the pipeline calls `OnFallback` and then `Action`. It returns the value of `Action`.
-- If `ShouldFallbackResult` returns `true` for a result, the pipeline calls `OnFallback` with that result, then disposes the result if it implements `IDisposable`, and then calls `Action`. Thus `OnFallback` can examine the result, for example to log the body of a response, and `Action` receives a result that is already disposed. This is the same order as the retry part, which disposes a rejected result after `OnRetry`.
-- The fallback does not apply when the caller cancels the token.
-- `FallbackArgs<T>` gives the `Exception` or the `Result`, and the `CancellationToken` of the caller. The total timeout does not apply to the fallback.
-- An exception from `OnFallback` or from `Action` stops the call. The pipeline does not catch it. If `OnFallback` throws for a rejected result, the pipeline disposes the result.
-- The fallback applies only to the outcome of the attempts: the exception or the result of the last attempt, a `RetryTimeoutException`, or a rejection by the circuit breaker. An exception from `ShouldRetryResult`, `OnRetry`, the strategy, a policy, `OnStateChanged`, `OnHedging` or `HedgingActionGenerator` stops the call. The fallback does not give a value for it.
-
-#### Circuit breaker
-
-A circuit breaker stops calls to a service that fails frequently. One `CircuitBreaker` instance holds the state. Many pipelines and threads can use the same instance.
-
-| `CircuitBreakerOptions` property | Default | Description |
-|----------------------------------|---------|-------------|
-| `FailureRatio` | `0.1` | The ratio of failures to calls at which the circuit opens. The value must be more than 0, and 1 or less. |
-| `MinimumThroughput` | `100` | The minimum number of calls in the window before the circuit can open. The minimum value is 2. |
-| `SamplingDuration` | 30 seconds | The length of the sliding window that counts the calls and the failures. The minimum value is 500 ms. |
-| `BreakDuration` | 5 seconds | The time for which the circuit stays open. The minimum value is 500 ms. |
-| `Policy` | `AnyExceptionPolicy.Default` | The policy that selects the exceptions that are failures. |
-| `OnStateChanged` | `null` | A callback for each change of state. |
-| `TimeProvider` | `TimeProvider.System` | The source of the time for the window and the break. |
-
-```csharp
-CircuitBreaker breaker = new(new CircuitBreakerOptions
-{
-    FailureRatio = 0.5,
-    MinimumThroughput = 10,
-    BreakDuration = TimeSpan.FromSeconds(15),
-    OnStateChanged = change =>
-    {
-        Console.WriteLine($"The circuit changed from {change.From} to {change.To}.");
-        return ValueTask.CompletedTask;
-    },
-});
-
-ReliabilityPipeline pipeline = new(new ReliabilityPipelineOptions
-{
-    Strategy = RetryStrategies.RetryAfter(RetryStrategies.Constant(retries: 3, delay: TimeSpan.FromSeconds(1))),
-    Policy = RetryPolicies.TransientHttp.Or(RetryPolicies.Handle<BrokenCircuitException>()),
-    CircuitBreaker = breaker,
-    AttemptTimeout = TimeSpan.FromSeconds(5),
-});
-```
-
-The circuit has four states (`CircuitState`):
-
-- **Closed.** The breaker counts the calls and the failures in a sliding window of `SamplingDuration`, with 10 buckets. If the window has `MinimumThroughput` calls or more, and the ratio of failures is `FailureRatio` or more, the circuit opens.
-- **Open.** The breaker rejects each call immediately with a `BrokenCircuitException`. After `BreakDuration`, the circuit goes to half-open.
-- **HalfOpen.** The breaker lets one test call through, and rejects the other calls. If the test call succeeds, the circuit closes and the counts start again. If the test call fails, the circuit opens again.
-- **Isolated.** `Isolate()` sets this state. The breaker rejects each call with an `IsolatedCircuitException` until you call `Close()`. `Close()` closes the circuit and clears the counts.
-
-These rules apply to the breaker:
-
-- A failure is an exception that the `Policy` of the breaker accepts, or a result that `ShouldRetryResult` rejects. For an `AggregateException`, the breaker asks the `Policy` about each inner exception, and the call is a failure only if the policy accepts all of them. `CircuitStateChange.LastException` is the exception as thrown.
-- An attempt timeout is always a failure. The breaker does not ask its `Policy` about a `RetryTimeoutException`. Thus, a `Policy` such as `RetryPolicies.Handle<HttpRequestException>()` does not make the breaker ignore timeouts.
-- If the `Policy` of the breaker throws an exception, the call throws that exception. The breaker does not count the call. If the call was the test call of a half-open circuit, the next call can be the test call.
-- A cancellation by the caller is not a call and not a failure. A call that the breaker rejects is not a call.
-- A test call that started before `Isolate()`, `Close()` or a subsequent break does not change the state of the circuit. A test call that ends after `Close()` is not counted in the new window.
-- The circuit goes from `Open` to `HalfOpen` on the first call after the break, not at the end of the break. Until that call, `State` gives `Open`.
-- The breaker measures time with the monotonic timestamp of its `TimeProvider`. A change to the system clock does not change the window or the break.
-- The breaker calls `OnStateChanged` after it releases its lock. A pipeline awaits the callback. `Isolate()` and `Close()` wait until the callback completes, thus the callback must be fast. They run the callback with no `SynchronizationContext`, and with `TaskScheduler.Default` as the current scheduler. Thus, a callback that awaits on a UI thread, or on a scheduler that runs one task at a time, does not cause a deadlock. An exception from the callback stops the call.
-
-The breaker is inside the retry part. Thus, a rejection is a failure of one attempt, and the strategy and the policy decide if the pipeline retries it:
-
-- `AnyExceptionPolicy` retries a `BrokenCircuitException`. `RetryPolicies.TransientHttp` does not retry it.
-- `BrokenCircuitException.RetryAfter` gives the time until the break ends. It is `null` when the circuit is half-open or isolated.
-- `RetryStrategies.RetryAfter` uses `BrokenCircuitException.RetryAfter` as the delay. Thus, the next attempt starts when the break ends.
-
-#### Hedging
-
-Hedging starts more attempts in parallel when an attempt is slow or fails. The first acceptable outcome wins.
-
-| `HedgingOptions` property | Default | Description |
-|---------------------------|---------|-------------|
-| `MaxHedgedAttempts` | `1` | The maximum number of attempts after the first attempt. The range is 1 thru 10. The total number of attempts is `MaxHedgedAttempts` + 1. |
-| `Delay` | 2 seconds | The time after the start of an attempt at which the next attempt starts. `TimeSpan.Zero` starts all the attempts at the same time. `Timeout.InfiniteTimeSpan` starts the next attempt only after a failure. |
-| `Policy` | `AnyExceptionPolicy.Default` | The policy that selects the exceptions that are failures. |
-| `OnHedging` | `null` | A callback that the pipeline awaits before it starts each attempt after the first. |
-
-```csharp
-ReliabilityPipeline<string> pipeline = new(new ReliabilityPipelineOptions<string>
-{
-    Hedging = new HedgingOptions { MaxHedgedAttempts = 2, Delay = TimeSpan.FromMilliseconds(300) },
-    AttemptTimeout = TimeSpan.FromSeconds(5),
-    HedgingActionGenerator = attemptNumber => attemptNumber == 1
-        ? null
-        : ct => new ValueTask<string>(httpClient.GetStringAsync(secondaryUri, ct)),
-});
-
-string body = await pipeline.ExecuteAsync(
-    ct => new ValueTask<string>(httpClient.GetStringAsync(uri, ct)),
-    cancellationToken);
-```
-
-- Hedging replaces the retry part of the pipeline. If `Hedging` is set, `Strategy` must be `null`. The pipeline does not use `OnRetry` or the retry `Policy`.
-- The pipeline starts attempt 1. It starts the next attempt when `Delay` expires, or immediately when an attempt fails.
-- Attempt 1 runs on the thread of the caller until its first `await`. Attempts 2 and higher start on the thread pool, with no `SynchronizationContext`. Thus, an attempt that blocks its thread before its first `await` does not delay the next attempt, the cancellation or the total timeout. An attempt 1 that blocks also blocks the caller.
-- A failure is an exception that `Hedging.Policy` accepts, or a result for which `ShouldRetryResult` returns `true`. An exception that `Hedging.Policy` refuses is not a failure: the pipeline throws it immediately. For an `AggregateException`, the policy is asked about each inner exception; `OnHedging` and the caller receive the aggregate as thrown.
-- The first outcome that is not a failure wins. The pipeline returns it immediately, and cancels the token of each other attempt. It does not wait for the cancelled attempts, and it disposes their results if they implement `IDisposable`.
-- The pipeline does not start an attempt after it received an outcome that wins. With a `Delay` of zero, an attempt 1 that wins synchronously stops all the other attempts. An attempt 2 or higher completes on the thread pool, thus the pipeline can start more attempts before it receives that outcome.
-- `OnHedging` can run for an attempt that then does not start, because an outcome won during the callback. With a `Delay` of zero, if attempt 1 fails synchronously, `OnHedging` for attempt 2 receives that failure in `LastException`.
-- If all the attempts fail, the pipeline throws the last exception, or returns the last result. When the total timeout expires, the `RetryTimeoutException` has the exception of the last attempt that failed as its inner exception, or `null` if the last outcome was a rejected result or no attempt has failed.
-- `HedgingActionGenerator` receives the attempt number, from 1. It can give a different operation for each attempt, for example a different endpoint. If it returns `null`, the attempt uses the operation that you give to `ExecuteAsync`.
-- Each attempt goes through the circuit breaker, and has its own attempt timeout. The total timeout and the fallback apply to all the attempts. A call that the caller cancels, or that `OnHedging` or a refused exception stops, releases the half-open test call before `ExecuteAsync` throws, thus a caller who retries at once makes the next test call. When the total timeout stops the call, each attempt still in flight is a failed call for the breaker.
-- When the caller cancels or the total timeout expires, the hedged call stops immediately, also if an attempt ignores its token. (A pipeline that retries waits until the attempt stops.) A cancellation by the caller gives an `OperationCanceledException` that carries the caller's token.
-
-The operation must be idempotent. It must also be safe when two or more attempts run at the same time.
-
-A pipeline cannot use hedging and retries together. To retry a hedged call, use two pipelines. Run the hedging pipeline in the operation of the retry pipeline. Give a circuit breaker to the inner pipeline only: if both pipelines share one breaker, the outer attempt takes the single test call of a half-open circuit, the inner attempt is then rejected, and the circuit never closes. See `Examples/composed-pipelines.cs`:
-
-```csharp
-string body = await retryPipeline.ExecuteAsync(
-    ct => hedgingPipeline.ExecuteAsync(c => new ValueTask<string>(httpClient.GetStringAsync(uri, c)), ct),
-    cancellationToken);
-```
 
 ### `Retriable`
 
@@ -367,7 +71,7 @@ Task resultTask = Retriable.RetryAsync(() => SomeOperationAsync());
 
 Use `RetryAsync` for an asynchronous operation. The compiler gives the error CS0619 for these incorrect calls, because they cannot retry a failure of the task:
 
-- `Retry` or `RetryTask.Factory.StartNew` with an operation that returns a `Task`, a `Task<T>`, a `ValueTask` or a `ValueTask<T>`. For a `ValueTask`, use `ReliabilityPipeline.ExecuteAsync`, or call `AsTask()` in the operation.
+- `Retry` or `StartNew` with an operation that returns a `Task`, a `Task<T>`, a `ValueTask` or a `ValueTask<T>`. For a `ValueTask`, use `RetryTaskFactory.RunValueTask`, or call `AsTask()` in the operation.
 - `RetryAsync` with an `async` lambda that returns a task without `await`, for example `async () => SomeOperationAsync()`. Write `async () => await SomeOperationAsync()`, or `() => SomeOperationAsync()`.
 
 If the operation returns a `null` task, the attempt fails with an `InvalidOperationException`. The strategy and the policy decide if `RetryAsync` retries it.
@@ -396,9 +100,481 @@ The overloads that have a cancellation token obey these rules:
 - The token stops a delay immediately.
 - `Retriable` does not retry an `OperationCanceledException` that the token caused.
 
+When the strategy or the policy stops the retries, `Retriable` throws the exception of the last attempt.
+
 `Retriable` awaits `onRetry` before each delay. The synchronous `Retry` overloads wait for the callback. They run it with no `SynchronizationContext`, and with `TaskScheduler.Default` as the current scheduler, thus a callback that awaits continues on the thread pool. An exception from the callback stops the call.
 
-`Retriable` has no timeouts and no result retries. For these functions, use `ReliabilityPipeline`.
+`Retriable` has no timeouts and no result retries. For these functions, use a configured `RetryTaskFactory`.
+
+### `RetryTask.Run`
+
+`RetryTask.Run` runs an asynchronous operation once with the default factory, `RetryTask.Factory`, and retries it when it throws an exception:
+
+```csharp
+string body = await RetryTask.Run(ct => httpClient.GetStringAsync(uri, ct), cancellationToken);
+
+await RetryTask.Run(ct => SaveAsync(document, ct), cancellationToken);
+```
+
+The default factory makes a maximum of 5 attempts with no delay (`new Count()`), and retries all exceptions (`AnyExceptionPolicy`). It has no timeouts, no callback and no circuit breaker. The operation receives the caller's token. `RetryTask<T>.Run` does the same with `RetryTask<T>.Factory`.
+
+To change any setting, make a configured factory.
+
+### `RetryTaskFactory`
+
+Make one `RetryTaskFactory` and keep it in a field. A factory is immutable, and many threads can use it at the same time. Each call has its own state.
+
+```csharp
+using Corvus.Retry;
+using Corvus.Retry.Policies;
+using Corvus.Retry.Strategies;
+
+RetryTaskFactory factory = new(
+    RetryStrategies.Exponential(retries: 3, baseDelay: TimeSpan.FromMilliseconds(200), useJitter: true),
+    RetryPolicies.TransientHttp)
+{
+    AttemptTimeout = TimeSpan.FromSeconds(5),
+};
+
+string body = await factory.Run(ct => httpClient.GetStringAsync(uri, ct), cancellationToken);
+```
+
+The operation receives a cancellation token. The factory cancels this token when the caller cancels, or when a timeout expires. Give the token to all the asynchronous methods that the operation calls.
+
+`RetryTaskFactory<T>` is the factory for operations that return a `T`. It can also retry a result and use a fallback.
+
+#### Settings
+
+A factory has three constructors:
+
+- `new RetryTaskFactory()` uses the default strategy and policy.
+- `new RetryTaskFactory(strategy, policy)` sets the strategy and the policy.
+- `new RetryTaskFactory(other)` copies all the settings of `other`. Use it with an object initialiser to make a changed copy: `new RetryTaskFactory(factory) { TotalTimeout = TimeSpan.FromSeconds(30) }`. The copy shares the strategy, the policy, the callback and the circuit breaker of `other`. A factory is a class, not a record, thus this constructor replaces the `with` expression.
+
+Set the other settings with an object initialiser. All the properties are `init`-only.
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `Strategy` | `new Count()`: 5 attempts, no delay | The `IRetryStrategy` that gives the delay before each retry, or stops the retries. |
+| `Policy` | `AnyExceptionPolicy.Default` | The `IRetryPolicy` that accepts or refuses each exception. It applies only to exceptions. |
+| `AttemptTimeout` | `null` (no limit) | The time limit for each attempt. |
+| `TotalTimeout` | `null` (no limit) | The time limit for all the attempts and all the delays. |
+| `OnRetry` | `null` | A callback that the factory awaits before each delay. |
+| `CircuitBreaker` | `null` | A shared `CircuitBreaker`. See [Circuit breaker](#circuit-breaker). |
+| `TimeProvider` | `TimeProvider.System` | The source of the time for the delays and the timeouts. |
+| `ContinueOnCapturedContext` | `false` | If `true`, `Run` and `RunValueTask` continue on the captured context after each `await`. |
+
+`RetryTaskFactory<T>` adds these properties:
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `CanRetryResult` | `null` | A predicate that returns `true` for a result that is a failure. |
+| `Fallback` | `null` | The `Fallback<T>`. See [Fallback](#fallback). |
+
+Each `init` accessor examines its value, and throws an exception for an incorrect value. The `ParamName` of the exception is the name of the property:
+
+- `ArgumentOutOfRangeException`: a timeout is zero, negative, or more than approximately 49.7 days. For no limit, use `null`, not `Timeout.InfiniteTimeSpan`.
+- `ArgumentNullException`: `Strategy`, `Policy` or `TimeProvider` is `null`.
+
+The constructors throw an `ArgumentNullException` for a `null` argument. Its `ParamName` is `strategy`, `policy` or `other`.
+
+To make one attempt and no retry, set `Strategy` to `new Count(1)`, `new DoNotRetry()`, or a `RetryStrategies` method with `retries: 0`.
+
+#### `Run`, `RunValueTask` and `StartNew`
+
+A factory has three kinds of method:
+
+| Method | Operation | Settings that it uses | When the retries stop |
+|--------|-----------|-----------------------|-----------------------|
+| `Run` | `Func<CancellationToken, Task>` or `Func<CancellationToken, Task<T>>` | All | It throws the exception of the last attempt, with its original stack trace. |
+| `RunValueTask` | `Func<CancellationToken, ValueTask>` or `Func<CancellationToken, ValueTask<T>>` | All | It throws the exception of the last attempt, with its original stack trace. |
+| `StartNew` | A synchronous `Action` (`RetryTaskFactory`) or `Func<T>` (`RetryTaskFactory<T>`), as `Task.Factory.StartNew` takes | `Strategy`, `Policy` and `TimeProvider` only | The task faults with an `AggregateException` of the failures. See [StartNew](#startnew). |
+
+Use `Run` for a method that returns a `Task` or a `Task<T>`. Use `RunValueTask` for a method that returns a `ValueTask` or a `ValueTask<T>`:
+
+```csharp
+int bytesRead = await factory.RunValueTask(ct => stream.ReadAsync(buffer, ct), cancellationToken);
+```
+
+The two methods have different names. With one name, the compiler cannot select an overload for an `async` lambda (error CS0121). When there is no timeout and no callback, and every attempt completes synchronously, `RunValueTask` allocates no memory.
+
+`Run` has the name of `Task.Run`, but it operates differently:
+
+- `Run` does not queue the operation to the thread pool. The first attempt runs on the caller's thread until its first `await`.
+- `Run` gives a cancellation token to the operation.
+- `Run` has no overload for a synchronous function. For a synchronous function, use `Retriable.Retry` or `StartNew`.
+- `ReliableTaskRunner.Run` is a different method. It restarts a long-running operation. See [ReliableTaskRunner](#reliabletaskrunner).
+
+These rules also apply to `Run` and `RunValueTask`:
+
+- The compiler gives the error CS0619 for an `async` lambda that returns a task without `await`, for example `Run(async ct => GetAsync(ct))`. Write `Run(async ct => await GetAsync(ct))`, or `Run(ct => GetAsync(ct))`.
+- If the operation returns a `null` task, the attempt fails with an `InvalidOperationException`. The strategy and the policy decide if the factory retries it.
+- `RetryTaskFactory<T>` cannot retry a function that returns a task. When `T` is `Task`, `Task<TResult>`, `ValueTask` or `ValueTask<TResult>`, `Run`, `RunValueTask` and `StartNew` throw a `NotSupportedException`, and do not call the function. Use the result type of the task as `T`.
+
+#### Timeouts and cancellation
+
+A configured factory has two time limits:
+
+- **Attempt timeout.** When `AttemptTimeout` expires, the factory cancels the token of the attempt. The attempt then fails with a `RetryTimeoutException`. The strategy and the policy decide if the factory retries it.
+- **Total timeout.** When `TotalTimeout` expires, the factory cancels the token of the attempt, or stops the delay. No other attempt starts, and the call throws a `RetryTimeoutException`.
+
+`RetryTimeoutException` derives from `TimeoutException`. Its `Timeout` property gives the time limit that expired. When the total timeout expires between two attempts, the inner exception is the exception of the last attempt.
+
+The two timeouts are cooperative. The factory cancels the token, and then waits until the operation stops.
+
+When the caller cancels the token, the call throws an `OperationCanceledException` that carries the caller's token. The factory does not retry this exception, and does not give it to the policy. The token also stops a delay immediately.
+
+If the operation throws an `AggregateException`, the factory asks the policy about each inner exception, depth first, and retries only if the policy accepts all of them. An `AggregateException` with no inner exceptions goes to the policy itself. The strategy and `OnRetry` receive the `AggregateException` as thrown.
+
+```csharp
+RetryTaskFactory factory = new(
+    RetryStrategies.Constant(retries: 5, delay: TimeSpan.FromSeconds(1)),
+    RetryPolicies.TransientHttp)
+{
+    AttemptTimeout = TimeSpan.FromSeconds(10),
+    TotalTimeout = TimeSpan.FromSeconds(30),
+};
+
+using CancellationTokenSource cancellation = new();
+try
+{
+    string body = await factory.Run(ct => httpClient.GetStringAsync(uri, ct), cancellation.Token);
+}
+catch (RetryTimeoutException ex)
+{
+    Console.WriteLine($"The time limit of {ex.Timeout} expired.");
+}
+catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+{
+    Console.WriteLine("The caller cancelled the call.");
+}
+```
+
+> **Note:** A policy for one exception type does not retry attempt timeouts. An attempt timeout gives a `RetryTimeoutException`. To retry attempt timeouts, the policy must also accept `RetryTimeoutException` or `TimeoutException`, for example `RetryPolicies.For<HttpRequestException>().Or<TimeoutException>()`. `RetryPolicies.TransientHttp` and `AnyExceptionPolicy` accept `RetryTimeoutException`.
+
+#### The retry callback
+
+The factory awaits `OnRetry` before each delay. The callback receives a `RetryEventArgs`:
+
+- `AttemptNumber` is the number of the attempt that failed. The first attempt is 1.
+- `NextAttemptNumber` is the number of the attempt that starts after the delay.
+- `LastException` is the exception of the attempt. It is `null` when a result caused the retry.
+- `Result` is the result that caused the retry, or `null`.
+- `DelayBeforeRetry` is the delay before the next attempt.
+
+The factory does not call `OnRetry` for the last failure. An exception from the callback stops the call.
+
+```csharp
+RetryTaskFactory factory = new(
+    RetryStrategies.Linear(retries: 3, delay: TimeSpan.FromSeconds(1)),
+    AnyExceptionPolicy.Default)
+{
+    OnRetry = args =>
+    {
+        Console.WriteLine($"Attempt {args.AttemptNumber} failed. Attempt {args.NextAttemptNumber} starts after {args.DelayBeforeRetry}.");
+        return ValueTask.CompletedTask;
+    },
+};
+```
+
+#### Retry a result
+
+`RetryTaskFactory<T>` can also retry a result. If `CanRetryResult` returns `true`, the factory uses the result as a failure. The strategy, the callback and the delay then apply. The policy applies only to exceptions.
+
+- Before the next attempt, the factory disposes a rejected result that implements `IDisposable`. It does this after the callback. An exception from that disposal stops the call: the caller gets that exception, and the fallback does not apply.
+- If the call stops with an exception after the operation returned a result, the factory also disposes that result. For example, the caller cancels, the total timeout expires, or `CanRetryResult`, the strategy or `OnRetry` throws an exception.
+- If no retries remain, the factory returns the last result. It does not throw an exception, and it does not dispose the result.
+
+`RetryStrategies.RetryAfter` uses the `Retry-After` header of an `HttpResponseMessage` result for the delay:
+
+```csharp
+RetryTaskFactory<HttpResponseMessage> factory = new(
+    RetryStrategies.RetryAfter(RetryStrategies.Exponential(retries: 3, baseDelay: TimeSpan.FromSeconds(1))),
+    RetryPolicies.TransientHttp)
+{
+    CanRetryResult = RetryPolicies.IsTransientHttpResponse,
+    AttemptTimeout = TimeSpan.FromSeconds(10),
+};
+
+using HttpResponseMessage response = await factory.Run(ct => httpClient.GetAsync(uri, ct), cancellationToken);
+```
+
+#### Order of the parts
+
+`Run` and `RunValueTask` apply the parts of a factory in this sequence, from the outermost part to the innermost part:
+
+```text
+Run(operation, cancellationToken)
+ └─ 1. Fallback                    Fallback (RetryTaskFactory<T> only)
+     └─ 2. Total timeout           TotalTimeout
+         └─ 3. Retry               Strategy, Policy, OnRetry, CanRetryResult
+             └─ 4. Circuit breaker CircuitBreaker
+                 └─ 5. Attempt timeout  AttemptTimeout
+                     └─ 6. The operation
+```
+
+A `HedgedTaskFactory` uses the same sequence, with hedging in place of the retry part.
+
+Each part is optional. If a setting is `null`, the factory does not use that part, and does not allocate memory for it. These are the results of the sequence:
+
+- The fallback receives the outcome of the attempts. This outcome can be a `RetryTimeoutException` or a `CircuitRejectedException`.
+- The total timeout includes all the attempts and all the delays.
+- The circuit breaker counts each attempt as one call. It counts an attempt timeout as a failure.
+
+#### Fallback
+
+A fallback gives a value when the attempts fail. It applies only to `RetryTaskFactory<T>` and `HedgedTaskFactory<T>`.
+
+The constructor of `Fallback<T>` takes the action that gives the fallback value. Set the other properties with an object initialiser:
+
+| `Fallback<T>` member | Default | Description |
+|----------------------|---------|-------------|
+| `Action` (constructor parameter) | None (required) | The function that gives the fallback value. |
+| `Policy` | `AnyExceptionPolicy.Default` | The policy that selects the exceptions that get the fallback value. |
+| `AppliesToResult` | `null` | A predicate that returns `true` for a result that gets the fallback value. |
+| `OnFallback` | `null` | A callback that the factory awaits before it calls `Action`. |
+
+The property of the factory and its type have the same name, `Fallback`. In an object initialiser, use a target-typed `new`:
+
+```csharp
+RetryTaskFactory<string> factory = new(
+    RetryStrategies.Constant(retries: 2, delay: TimeSpan.FromMilliseconds(500)),
+    AnyExceptionPolicy.Default)
+{
+    TotalTimeout = TimeSpan.FromSeconds(5),
+    Fallback = new(args => ValueTask.FromResult("cached value"))
+    {
+        OnFallback = args =>
+        {
+            Console.WriteLine($"Fallback after {args.Exception?.GetType().Name}.");
+            return ValueTask.CompletedTask;
+        },
+    },
+};
+```
+
+- If the attempts end with an exception that `Policy` accepts, the factory calls `OnFallback` and then `Action`. It returns the value of `Action`.
+- If `AppliesToResult` returns `true` for a result, the factory calls `OnFallback` with that result, then disposes the result if it implements `IDisposable`, and then calls `Action`. Thus `OnFallback` can examine the result, for example to log the body of a response, and `Action` receives a result that is already disposed. This is the same order as the retry part, which disposes a rejected result after `OnRetry`.
+- The fallback does not apply when the caller cancels the token.
+- `FallbackEventArgs<T>` gives the `Exception` or the `Result`, and the `CancellationToken` of the caller. The total timeout does not apply to the fallback.
+- An exception from `OnFallback` or from `Action` stops the call. The factory does not catch it. If `OnFallback` throws for a rejected result, the factory disposes the result.
+- The fallback applies only to the outcome of the attempts: the exception or the result of the last attempt, a `RetryTimeoutException`, or a rejection by the circuit breaker. An exception from `CanRetryResult`, `OnRetry`, the strategy, a policy, `OnStateChanged`, `OnHedgedAttempt`, `ResultIsFailure` or `OperationForAttempt` stops the call. The fallback does not give a value for it.
+
+#### Circuit breaker
+
+A circuit breaker stops calls to a service that fails frequently. One `CircuitBreaker` instance holds the state. Many factories and threads can use the same instance.
+
+The settings are optional constructor parameters, not properties, because the breaker reads the clock of its `TimeProvider` when you construct it. Use named arguments:
+
+| `CircuitBreaker` parameter | Default | Description |
+|----------------------------|---------|-------------|
+| `failureRate` | `0.1` | The ratio of failures to calls at which the circuit opens. The value must be more than 0, and 1 or less. |
+| `minimumCalls` | `100` | The minimum number of calls in the window before the circuit can open. The minimum value is 2. |
+| `samplingWindow` | 30 seconds | The length of the sliding window that counts the calls and the failures. The minimum value is 500 ms. |
+| `openDuration` | 5 seconds | The time for which the circuit stays open. The minimum value is 500 ms. |
+| `policy` | `AnyExceptionPolicy.Default` | The policy that selects the exceptions that are failures. |
+| `onStateChanged` | `null` | A callback for each change of state. |
+| `timeProvider` | `TimeProvider.System` | The source of the time for the window and the open duration. |
+
+The breaker has a read-only property for each parameter: `FailureRate`, `MinimumCalls`, `SamplingWindow`, `OpenDuration`, `Policy`, `OnStateChanged` and `TimeProvider`. An incorrect value gives an `ArgumentOutOfRangeException`, with the name of the parameter as its `ParamName`. For `policy` and `timeProvider`, `null` gives the default.
+
+```csharp
+CircuitBreaker breaker = new(
+    failureRate: 0.5,
+    minimumCalls: 10,
+    openDuration: TimeSpan.FromSeconds(15),
+    onStateChanged: change =>
+    {
+        Console.WriteLine($"The circuit changed from {change.From} to {change.To}.");
+        return ValueTask.CompletedTask;
+    });
+
+RetryTaskFactory factory = new(
+    RetryStrategies.RetryAfter(RetryStrategies.Constant(retries: 3, delay: TimeSpan.FromSeconds(1))),
+    RetryPolicies.TransientHttp.Or(RetryPolicies.For<CircuitRejectedException>()))
+{
+    CircuitBreaker = breaker,
+    AttemptTimeout = TimeSpan.FromSeconds(5),
+};
+```
+
+The circuit has four states (`CircuitState`):
+
+- **Closed.** The breaker counts the calls and the failures in a sliding window of `samplingWindow`, with 10 buckets. If the window has `minimumCalls` calls or more, and the ratio of failures is `failureRate` or more, the circuit opens.
+- **Open.** The breaker rejects each call immediately with a `CircuitRejectedException`. After `openDuration`, the circuit goes to half-open.
+- **HalfOpen.** The breaker lets one test call through, and rejects the other calls with a `CircuitRejectedException`. If the test call succeeds, the circuit closes and the counts start again. If the test call fails, the circuit opens again.
+- **Isolated.** `Isolate()` sets this state. The breaker rejects each call with a `CircuitIsolatedException` until you call `Close()`. `Close()` closes the circuit and clears the counts.
+
+`CircuitIsolatedException` derives from `CircuitRejectedException`. Thus, a `catch (CircuitRejectedException)` block also catches a rejection by an isolated circuit.
+
+These rules apply to the breaker:
+
+- A failure is an exception that the `Policy` of the breaker accepts, or a result that `CanRetryResult` (or `ResultIsFailure` of a hedged factory) rejects. For an `AggregateException`, the breaker asks the `Policy` about each inner exception, and the call is a failure only if the policy accepts all of them. `CircuitStateChange.LastException` is the exception as thrown.
+- An attempt timeout is always a failure. The breaker does not ask its `Policy` about a `RetryTimeoutException`. Thus, a `Policy` such as `RetryPolicies.For<HttpRequestException>()` does not make the breaker ignore timeouts.
+- If the `Policy` of the breaker throws an exception, the call throws that exception. The breaker does not count the call. If the call was the test call of a half-open circuit, the next call can be the test call.
+- A cancellation by the caller is not a call and not a failure. A call that the breaker rejects is not a call.
+- A test call that started before `Isolate()`, `Close()` or a subsequent opening does not change the state of the circuit. A test call that ends after `Close()` is not counted in the new window.
+- The circuit goes from `Open` to `HalfOpen` on the first call after the open duration, not at the end of the open duration. Until that call, `State` gives `Open`.
+- The breaker measures time with the monotonic timestamp of its `TimeProvider`. A change to the system clock does not change the window or the open duration.
+- The breaker calls `OnStateChanged` after it releases its lock. A factory awaits the callback. `Isolate()` and `Close()` wait until the callback completes, thus the callback must be fast. They run the callback with no `SynchronizationContext`, and with `TaskScheduler.Default` as the current scheduler. Thus, a callback that awaits on a UI thread, or on a scheduler that runs one task at a time, does not cause a deadlock. An exception from the callback stops the call.
+
+The breaker is inside the retry part. Thus, a rejection is a failure of one attempt, and the strategy and the policy decide if the factory retries it:
+
+- `AnyExceptionPolicy` retries a `CircuitRejectedException`. `RetryPolicies.TransientHttp` does not retry it.
+- `CircuitRejectedException.RetryAfter` gives the time until the open duration ends. It is `null` when the circuit is half-open or isolated.
+- `RetryStrategies.RetryAfter` uses `CircuitRejectedException.RetryAfter` as the delay. Thus, the next attempt starts when the open duration ends.
+
+### `HedgedTaskFactory`
+
+Hedging starts more attempts in parallel when an attempt is slow or fails. The first acceptable outcome wins.
+
+The constructor takes the two settings that define the hedging. Set the other settings with an object initialiser:
+
+```csharp
+HedgedTaskFactory<string> hedged = new(extraAttempts: 2, stagger: TimeSpan.FromMilliseconds(300))
+{
+    AttemptTimeout = TimeSpan.FromSeconds(5),
+    OperationForAttempt = attemptNumber => attemptNumber == 1
+        ? null
+        : ct => httpClient.GetStringAsync(secondaryUri, ct),
+};
+
+string body = await hedged.Run(ct => httpClient.GetStringAsync(uri, ct), cancellationToken);
+```
+
+| Constructor parameter or property | Default | Description |
+|-----------------------------------|---------|-------------|
+| `extraAttempts` | `1` | The maximum number of attempts after the first attempt. The range is 1 thru 10. The total number of attempts is `extraAttempts` + 1. The `ExtraAttempts` property gives the value. |
+| `stagger` | `null`: 2 seconds | The time after the start of an attempt at which the next attempt starts. `TimeSpan.Zero` starts all the attempts at the same time. `Timeout.InfiniteTimeSpan` starts the next attempt only after a failure. The `Stagger` property gives the value. |
+| `Policy` | `AnyExceptionPolicy.Default` | The policy that selects the exceptions that are failures. |
+| `OnHedgedAttempt` | `null` | A callback that the factory awaits before it starts each attempt after the first. It receives a `HedgedAttemptEventArgs`. |
+| `AttemptTimeout`, `TotalTimeout`, `CircuitBreaker`, `TimeProvider`, `ContinueOnCapturedContext` | As for `RetryTaskFactory` | As for `RetryTaskFactory`. |
+
+`HedgedTaskFactory<T>` adds these properties:
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `ResultIsFailure` | `null` | A predicate that returns `true` for a result that is a failure. Hedging does not retry, thus this property is not named `CanRetryResult`. |
+| `Fallback` | `null` | The `Fallback<T>`. See [Fallback](#fallback). |
+| `OperationForAttempt` | `null` | A function that gives a different operation for each attempt. |
+
+A hedged factory differs from a `RetryTaskFactory` in these ways:
+
+- It has no strategy, no `OnRetry` and no retry policy. Its `Policy` decides which exceptions are failures.
+- It has only `Run`. It has no `RunValueTask` and no `StartNew`. For an operation that returns a `ValueTask`, call `AsTask()` in the operation: `ct => GetAsync(ct).AsTask()`.
+- It has no copy constructor.
+
+`HedgedTask.Run` and `HedgedTask<T>.Run` use a hedged factory with the default settings, `HedgedTask.Factory` and `HedgedTask<T>.Factory`.
+
+These rules apply to hedging:
+
+- The factory starts attempt 1. It starts the next attempt when `Stagger` expires, or immediately when an attempt fails.
+- Attempt 1 runs on the thread of the caller until its first `await`. Attempts 2 and higher start on the thread pool, with no `SynchronizationContext`. Thus, an attempt that blocks its thread before its first `await` does not delay the next attempt, the cancellation or the total timeout. An attempt 1 that blocks also blocks the caller.
+- A failure is an exception that `Policy` accepts, or a result for which `ResultIsFailure` returns `true`. An exception that `Policy` refuses is not a failure: the factory throws it immediately. For an `AggregateException`, the policy is asked about each inner exception; `OnHedgedAttempt` and the caller receive the aggregate as thrown.
+- The first outcome that is not a failure wins. The factory returns it immediately, and cancels the token of each other attempt. It does not wait for the cancelled attempts, and it disposes their results if they implement `IDisposable`.
+- The factory does not start an attempt after it received an outcome that wins. With a `stagger` of zero, an attempt 1 that wins synchronously stops all the other attempts. An attempt 2 or higher completes on the thread pool, thus the factory can start more attempts before it receives that outcome.
+- `OnHedgedAttempt` can run for an attempt that then does not start, because an outcome won during the callback. With a `stagger` of zero, if attempt 1 fails synchronously, `OnHedgedAttempt` for attempt 2 receives that failure in `LastException`.
+- If all the attempts fail, the factory throws the last exception, or returns the last result. When the total timeout expires, the `RetryTimeoutException` has the exception of the last attempt that failed as its inner exception, or `null` if the last outcome was a rejected result or no attempt has failed.
+- `OperationForAttempt` receives the attempt number, from 1. It can give a different operation for each attempt, for example a different endpoint. If it returns `null`, the attempt uses the operation that you give to `Run`.
+- Each attempt goes through the circuit breaker, and has its own attempt timeout. The total timeout and the fallback apply to all the attempts. A call that the caller cancels, or that `OnHedgedAttempt` or a refused exception stops, releases the half-open test call before `Run` throws, thus a caller who retries at once makes the next test call. When the total timeout stops the call, each attempt still in flight is a failed call for the breaker.
+- When the caller cancels or the total timeout expires, the hedged call stops immediately, also if an attempt ignores its token. (A `RetryTaskFactory` waits until the attempt stops.) A cancellation by the caller gives an `OperationCanceledException` that carries the caller's token.
+
+The operation must be idempotent. It must also be safe when two or more attempts run at the same time.
+
+#### Hedging and retries together
+
+One factory cannot hedge and retry. To retry a hedged call, use two factories. Run the hedged factory in the operation of the retry factory. Give a circuit breaker to the inner factory only: if both factories share one breaker, the outer attempt takes the single test call of a half-open circuit, the inner attempt is then rejected, and the circuit never closes. See `Examples/composed-factories.cs`:
+
+```csharp
+string body = await retries.Run(
+    ct => hedged.Run(c => httpClient.GetStringAsync(uri, c), ct),
+    cancellationToken);
+```
+
+### `RetryHandler`
+
+`RetryHandler` is a `DelegatingHandler` in the namespace `Corvus.Retry.Http`. It applies a `RetryTaskFactory<HttpResponseMessage>` to each request. Thus, callers use the `HttpClient` directly, and do not put each call in `Run`. Every setting of the factory applies: the retries, the result retries, the timeouts, the circuit breaker, the fallback, `OnRetry`, and the disposal of each rejected response. `RetryStrategies.RetryAfter` uses the `Retry-After` header. `RetryHandler` is in the `Corvus.Retry` package, and adds no dependency.
+
+```csharp
+using Corvus.Retry.Http;
+
+RetryTaskFactory<HttpResponseMessage> retries = new(
+    RetryStrategies.RetryAfter(RetryStrategies.Exponential(retries: 3, baseDelay: TimeSpan.FromSeconds(1))),
+    RetryPolicies.TransientHttp)
+{
+    CanRetryResult = RetryPolicies.IsTransientHttpResponse,
+    AttemptTimeout = TimeSpan.FromSeconds(10),
+    TotalTimeout = TimeSpan.FromSeconds(60),
+};
+
+HttpClient client = new(new RetryHandler(retries, new SocketsHttpHandler()));
+```
+
+The constructors are `RetryHandler(factory)` and `RetryHandler(factory, innerHandler)`. The `Factory` property gives the factory.
+
+With `IHttpClientFactory`, use `AddRetryHandler` from the package `Corvus.Retry.Extensions.Http`. This package depends on `Microsoft.Extensions.Http`:
+
+```csharp
+services.AddHttpClient<CatalogueClient>().AddRetryHandler(retries);
+
+// Also retry a POST request with content that can be sent again.
+services.AddHttpClient<OrdersClient>().AddRetryHandler(retries, RetryHandler.CanReplayContent);
+```
+
+Make the factory one time. `IHttpClientFactory` makes a new handler chain from time to time. Each chain gets a new `RetryHandler`, and all of them share the factory and its circuit breaker. Add the retry handler after the handlers that must run one time for each call, and before the handlers that must run one time for each attempt.
+
+These rules apply to the handler:
+
+- `CanRetryRequest` decides if the handler can send a request more than one time. Its default is `RetryHandler.IsSafeToRetry`: the method is GET, HEAD, PUT, DELETE, OPTIONS or TRACE, and `RetryHandler.CanReplayContent` returns `true`.
+- `RetryHandler.CanReplayContent` returns `true` for no content, `ByteArrayContent` and the types that derive from it (for example `StringContent` and `FormUrlEncodedContent`), `ReadOnlyMemoryContent` and `JsonContent`. It returns `false` for `StreamContent`, `MultipartContent` and all other content types.
+- The handler sends the same `HttpRequestMessage` for each attempt. A `StreamContent` that cannot seek cannot be sent again: the second attempt fails with an `InvalidOperationException`. Thus, the default refuses it.
+- To retry a POST request, set `CanRetryRequest = RetryHandler.CanReplayContent`. Do this only when the server can receive the same request two times without harm.
+- A request that `CanRetryRequest` refuses gets one attempt. The timeouts, the circuit breaker, `CanRetryResult` and the fallback of the factory still apply. A rejected response is not retried: the handler returns it, not disposed, or the fallback replaces it. The breaker counts it. The handler does not call `OnRetry`.
+- The synchronous `HttpClient.Send` throws a `NotSupportedException`. Use `SendAsync`, or a method that calls it, such as `GetAsync`.
+- The handler does not hedge. Parallel attempts cannot share one `HttpRequestMessage`. To hedge, put the call in `Run` of a `HedgedTaskFactory<T>`.
+
+The exceptions from a call through the handler are these:
+
+- When an attempt timeout or the total timeout of the factory expires, the call throws a `RetryTimeoutException`, not a `TaskCanceledException`.
+- When the caller cancels, the call throws a `TaskCanceledException` that carries the caller's token. The handler does not retry it.
+- When the circuit is open, the call throws a `CircuitRejectedException`. Its `RetryAfter` gives the time until the open duration ends. `RetryPolicies.TransientHttp` does not retry it.
+
+The handler has these limits:
+
+- The handler returns the response when the headers arrive. `HttpClient` then reads a buffered body. Thus, a failure while the body downloads is not retried, and `AttemptTimeout` does not include the download. With `HttpCompletionOption.ResponseHeadersRead`, a later read of the body also fails outside the handler. If that matters, put the whole call in `Run` of a `RetryTaskFactory<string>` instead, for example `factory.Run(ct => client.GetStringAsync(uri, ct), cancellationToken)`. `Examples/http-client-resilience.cs` shows this.
+- `HttpClient.Timeout` (100 seconds by default) is outside the handler. It limits all the attempts and all the delays together, and it can stop a retry delay. When it expires, the call throws a `TaskCanceledException` with an inner `TimeoutException`. The handler sees this as a cancellation by its caller. Thus, the fallback does not apply to it.
+- Make the `TotalTimeout` of the factory shorter than `HttpClient.Timeout`.
+
+`Examples/http-handler.cs` shows the handler.
+
+### `StartNew`
+
+`RetryTask.Factory`, `RetryTask<T>.Factory` and each configured factory have the `StartNew` overloads of `TaskFactory`, with retries. Call `StartNew()` with the same parameters that you give to `Task.Factory.StartNew()`. Some overloads also take an `IRetryStrategy`, an `IRetryPolicy`, or both. An overload without a strategy or a policy uses the `Strategy` or the `Policy` of the factory.
+
+```csharp
+Task<string> task = RetryTask<string>.Factory.StartNew(() => File.ReadAllText("settings.json"), new Count(5), AnyExceptionPolicy.Default);
+
+RetryTaskFactory<string> files = new(new Count(5), RetryPolicies.For<IOException>());
+Task<string> settings = files.StartNew(() => File.ReadAllText("settings.json"));
+```
+
+The default strategy is `new Count()` (5 attempts) and the default policy is `AnyExceptionPolicy`. These defaults are different from the defaults of `Retriable`.
+
+- `StartNew` uses only the `Strategy`, the `Policy` and the `TimeProvider` of the factory. If the factory has an `AttemptTimeout`, a `TotalTimeout`, an `OnRetry`, a `CircuitBreaker`, a `CanRetryResult` or a `Fallback`, each `StartNew` overload throws an `InvalidOperationException`, and does not call the function. The message names the settings. Use `Run`, or a factory without these settings.
+- `ContinueOnCapturedContext` does not apply to `StartNew`. `StartNew` queues each try to its scheduler, and makes its retry decisions on the thread pool.
+- A retry does not block a thread. A delay task and continuations start each retry on the scheduler of the caller. The delays use the `TimeProvider` of the factory.
+- If the operation stops, the task faults with the failures that the operation recorded, inside one `AggregateException`. Thus `task.Exception.InnerException` is that `AggregateException`, and its `InnerExceptions` are the failures of the tries. `StartNew` keeps a maximum of 100 failures: the first 99 failures and the last failure. `Run`, by contrast, throws the exception of the last attempt.
+- A cancellation gives a `Canceled` task.
+- The returned task obeys `TaskCreationOptions.RunContinuationsAsynchronously`.
+- `StartNew` has no retry callback.
+- `StartNew` retries only synchronous operations. `RetryTask<T>.Factory.StartNew` throws a `NotSupportedException` when `T` is a `Task`, a `Task<TResult>`, a `ValueTask` or a `ValueTask<TResult>`. When `T` is `object` or an interface, `StartNew` examines the result of each try: if the function returned a `Task` or a `ValueTask`, the task faults with `NotSupportedException`. For an asynchronous operation, use `Run`.
+- If the scheduler refuses the first try, `StartNew` throws the `TaskSchedulerException`. If it refuses a retry, the refusal is a failure of that try, and the strategy and the policy decide.
+
+The overloads that take a state object use the same nullable annotations as `Task.Factory.StartNew()`: the state is `object?`, and the action or function takes an `object?` argument. Version 1 used non-nullable `object`. If your project uses nullable reference types, change each method or delegate that takes `object`. It must take `object?`, or examine the state for `null` before it uses the state:
+
+```csharp
+RetryTask.Factory.StartNew(state => Process((string)state!), "input", new Count(5), new AnyExceptionPolicy());
+```
 
 ### Policy and Strategy
 
@@ -450,8 +626,8 @@ The static class `RetryPolicies` makes immutable policies. Many threads can use 
 | Member | The policy accepts |
 |--------|--------------------|
 | `RetryPolicies.FromPredicate(predicate)` | An exception for which the predicate returns `true` |
-| `RetryPolicies.Handle<TException>(predicate)` | An exception of type `TException` (or a derived type). The predicate is optional. Add more types with `.Or<T>()`. |
-| `RetryPolicies.HandleInner<TException>(predicate)` | An exception of type `TException` in the exception, its `InnerException` chain, or the inner exceptions of an `AggregateException`, depth first |
+| `RetryPolicies.For<TException>(predicate)` | An exception of type `TException` (or a derived type). The predicate is optional. Add more types with `.Or<T>()`. |
+| `RetryPolicies.ForInner<TException>(predicate)` | An exception of type `TException` in the exception, its `InnerException` chain, or the inner exceptions of an `AggregateException`, depth first |
 | `RetryPolicies.Not(policy)` | An exception that `policy` refuses |
 | `RetryPolicies.Any(policies)` | An exception that one or more of the policies accept |
 | `RetryPolicies.All(policies)` | An exception that all the policies accept |
@@ -460,15 +636,15 @@ The static class `RetryPolicies` makes immutable policies. Many threads can use 
 The C# 14 extension members `policy.Or(other)`, `policy.And(other)` and `policy.Not()` combine the policies that you have.
 
 ```csharp
-IRetryPolicy policy = RetryPolicies.Handle<HttpRequestException>(ex => ex.StatusCode != HttpStatusCode.NotFound)
+IRetryPolicy policy = RetryPolicies.For<HttpRequestException>(ex => ex.StatusCode != HttpStatusCode.NotFound)
     .Or<RetryTimeoutException>()
-    .Or(RetryPolicies.HandleInner<SocketException>())
-    .And(RetryPolicies.Handle<ArgumentException>().Not());
+    .Or(RetryPolicies.ForInner<SocketException>())
+    .And(RetryPolicies.For<ArgumentException>().Not());
 ```
 
-`RetryPolicies.TransientHttp` refuses a `TaskCanceledException`, a `TimeoutException` that is not a `RetryTimeoutException`, and a `BrokenCircuitException`.
+`RetryPolicies.TransientHttp` refuses a `TaskCanceledException`, a `TimeoutException` that is not a `RetryTimeoutException`, and a `CircuitRejectedException`.
 
-`RetryPolicies.IsTransientHttpResponse(response)` returns `true` for a status of 408, 429, or 500 or more. Use it as `ShouldRetryResult` in a `ReliabilityPipeline<HttpResponseMessage>`.
+`RetryPolicies.IsTransientHttpResponse(response)` returns `true` for a status of 408, 429, or 500 or more. Use it as `CanRetryResult` in a `RetryTaskFactory<HttpResponseMessage>`.
 
 ##### Custom policy
 To make a custom policy, implement the `IRetryPolicy` interface and its `bool CanRetry(Exception exception)` method.
@@ -510,7 +686,7 @@ In the formulas, `n` is the number of the attempt that failed. The first attempt
 | `RetryStrategies.Linear(retries, d)` | `retries + 1` | `d × n` |
 | `RetryStrategies.Exponential(retries, d)` | `retries + 1` | `d × 2^(n−1)` |
 | `RetryStrategies.FromDelegate(getRetryDelay)` | The delegate decides | The value of the delegate, or `null` to stop |
-| `RetryStrategies.RetryAfter(inner)` | The inner strategy decides | The `Retry-After` header of an `HttpResponseMessage` result, or `BrokenCircuitException.RetryAfter`. A header wins over a rejection. If there is no value, or the framework cannot parse the header, the delay of the inner strategy. A past date gives zero. The `maxDelay` of the inner strategy does not limit a header or rejection delay. |
+| `RetryStrategies.RetryAfter(inner)` | The inner strategy decides | The `Retry-After` header of an `HttpResponseMessage` result, or `CircuitRejectedException.RetryAfter`. A header wins over a rejection. If there is no value, or the framework cannot parse the header, the delay of the inner strategy. A past date gives zero. The `maxDelay` of the inner strategy does not limit a header or rejection delay. |
 
 > **Note:** The `Linear` class and the `RetryStrategies.Linear` method have different formulas. The delay of the `Linear` class is always `d`. The delay of `RetryStrategies.Linear` is `d × n`. `RetryStrategies.Constant` has the same formula as the `Linear` class.
 
@@ -569,35 +745,12 @@ IRetryStrategy strategy = RetryStrategies.FromDelegate(
 #### `TimeProvider`
 The library uses `TimeProvider` for all delays and all timeouts.
 
-- `ReliabilityPipeline` and `CircuitBreaker` get the `TimeProvider` from their options. A test can set a fake time provider, for example `FakeTimeProvider` from the `Microsoft.Extensions.TimeProvider.Testing` package. Then the test controls the time of the retries.
+- `RetryTaskFactory`, `RetryTaskFactory<T>`, `HedgedTaskFactory` and `HedgedTaskFactory<T>` have a `TimeProvider` property. `CircuitBreaker` has a `timeProvider` constructor parameter. A test can set a fake time provider, for example `FakeTimeProvider` from the `Microsoft.Extensions.TimeProvider.Testing` package. Then the test controls the time of the retries.
+- `StartNew` uses the `TimeProvider` of its factory for its delays.
 - `RetryStrategies.RetryAfter` has an optional `timeProvider` parameter for a `Retry-After` header with a date.
-- `Retriable`, `RetryTask` and the restart delay of `ReliableTaskRunner` use `TimeProvider.System`. They have no parameter for a different time provider.
+- `Retriable`, the default factories (`RetryTask.Factory`, `RetryTask<T>.Factory`, `HedgedTask.Factory` and `HedgedTask<T>.Factory`) and the restart delay of `ReliableTaskRunner` use `TimeProvider.System`. To use a different time provider, make a configured factory.
 
 See [ADR 0002](Documentation/adr/0002-use-timeprovider-for-delays-and-timeouts.md).
-
-### `RetryTask`
-
-`RetryTask` is a `Task` factory with retries. It replaces `TaskFactory` directly. Call `RetryTask.Factory.StartNew()` or `RetryTask<T>.Factory.StartNew()` with the same parameters that you give to `Task.Factory.StartNew()`.
-
-```csharp
-Task<string> task = RetryTask<string>.Factory.StartNew(() => File.ReadAllText("settings.json"), new Count(5), AnyExceptionPolicy.Default);
-```
-
-You can also give an `IRetryPolicy` and an `IRetryStrategy`. The default strategy is `new Count()` (5 attempts) and the default policy is `AnyExceptionPolicy`. These defaults are different from the defaults of `Retriable`.
-
-- A retry does not block a thread. A delay task and continuations start each retry on the scheduler of the caller.
-- If the operation stops, the task faults with the failures that the operation recorded, inside one `AggregateException`. Thus `task.Exception.InnerException` is that `AggregateException`, and its `InnerExceptions` are the failures of the tries. `RetryTask` keeps a maximum of 100 failures: the first 99 failures and the last failure.
-- A cancellation gives a `Canceled` task.
-- The returned task obeys `TaskCreationOptions.RunContinuationsAsynchronously`.
-- `RetryTask` has no retry callback.
-- `RetryTask` retries only synchronous operations. `RetryTask<T>.Factory.StartNew` throws a `NotSupportedException` when `T` is a `Task`, a `Task<TResult>`, a `ValueTask` or a `ValueTask<TResult>`. When `T` is `object` or an interface, `StartNew` examines the result of each try: if the function returned a `Task` or a `ValueTask`, the task faults with `NotSupportedException`. For an asynchronous operation, use `Retriable.RetryAsync`.
-- If the scheduler refuses the first try, `StartNew` throws the `TaskSchedulerException`. If it refuses a retry, the refusal is a failure of that try, and the strategy and the policy decide.
-
-The overloads that take a state object use the same nullable annotations as `Task.Factory.StartNew()`: the state is `object?`, and the action or function takes an `object?` argument. Version 1 used non-nullable `object`. If your project uses nullable reference types, change each method or delegate that takes `object`. It must take `object?`, or examine the state for `null` before it uses the state:
-
-```csharp
-RetryTask.Factory.StartNew(state => Process((string)state!), "input", new Count(5), new AnyExceptionPolicy());
-```
 
 ### `ReliableTaskRunner`
 `ReliableTaskRunner` runs an operation that continues until you stop it, for example a message processor. If the operation fails, the runner starts it again.
@@ -650,95 +803,11 @@ await using ReliableTaskRunner runner = ReliableTaskRunner.Run(
 
 ## Migrating from Polly
 
-This table gives the Corvus.Retry 3.0 item for each Polly 8 item:
-
-| Polly 8 | Corvus.Retry 3.0 |
-|---|---|
-| `ResiliencePipeline`, built one time | `ReliabilityPipeline` and `ReliabilityPipelineOptions`, built one time |
-| `ExecuteAsync(ct => …, token)` | `ExecuteAsync(ct => …, token)`, with the same `ValueTask` signature |
-| `AddTimeout` in `AddRetry` | `AttemptTimeout` |
-| `AddTimeout` around `AddRetry` | `TotalTimeout` |
-| `TimeoutRejectedException` | `RetryTimeoutException` (also a `TimeoutException`) |
-| `MaxRetryAttempts = n` | `retries: n` in the `RetryStrategies` methods |
-| `DelayBackoffType.Constant` | `RetryStrategies.Constant` |
-| `DelayBackoffType.Linear` | `RetryStrategies.Linear` |
-| `DelayBackoffType.Exponential` | `RetryStrategies.Exponential` |
-| `MaxDelay` | `maxDelay` |
-| `UseJitter` | `useJitter`. For exponential delays, Corvus uses decorrelated jitter. The first delay is between `base` and `3 × base`. |
-| `DelayGenerator` | `RetryStrategies.FromDelegate`, or `RetryStrategies.RetryAfter` for the `Retry-After` header |
-| `PredicateBuilder().Handle<T>()` | `RetryPolicies.Handle<T>().Or<T2>()` |
-| `PredicateBuilder<T>().HandleResult(…)` | `ReliabilityPipelineOptions<T>.ShouldRetryResult` |
-| `HandleInner<T>()` | `RetryPolicies.HandleInner<T>()` |
-| `HttpClientResiliencePredicates.IsTransient` | `RetryPolicies.TransientHttp` and `RetryPolicies.IsTransientHttpResponse` |
-| `AddFallback` | `ReliabilityPipelineOptions<T>.Fallback` |
-| `AddCircuitBreaker` | `ReliabilityPipelineOptions.CircuitBreaker`, with one shared `CircuitBreaker` |
-| `BrokenCircuitException`, `IsolatedCircuitException` | `BrokenCircuitException`, `IsolatedCircuitException` |
-| `CircuitBreakerManualControl` | `CircuitBreaker.Isolate()` and `CircuitBreaker.Close()` |
-| `AddHedging` | `ReliabilityPipelineOptions.Hedging` |
-| `ActionGenerator` (hedging) | `ReliabilityPipelineOptions<T>.HedgingActionGenerator` |
-| `OnRetry`, `AttemptNumber` starts at 0 | `OnRetry`, `AttemptNumber` starts at 1 |
-| `TimeProvider` | `TimeProvider` |
-
-These are the primary differences:
-
-- Polly uses a builder. Corvus.Retry uses an options record. The constructor of the pipeline examines all the options.
-- Polly adds the parts in the sequence of the builder calls. Corvus.Retry always uses the sequence in [Order of the parts](#order-of-the-parts).
-- In Polly, `AttemptNumber` in `OnRetry` starts at 0. In Corvus.Retry, `AttemptNumber` is the number of the attempt that failed, and starts at 1.
-- A Corvus.Retry pipeline cannot use hedging and retries together. Use two pipelines.
-- The Corvus.Retry fallback applies only to the outcome of the attempts. An exception from a callback, a strategy or a policy of the pipeline, for example from `OnRetry`, stops the call. The fallback does not give a value for it.
-
-This example shows a Polly pipeline with a total timeout, a retry and an attempt timeout:
-
-```csharp
-// Polly 8
-ResiliencePipeline pipeline = new ResiliencePipelineBuilder()
-    .AddTimeout(TimeSpan.FromSeconds(30))
-    .AddRetry(new RetryStrategyOptions
-    {
-        ShouldHandle = new PredicateBuilder().Handle<HttpRequestException>().Handle<TimeoutRejectedException>(),
-        MaxRetryAttempts = 3,
-        BackoffType = DelayBackoffType.Exponential,
-        Delay = TimeSpan.FromMilliseconds(200),
-        UseJitter = true,
-        OnRetry = args =>
-        {
-            Console.WriteLine($"Attempt {args.AttemptNumber + 1} failed.");
-            return default;
-        },
-    })
-    .AddTimeout(TimeSpan.FromSeconds(5))
-    .Build();
-
-string body = await pipeline.ExecuteAsync(
-    async ct => await httpClient.GetStringAsync(uri, ct),
-    cancellationToken);
-```
-
-This is the equivalent Corvus.Retry pipeline:
-
-```csharp
-// Corvus.Retry 3.0
-ReliabilityPipeline pipeline = new(new ReliabilityPipelineOptions
-{
-    TotalTimeout = TimeSpan.FromSeconds(30),
-    Strategy = RetryStrategies.Exponential(retries: 3, baseDelay: TimeSpan.FromMilliseconds(200), useJitter: true),
-    Policy = RetryPolicies.Handle<HttpRequestException>().Or<RetryTimeoutException>(),
-    OnRetry = args =>
-    {
-        Console.WriteLine($"Attempt {args.AttemptNumber} failed.");
-        return ValueTask.CompletedTask;
-    },
-    AttemptTimeout = TimeSpan.FromSeconds(5),
-});
-
-string body = await pipeline.ExecuteAsync(
-    async ct => await httpClient.GetStringAsync(uri, ct),
-    cancellationToken);
-```
+To replace Polly with Corvus.Retry, read the [migration guide from Polly](Documentation/Migrating-from-Polly.md).
 
 ## Samples
 
-The folder [`Examples`](Examples) has fifteen demos, each a standalone [Spectre.Console](https://spectreconsole.net/) app in one file. Each demo shows one feature or one scenario, simulates the dependency it retries against, and renders what the library did: the attempts, the delays, the state of the circuit, or which hedged attempt won. The demos need only the .NET 10 SDK and no network access. Each demo uses the library source with `#:project`, thus it always uses the code in this repository.
+The folder [`Examples`](Examples) has sixteen demos, each a standalone [Spectre.Console](https://spectreconsole.net/) app in one file. Each demo shows one feature or one scenario, simulates the dependency it retries against, and renders what the library did: the attempts, the delays, the state of the circuit, or which hedged attempt won. The demos need only the .NET 10 SDK and no network access. Each demo uses the library source with `#:project`, thus it always uses the code in this repository.
 
 Run the interactive launcher, every demo in order, or any demo directly, from the root of the repository:
 
@@ -754,10 +823,10 @@ See the [demos README](Examples/README.md) for the full list. Each demo takes be
 
 | Class | Public API that it measures | Baseline |
 |-------|-----------------------------|----------|
-| `ReliabilityPipelineBenchmarks` | `ReliabilityPipeline.ExecuteAsync` (with a result and with no result) and `ReliabilityPipeline<T>.ExecuteAsync`, with no options, each timeout, the two timeouts, `ContinueOnCapturedContext`, `OnRetry`, two failures, and a result retry | A hand-written retry loop |
-| `CircuitBreakerBenchmarks` | A pipeline with a `CircuitBreaker`: a closed circuit, a failure, a rejection by an open or isolated circuit, and the test call of a half-open circuit | The same pipeline without a breaker |
-| `FallbackBenchmarks` | A `ReliabilityPipeline<T>` with `Fallback`, when the operation succeeds, throws an exception, or returns a rejected result | The same pipeline without a fallback |
-| `HedgingBenchmarks` | A pipeline with `Hedging`: a success, a failure that starts a hedged attempt, and two attempts in parallel | The same operation through a pipeline that retries |
+| `RetryTaskFactoryBenchmarks` | `Run` and `RunValueTask` of `RetryTaskFactory` (with a result and with no result) and of `RetryTaskFactory<T>`, with no settings, each timeout, the two timeouts, `ContinueOnCapturedContext`, `OnRetry`, two failures, and a result retry | A hand-written retry loop |
+| `CircuitBreakerBenchmarks` | A factory with a `CircuitBreaker`: a closed circuit, a failure, a rejection by an open or isolated circuit, and the test call of a half-open circuit | The same factory without a breaker |
+| `FallbackBenchmarks` | A `RetryTaskFactory<T>` with a `Fallback`, when the operation succeeds, throws an exception, or returns a rejected result | The same factory without a fallback |
+| `HedgingBenchmarks` | A `HedgedTaskFactory`: a success, a failure that starts a hedged attempt, and two attempts in parallel | The same operation through a `RetryTaskFactory` |
 | `RetriableOverloadBenchmarks` | All the `Retriable.Retry` and `RetryAsync` overloads, with the token overloads and `onRetry`, when the first attempt succeeds | `Retry(func)`, `RetryAsync(func)` and the first token overload |
 | `RetriableBenchmarks` | `Retry`, `RetryAsync` and the token overload (with and without `onRetry`), with 0 and 2 failures before a success | A hand-written retry loop |
 | `RetryTaskFactoryOverloadBenchmarks` | All the `StartNew` overloads of `RetryTask.Factory` and `RetryTask<T>.Factory` (29 each), when the first attempt succeeds | |
@@ -767,17 +836,17 @@ See the [demos README](Examples/README.md) for the full list. Each demo takes be
 | `PolicyBenchmarks` | `CanRetry` of `AnyExceptionPolicy`, `DoNotRetryPolicy`, the `RetryPolicies` methods, the extension members and `TransientHttp`, and `IsTransientHttpResponse` | The first item of each category |
 | `AggregatePolicyBenchmarks` | `AggregatePolicy.CanRetry` with 1, 4 and 16 child policies | One policy |
 | `DelayBenchmarks` | The delay of `Retriable.Retry` (`Thread.Sleep`) and of `Retriable.RetryAsync` (`Task.Delay` with `TimeProvider.System`) | The same retry with no delay |
-| `ConstructionBenchmarks` | The public constructors and factory methods: the strategies, the `RetryStrategies` methods, the policies, the `RetryPolicies` methods and the extension members, `RetryEventArgs`, the exceptions, the event and attempt records, the options records, the two factories, the pipelines and `CircuitBreaker` | `new Count()`, `new AnyExceptionPolicy()`, `new RetryEventArgs(...)` and `new ReliabilityPipelineOptions()` |
+| `ConstructionBenchmarks` | The public constructors and factory methods: the strategies, the `RetryStrategies` methods, the policies, the `RetryPolicies` methods and the extension members, `RetryEventArgs`, the exceptions, the event and attempt records, the retry factories, the hedged factories, `Fallback<T>` and `CircuitBreaker` | `new Count()`, `new AnyExceptionPolicy()`, `new RetryEventArgs(...)` and `new RetryTaskFactory()` |
 
-No benchmark waits for time to pass. The strategies calculate delays, but the benchmarks do not wait for them. `DelayBenchmarks` uses a delay of one tick, which becomes 0 ms. Each pipeline timeout is too long to expire. The benchmarks call the `StartNew` overloads through the `RetryTaskFactoryDriver` of the test project. Thus, if a new overload has no benchmark, a test fails.
+No benchmark waits for time to pass. The strategies calculate delays, but the benchmarks do not wait for them. `DelayBenchmarks` uses a delay of one tick, which becomes 0 ms. Each timeout of a factory is too long to expire. The benchmarks call the `StartNew` overloads through the `RetryTaskFactoryDriver` of the test project. Thus, if a new overload has no benchmark, a test fails.
 
 To run the benchmarks in Release, use this command from the root of the repository:
 
     dotnet run -c Release --project Solutions/Corvus.Retry.Benchmarks -- --filter "*"
 
-A full run has many cases and takes more than one hour. Use `--filter` to select benchmarks (for example `"*ReliabilityPipeline*"`), and `--job short` for a fast run. BenchmarkDotNet writes the results to `BenchmarkDotNet.Artifacts`. The times change between sessions. Thus, compare the ratios from one run, not the absolute times from different runs. The build compiles the benchmarks, but does not run them.
+A full run has many cases and takes more than one hour. Use `--filter` to select benchmarks (for example `"*RetryTaskFactory*"`), and `--job short` for a fast run. BenchmarkDotNet writes the results to `BenchmarkDotNet.Artifacts`. The times change between sessions. Thus, compare the ratios from one run, not the absolute times from different runs. The build compiles the benchmarks, but does not run them.
 
-[Performance of Corvus.Retry 3.0](Documentation/Performance.md) gives the results, a comparison with version 2.0, and the causes of the slower results.
+[Performance of Corvus.Retry 3.0](Documentation/Performance.md) gives the measured results, a comparison with version 2.0, and the causes of the slower results. This README does not repeat the figures.
 
 ## Building
 

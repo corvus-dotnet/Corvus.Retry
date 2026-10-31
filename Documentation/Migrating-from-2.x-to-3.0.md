@@ -6,6 +6,25 @@ Do the steps in this guide before you do the upgrade. If you do not do them, you
 
 The [CHANGELOG](../CHANGELOG.md) gives the new functions of version 3.0. The [README](../README.md) tells how to use them.
 
+## What changes for each entry point
+
+The 2.x entry points stay in version 3.0. This table gives what changes for each one, and what you can use in addition:
+
+| 2.x entry point | In 3.0 |
+|-----------------|--------|
+| `Retriable.Retry` and `Retriable.RetryAsync` | The same calls compile. The behaviour changes for cancellation, `AggregateException` and asynchronous operations: see the sections below. New overloads give a token to the operation, and the overloads that have all the parameters have an optional `onRetry` callback. |
+| `RetryTask.Factory.StartNew` and `RetryTask<T>.Factory.StartNew` | The same overloads. The behaviour changes: see [RetryTask](#retrytask). New: `RetryTask.Run` and `RetryTask<T>.Run` run an asynchronous operation with the default factory. |
+| `new RetryTaskFactory()` | The same. A factory can now have settings: `new RetryTaskFactory(strategy, policy) { ... }`. See [RetryTask](#retrytask). |
+| `ReliableTaskRunner.Run` | The same overloads, and a new overload with a restart strategy. See [ReliableTaskRunner](#reliabletaskrunner). |
+
+Version 3.0 adds these functions. Version 2.x has no equivalent:
+
+- A configured `RetryTaskFactory` with `Run` and `RunValueTask`: attempt and total timeouts, an `OnRetry` callback, result retries (`CanRetryResult`), a fallback (`Fallback<T>`) and a circuit breaker (`CircuitBreaker`).
+- Hedging, with `HedgedTaskFactory` and `HedgedTask.Run`.
+- `RetryHandler`, which retries the requests of an `HttpClient`, and `AddRetryHandler` in the new package `Corvus.Retry.Extensions.Http`.
+- `TimeProvider` for all delays and timeouts. A test can use a fake time provider.
+- The `RetryStrategies` and `RetryPolicies` methods, and the `Exponential` strategy.
+
 ## Summary of the changes to the API
 
 The .NET package validation tool compared the 3.0 package with the 2.0.0 package. This table gives each change that the tool found:
@@ -19,8 +38,8 @@ The .NET package validation tool compared the 3.0 package with the 2.0.0 package
 | `IRetryStrategy.CanRetry` | CP0002 | `IRetryStrategy.GetRetryDelay` returns `null` when the strategy stops the retries. |
 | `IRetryStrategy.PrepareToRetry(Exception)` | CP0002 | `IRetryStrategy.GetRetryDelay(in RetryAttempt)`. |
 | `IRetryStrategy.Exception` | CP0002 | None. A strategy does not record exceptions. `RetryTask` records them. |
-| `IRetryStrategy.OnRetrying(RetryEventArgs)` | CP0002 | The `onRetry` parameter of `Retriable`, or `ReliabilityPipelineOptions.OnRetry`. See [Events and callbacks](#events-and-callbacks). |
-| The `IRetryStrategy.Retrying` event | CP0002 | The `onRetry` parameter of `Retriable`, or `ReliabilityPipelineOptions.OnRetry`. See [Events and callbacks](#events-and-callbacks). |
+| `IRetryStrategy.OnRetrying(RetryEventArgs)` | CP0002 | The `onRetry` parameter of `Retriable`, or the `OnRetry` property of a configured `RetryTaskFactory`. See [Events and callbacks](#events-and-callbacks). |
+| The `IRetryStrategy.Retrying` event | CP0002 | The `onRetry` parameter of `Retriable`, or the `OnRetry` property of a configured `RetryTaskFactory`. See [Events and callbacks](#events-and-callbacks). |
 | A new member `IRetryStrategy.GetRetryDelay(in RetryAttempt)` | CP0006 | Implement this method in each custom strategy. See [Strategies](#strategies). |
 | The `RetryEventArgs(Exception, TimeSpan)` constructor | CP0002 | `RetryEventArgs(Exception? LastException, object? Result, TimeSpan DelayBeforeRetry, int AttemptNumber)`. |
 | `RetryEventArgs` is a class that derives from `EventArgs` | CP0007, CP0009 | `RetryEventArgs` is a `readonly record struct`. See [Events and callbacks](#events-and-callbacks). |
@@ -56,7 +75,7 @@ The method returns the delay before the next attempt, or `null` to stop the retr
 
 - `AttemptNumber` is the number of the attempt that failed. The first attempt is 1.
 - `Exception` is the exception of the attempt.
-- `Result` is the result that caused the retry, or `null`. Only `ReliabilityPipeline<T>` retries results.
+- `Result` is the result that caused the retry, or `null`. Only `Run` and `RunValueTask` of a `RetryTaskFactory<T>` with `CanRetryResult` retry results.
 - `PreviousDelay` is the delay before the attempt that failed. It is zero for the first attempt.
 
 To change a custom strategy:
@@ -118,10 +137,10 @@ Version 3.0 has no `Retrying` event and no `OnRetrying` method. Use a callback:
 
 | 2.x | 3.0 |
 |-----|-----|
-| `strategy.Retrying += handler` with `Retriable` | The `onRetry` parameter of the `Retriable` overloads that have all the parameters, or `ReliabilityPipelineOptions.OnRetry` if you move the call to a `ReliabilityPipeline` |
-| `strategy.Retrying += handler` with `RetryTask` | None. `RetryTask` has no retry callback. Use `Retriable` or `ReliabilityPipeline` in the operation, if you must have a callback. |
+| `strategy.Retrying += handler` with `Retriable` | The `onRetry` parameter of the `Retriable` overloads that have all the parameters, or the `OnRetry` property of a configured `RetryTaskFactory` if you move the call to its `Run` method |
+| `strategy.Retrying += handler` with `RetryTask` | `StartNew` has no retry callback. Use `Run` of a configured factory with `OnRetry`, or `Retriable` with `onRetry`. |
 
-The callback is `Func<RetryEventArgs, ValueTask>`. `Retriable` and the pipeline await it before the delay. An exception from the callback stops the call. The synchronous `Retry` overloads wait for the callback. They run the callback with no `SynchronizationContext`, and with `TaskScheduler.Default` as the current scheduler. Thus, if the callback awaits on a UI thread, or on a scheduler that runs one task at a time, it continues on the thread pool, and a deadlock does not occur.
+The callback is `Func<RetryEventArgs, ValueTask>`. `Retriable` and `Run` await it before the delay. An exception from the callback stops the call. The synchronous `Retry` overloads wait for the callback. They run the callback with no `SynchronizationContext`, and with `TaskScheduler.Default` as the current scheduler. Thus, if the callback awaits on a UI thread, or on a scheduler that runs one task at a time, it continues on the thread pool, and a deadlock does not occur.
 
 `RetryEventArgs` has these changes:
 
@@ -151,15 +170,15 @@ The overloads without a cancellation token use `CancellationToken.None`. Thus, t
 
 ## Policies and AggregateException
 
-In version 3.0, every entry point asks the policy about the exceptions that the operation actually threw. If the operation throws an `AggregateException`, the policy is asked about each inner exception, depth first, and the exception is retried only if the policy accepts all of them. An `AggregateException` with no inner exceptions goes to the policy itself. In version 2.x, only `RetryTask` and `ReliableTaskRunner` did this; `Retriable` gave the `AggregateException` itself to the policy, thus `RetryPolicies.Handle<HttpRequestException>()` refused an `AggregateException` that contained an `HttpRequestException`.
+In version 3.0, every entry point asks the policy about the exceptions that the operation actually threw. If the operation throws an `AggregateException`, the policy is asked about each inner exception, depth first, and the exception is retried only if the policy accepts all of them. An `AggregateException` with no inner exceptions goes to the policy itself. In version 2.x, only `RetryTask` and `ReliableTaskRunner` did this; `Retriable` gave the `AggregateException` itself to the policy, thus a policy for `HttpRequestException` refused an `AggregateException` that contained an `HttpRequestException`.
 
 | Entry point | 2.x | 3.0 |
 |-------------|-----|-----|
-| `Retriable`, `ReliabilityPipeline` | The policy got the `AggregateException`. | The policy is asked about each inner exception. |
+| `Retriable`, and `Run` and `RunValueTask` of `RetryTaskFactory` | The policy got the `AggregateException`. (`Run` and `RunValueTask` are new in 3.0.) | The policy is asked about each inner exception. |
 | The hedging policy, the circuit breaker policy, the fallback policy | Not in 2.x. | The policy is asked about each inner exception. |
 | `RetryTask`, `ReliableTaskRunner` | The policy was asked about each inner exception. | No change. |
 
-The strategy, the `onRetry` callback, `OnHedging`, `CircuitStateChange.LastException` and `FallbackArgs<T>.Exception` receive the `AggregateException` as thrown. A custom policy that examines `AggregateException` itself must now examine its inner exceptions instead.
+The strategy, the `onRetry` callback, `OnHedgedAttempt`, `CircuitStateChange.LastException` and `FallbackEventArgs<T>.Exception` receive the `AggregateException` as thrown. A custom policy that examines `AggregateException` itself must now examine its inner exceptions instead.
 
 ## Asynchronous operations with Retry and StartNew
 
@@ -179,8 +198,8 @@ In version 3.0, the compiler gives the error CS0619 when you give an asynchronou
 To correct the error, do these steps:
 
 1. Replace `Retriable.Retry` with `Retriable.RetryAsync`. Use the same arguments.
-2. Replace `RetryTask.Factory.StartNew(async () => ...)` and `RetryTask<Task>.Factory.StartNew(...)` with `Retriable.RetryAsync(async () => ...)`. If you used a `TaskCreationOptions` or a `TaskScheduler`, start the call with `Task.Factory.StartNew(...).Unwrap()`.
-3. For an operation that returns a `ValueTask` or a `ValueTask<TResult>`, use `ReliabilityPipeline.ExecuteAsync`. As an alternative, call `AsTask()` in the operation, and use `Retriable.RetryAsync`.
+2. Replace `RetryTask.Factory.StartNew(async () => ...)` and `RetryTask<Task>.Factory.StartNew(...)` with `RetryTask.Run(async ct => ...)`, `Run` of a configured factory, or `Retriable.RetryAsync(async () => ...)`. If you used a `TaskCreationOptions` or a `TaskScheduler`, start the call with `Task.Factory.StartNew(...).Unwrap()`.
+3. For an operation that returns a `ValueTask` or a `ValueTask<TResult>`, use `RunValueTask` of a factory, for example `RetryTask.Factory.RunValueTask(ct => ...)`. As an alternative, call `AsTask()` in the operation, and use `Retriable.RetryAsync` or `RetryTask.Run`.
 4. In an `async` lambda for `RetryAsync`, use `await` on the task of the operation: `async () => await client.SendAsync(request)`.
 5. Use `await` on the result.
 
@@ -193,6 +212,15 @@ If an operation gives a `null` task to `Retriable.RetryAsync`, the attempt fails
 ## RetryTask
 
 `RetryTask.Factory` and `RetryTask<T>.Factory` keep all their `StartNew` overloads.
+
+`RetryTaskFactory` and `RetryTaskFactory<T>` have new members. Your 2.x code does not have to use them:
+
+- `RetryTask.Run(ct => …, token)` and `RetryTask<T>.Run(ct => …, token)` run an asynchronous operation with the default factory, and retry it. When the retries stop, `Run` throws the exception of the last attempt. `StartNew`, by contrast, gives a task that faults with an `AggregateException` of all the failures.
+- `new RetryTaskFactory(strategy, policy)` makes a configured factory. Set the other settings with an object initialiser. `new RetryTaskFactory(other)` copies a factory. Keep a configured factory in a field, and call its `Run`, `RunValueTask` or `StartNew` methods.
+- A `StartNew` overload without a strategy or a policy uses the strategy and the policy of the factory. For `RetryTask.Factory`, these are the 2.x defaults: `new Count()` and `AnyExceptionPolicy`.
+- `StartNew` cannot use the settings that only `Run` and `RunValueTask` can use: `AttemptTimeout`, `TotalTimeout`, `OnRetry`, `CircuitBreaker`, `CanRetryResult` and `Fallback`. If the factory has one of them, `StartNew` throws an `InvalidOperationException`.
+
+These changes apply to `StartNew`:
 
 - A retry does not block a thread. In version 2.x, the delay blocked a thread, and each retry ran synchronously on that thread. In version 3.0, a delay task and continuations start each retry on the scheduler of the caller.
 - `RetryTask` has no retry callback, because the `Retrying` event is removed.
@@ -231,7 +259,7 @@ CAUTION: Use a strategy with no limit, for example `new Exponential(int.MaxValue
 
 | 2.x type | 3.0 replacement |
 |----------|-----------------|
-| `ISleepService` and `SleepService` | `TimeProvider`. `Retriable` and `RetryTask` use `TimeProvider.System`. `ReliabilityPipeline` and `CircuitBreaker` take a `TimeProvider` in their options. See [ADR 0002](adr/0002-use-timeprovider-for-delays-and-timeouts.md). |
+| `ISleepService` and `SleepService` | `TimeProvider`. `Retriable` and the default factories, such as `RetryTask.Factory`, use `TimeProvider.System`. A configured `RetryTaskFactory` or `HedgedTaskFactory` has a `TimeProvider` property, and `CircuitBreaker` has a `timeProvider` constructor parameter. See [ADR 0002](adr/0002-use-timeprovider-for-delays-and-timeouts.md). |
 | `RetryStrategy` | Implement `IRetryStrategy`. See [Strategies](#strategies). |
 
 `SleepService` was internal in version 2.x. Only the tests of this project used `ISleepService`.

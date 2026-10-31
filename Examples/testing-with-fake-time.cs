@@ -2,7 +2,7 @@
 #:package Spectre.Console@0.57.2
 #:package Microsoft.Extensions.TimeProvider.Testing@10.11.0
 
-// A test of retry code must not wait for the retries. ReliabilityPipeline takes its delays and timeouts from a
+// A test of retry code must not wait for the retries. RetryTaskFactory takes its delays and timeouts from a
 // TimeProvider, so a test gives it a FakeTimeProvider and moves the clock itself: nine minutes of backoff and a
 // 30-second attempt timeout pass in a few milliseconds. The demo is written the way a test reads.
 //
@@ -36,7 +36,7 @@ var wallClock = Stopwatch.StartNew();
 var time = new TimerAwareFakeTimeProvider();
 var service = new FlakyService(failures: 5);
 var delays = new List<TimeSpan>();
-var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+var factory = new RetryTaskFactory
 {
     Strategy = new Backoff(maxTries: 6, deltaBackoff: TimeSpan.FromSeconds(10)) { MaxBackoff = TimeSpan.FromMinutes(5) },
     TimeProvider = time,
@@ -45,17 +45,18 @@ var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
         delays.Add(args.DelayBeforeRetry);
         return ValueTask.CompletedTask;
     },
-});
+};
 
-// Act. Start the call, but do not await it yet: it is about to wait for the first delay.
-var call = pipeline.ExecuteAsync(service.GetAsync).AsTask();
+// Act. Start the call, but do not await it yet: it is about to wait for the first delay. GetAsync returns a ValueTask,
+// so the call uses RunValueTask. For an operation that returns a Task, use Run.
+var call = factory.RunValueTask(service.GetAsync).AsTask();
 
 var steps = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn("retry").AddColumn(new TableColumn("Backoff delay").RightAligned())
     .AddColumn("1 ms early").AddColumn("after Advance(delay)").AddColumn(new TableColumn("fake clock").RightAligned());
 for (var retry = 1; retry <= 5; retry++)
 {
-    // THE PITFALL: Advance only fires timers that exist. OnRetry runs BEFORE the pipeline creates the delay timer,
+    // THE PITFALL: Advance only fires timers that exist. OnRetry runs BEFORE the factory creates the delay timer,
     // so a test that advances from OnRetry, or as soon as OnRetry signals, can move the clock first; the timer is
     // then created relative to the new time, the advance is lost and the call waits for ever. Awaiting Task.Yield()
     // narrows the race but does not close it. The safe pattern: wait until the library has created the timer.
@@ -95,15 +96,15 @@ AnsiConsole.Write(new Rule("[springgreen3]AttemptTimeout without waiting[/]").Le
 
 // Arrange. One attempt (no retries) with a 30 s limit; the operation never answers unless it is cancelled.
 var time2 = new TimerAwareFakeTimeProvider();
-var timeoutPipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+var timeoutFactory = new RetryTaskFactory
 {
     Strategy = RetryStrategies.Constant(retries: 0, delay: TimeSpan.Zero),
     AttemptTimeout = TimeSpan.FromSeconds(30),
     TimeProvider = time2,
-});
+};
 
 // Act. The attempt timeout is a timer too, so the same rule applies: wait for it, then advance.
-var hung = timeoutPipeline.ExecuteAsync(ct => new ValueTask(Task.Delay(Timeout.Infinite, ct))).AsTask();
+var hung = timeoutFactory.Run(ct => Task.Delay(Timeout.Infinite, ct));
 await time2.WaitForTimersAsync(1);
 time2.Advance(TimeSpan.FromSeconds(29.999));
 var stillRunning = !hung.IsCompleted;
@@ -127,7 +128,7 @@ AnsiConsole.Write(timeout);
 AnsiConsole.MarkupLine($"[grey]  {time.Elapsed + TimeSpan.FromSeconds(30):m\\:ss} of fake time passed in [white]{wallClock.ElapsedMilliseconds} ms[/] of real time.[/]");
 AnsiConsole.MarkupLine("[grey]  Backoff is randomised, so the delays differ from run to run.[/]");
 
-// A service that fails a set number of times, then succeeds. It answers at once: the only waiting is the pipeline's.
+// A service that fails a set number of times, then succeeds. It answers at once: the only waiting is the factory's.
 public sealed class FlakyService(int failures)
 {
     private int calls;
