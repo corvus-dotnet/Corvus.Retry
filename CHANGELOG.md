@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-These changes are planned for 3.0.0.
+## [3.0.0]
 
 Version 3.0 is not compatible with version 2.x. Read the
 [migration guide from 2.x to 3.0](Documentation/Migrating-from-2.x-to-3.0.md) before you do the upgrade. If you do
@@ -99,13 +99,16 @@ not do the steps in the guide, your project can fail to compile, or your retries
 - The benchmarks measure the pipeline, the fallback, the circuit breaker, hedging, the new strategies and the new
   policies. `DelayBenchmarks` replaces `SleepBenchmarks`.
 - The `Examples` folder has fifteen demos, each a single-file .NET 10 app that renders what the library did
-  with Spectre.Console, and an interactive launcher (`dotnet run Examples/menu.cs`). They replace the four
-  notebook-style samples, and need no network access. See `Examples/README.md`.
+  with Spectre.Console, and an interactive launcher (`dotnet run Examples/menu.cs`). They replace the three
+  samples in `Documentation/Examples`, and need no network access. See `Examples/README.md`.
 - ADR 0002 records the decision to use `TimeProvider`. It replaces ADR 0001.
+- The package sets `IsAotCompatible`, thus the build gives a warning for code that native AOT cannot use.
 
 ### Changed
 
 - The package targets `net10.0` only. On a different framework, use version 2.x.
+- The description and the tags of the package include the new functions. The release notes of the package link to the
+  migration guide.
 - `IRetryStrategy` has one method, `GetRetryDelay(in RetryAttempt)`. A strategy has no state for a call. Thus, many
   calls can use one strategy at the same time. A strategy that a call used before now gives all its tries to the next
   call.
@@ -129,7 +132,8 @@ not do the steps in the guide, your project can fail to compile, or your retries
   An `AggregateException` with no inner exceptions is passed to the policy itself. The strategy, `OnRetry`,
   `OnHedging`, `CircuitStateChange.LastException` and `FallbackArgs<T>.Exception` receive the exception as thrown.
 - The synchronous `Retriable.Retry` overloads with a token that can be cancelled wait on a timer, not on
-  `Thread.Sleep`.
+  `Thread.Sleep`. The other synchronous overloads also use a timer for a delay longer than `int.MaxValue` milliseconds
+  (approximately 24.9 days), because `Thread.Sleep` cannot do this delay.
 - A retry of `RetryTask` does not block a thread. A delay task and continuations start each retry on the scheduler of
   the caller.
 - If a scheduler refuses to queue a `RetryTask` retry, the refusal is a failure of that try. The strategy and the
@@ -197,6 +201,9 @@ not do the steps in the guide, your project can fail to compile, or your retries
   95 ns and 368 B, because each call needed a new strategy.
 - An asynchronous `Retriable` call that completes immediately takes approximately 3 ns to 22 ns more than in 2.x. The
   cause is the retry loop, which now also examines the token, the timeouts and the callbacks.
+- The build pins transitive package versions centrally (`CentralPackageTransitivePinningEnabled`).
+- The workflows use `actions/github-script` 8.0.0, `actions/checkout` 7.0.1 and `actions/setup-dotnet` 6.0.0, which
+  run on Node.js 24. `tibdex/github-app-token` stays at 1.9, which runs on Node.js 20.
 
 ### Fixed
 
@@ -216,7 +223,7 @@ not do the steps in the guide, your project can fail to compile, or your retries
 - This release removes the `RetryEventArgs(Exception, TimeSpan)` constructor.
 - This release removes the `RetryStrategyBenchmarks` and `SleepBenchmarks` benchmark classes.
 
-## [2.0.0]
+## [2.0.0] - 2026-10-31
 
 ### Added
 
@@ -364,7 +371,8 @@ not do the steps in the guide, your project can fail to compile, or your retries
 
 - First release: `Retriable`, `RetryTask`, `ReliableTaskRunner`, retry strategies and retry policies.
 
-[Unreleased]: https://github.com/corvus-dotnet/Corvus.Retry/compare/2.0.0...HEAD
+[Unreleased]: https://github.com/corvus-dotnet/Corvus.Retry/compare/3.0.0...HEAD
+[3.0.0]: https://github.com/corvus-dotnet/Corvus.Retry/compare/2.0.0...3.0.0
 [2.0.0]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.7...2.0.0
 [1.0.7]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.6...1.0.7
 [1.0.6]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.5...1.0.6
