@@ -1139,7 +1139,7 @@ public class CircuitBreakerTests
     }
 
     [TestMethod]
-    public async Task TwoFactorysThatShareOneBreaker_SeeTheSameState()
+    public async Task TwoFactoriesThatShareOneBreaker_SeeTheSameState()
     {
         CircuitBreaker breaker = this.NewBreaker();
         RetryTaskFactory first = this.NewFactory(breaker);
