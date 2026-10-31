@@ -36,11 +36,12 @@ footnote says so; otherwise the output is repeatable.
 | [`retry-task.cs`](retry-task.cs) | Eight flaky synchronous operations started at once with `StartNew` on a configured factory recover on the thread pool, a task that gives up carries every failure, capped at 100, and `StartNew` refuses a setting that only `Run` can use. |
 | [`message-queue-consumer.cs`](message-queue-consumer.cs) | Keep a queue consumer loop alive with `ReliableTaskRunner`: restart after a transient fault with a delay, stop on a poison message, and shut down cleanly. |
 | [`http-client-resilience.cs`](http-client-resilience.cs) | One configured factory around an `HttpClient` call that gets 503, a hang, 429 with `Retry-After` and 500 before 200; it retries, obeys the header, times out each attempt, and falls back to a cached answer when a circuit breaker opens. It wraps each call in `Run`; to put the factory inside the `HttpClient` instead, see `RetryHandler` in `http-handler.cs`. |
+| [`http-handler.cs`](http-handler.cs) | `RetryHandler` puts a configured factory inside an `HttpClient`, so that callers use the client directly. |
 | [`database-startup.cs`](database-startup.cs) | Wait for a database that is still starting by retrying a wrapped `SocketException` with backoff, and fail at once on a wrong password. |
 | [`testing-with-fake-time.cs`](testing-with-fake-time.cs) | Nine minutes of `Backoff` delays and a 30 s attempt timeout tested in milliseconds with a `FakeTimeProvider`, advancing the clock only after the library has created its timer. |
 
 A good order for a first read: the first four cover the building blocks (`Retriable`, strategies, policies,
-jitter); the next six add one feature of a configured `RetryTaskFactory` or `HedgedTaskFactory` each; the last five are complete scenarios.
+jitter); the next six add one feature of a configured `RetryTaskFactory` or `HedgedTaskFactory` each; the last six are complete scenarios.
 
 ## Running everything
 
@@ -68,6 +69,7 @@ dotnet run Examples/composed-factories.cs
 dotnet run Examples/retry-task.cs
 dotnet run Examples/message-queue-consumer.cs
 dotnet run Examples/http-client-resilience.cs
+dotnet run Examples/http-handler.cs
 dotnet run Examples/database-startup.cs
 dotnet run Examples/testing-with-fake-time.cs
 ```

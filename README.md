@@ -493,9 +493,7 @@ string body = await retries.Run(
 
 ### `RetryHandler`
 
-<!-- This section describes RetryHandler and Corvus.Retry.Extensions.Http as planned. Check it against the implementation. -->
-
-`RetryHandler` is a `DelegatingHandler` in the namespace `Corvus.Retry.Http`. It applies a `RetryTaskFactory<HttpResponseMessage>` to each request. Thus, callers use the `HttpClient` directly, and do not put each call in `Run`. The retries, the result retries, the timeouts, the circuit breaker, the fallback and `OnRetry` of the factory all apply. `RetryHandler` is in the `Corvus.Retry` package, and adds no dependency.
+`RetryHandler` is a `DelegatingHandler` in the namespace `Corvus.Retry.Http`. It applies a `RetryTaskFactory<HttpResponseMessage>` to each request. Thus, callers use the `HttpClient` directly, and do not put each call in `Run`. Every setting of the factory applies: the retries, the result retries, the timeouts, the circuit breaker, the fallback, `OnRetry`, and the disposal of each rejected response. `RetryStrategies.RetryAfter` uses the `Retry-After` header. `RetryHandler` is in the `Corvus.Retry` package, and adds no dependency.
 
 ```csharp
 using Corvus.Retry.Http;
@@ -509,30 +507,45 @@ RetryTaskFactory<HttpResponseMessage> retries = new(
     TotalTimeout = TimeSpan.FromSeconds(60),
 };
 
-HttpClient client = new(new RetryHandler(retries) { InnerHandler = new SocketsHttpHandler() });
+HttpClient client = new(new RetryHandler(retries, new SocketsHttpHandler()));
 ```
+
+The constructors are `RetryHandler(factory)` and `RetryHandler(factory, innerHandler)`. The `Factory` property gives the factory.
 
 With `IHttpClientFactory`, use `AddRetryHandler` from the package `Corvus.Retry.Extensions.Http`. This package depends on `Microsoft.Extensions.Http`:
 
 ```csharp
 services.AddHttpClient<CatalogueClient>().AddRetryHandler(retries);
+
+// Also retry a POST request with content that can be sent again.
+services.AddHttpClient<OrdersClient>().AddRetryHandler(retries, RetryHandler.CanReplayContent);
 ```
+
+Make the factory one time. `IHttpClientFactory` makes a new handler chain from time to time. Each chain gets a new `RetryHandler`, and all of them share the factory and its circuit breaker. Add the retry handler after the handlers that must run one time for each call, and before the handlers that must run one time for each attempt.
 
 These rules apply to the handler:
 
-- `CanRetryRequest` decides if the handler can send a request more than one time. Its default is `RetryHandler.IsSafeToRetry`: the method is GET, HEAD, PUT, DELETE, OPTIONS or TRACE, and the content can be sent again.
-- Content that can be sent again is no content, `ByteArrayContent` and the types that derive from it (for example `StringContent`), `ReadOnlyMemoryContent`, or `JsonContent`. The handler does not send `StreamContent` or other content types more than one time.
+- `CanRetryRequest` decides if the handler can send a request more than one time. Its default is `RetryHandler.IsSafeToRetry`: the method is GET, HEAD, PUT, DELETE, OPTIONS or TRACE, and `RetryHandler.CanReplayContent` returns `true`.
+- `RetryHandler.CanReplayContent` returns `true` for no content, `ByteArrayContent` and the types that derive from it (for example `StringContent` and `FormUrlEncodedContent`), `ReadOnlyMemoryContent` and `JsonContent`. It returns `false` for `StreamContent`, `MultipartContent` and all other content types.
+- The handler sends the same `HttpRequestMessage` for each attempt. A `StreamContent` that cannot seek cannot be sent again: the second attempt fails with an `InvalidOperationException`. Thus, the default refuses it.
 - To retry a POST request, set `CanRetryRequest = RetryHandler.CanReplayContent`. Do this only when the server can receive the same request two times without harm.
-- A request that the handler cannot retry gets one attempt. The timeouts, the circuit breaker and the fallback of the factory still apply to that attempt.
-- The handler disposes each rejected response, as the factory does.
+- A request that `CanRetryRequest` refuses gets one attempt. The timeouts, the circuit breaker, `CanRetryResult` and the fallback of the factory still apply. A rejected response is not retried: the handler returns it, not disposed, or the fallback replaces it. The breaker counts it. The handler does not call `OnRetry`.
 - The synchronous `HttpClient.Send` throws a `NotSupportedException`. Use `SendAsync`, or a method that calls it, such as `GetAsync`.
-- The handler does not hedge. Parallel attempts cannot share one `HttpRequestMessage`. `RetryHandler` does not take a `HedgedTaskFactory`.
+- The handler does not hedge. Parallel attempts cannot share one `HttpRequestMessage`. To hedge, put the call in `Run` of a `HedgedTaskFactory<T>`.
+
+The exceptions from a call through the handler are these:
+
+- When an attempt timeout or the total timeout of the factory expires, the call throws a `RetryTimeoutException`, not a `TaskCanceledException`.
+- When the caller cancels, the call throws a `TaskCanceledException` that carries the caller's token. The handler does not retry it.
+- When the circuit is open, the call throws a `CircuitRejectedException`. Its `RetryAfter` gives the time until the open duration ends. `RetryPolicies.TransientHttp` does not retry it.
 
 The handler has these limits:
 
-- The handler returns the response before `HttpClient` reads a buffered body. Thus, a failure while `HttpClient` reads the body is not retried, and `AttemptTimeout` does not include the read. If that matters, put the call in `factory.Run` instead of using the handler. `Examples/http-client-resilience.cs` shows this.
-- `HttpClient.Timeout` (100 seconds by default) is outside the handler. It limits all the attempts and all the delays together. When it expires, the call throws a `TaskCanceledException`, not a `RetryTimeoutException`.
+- The handler returns the response when the headers arrive. `HttpClient` then reads a buffered body. Thus, a failure while the body downloads is not retried, and `AttemptTimeout` does not include the download. With `HttpCompletionOption.ResponseHeadersRead`, a later read of the body also fails outside the handler. If that matters, put the whole call in `Run` of a `RetryTaskFactory<string>` instead, for example `factory.Run(ct => client.GetStringAsync(uri, ct), cancellationToken)`. `Examples/http-client-resilience.cs` shows this.
+- `HttpClient.Timeout` (100 seconds by default) is outside the handler. It limits all the attempts and all the delays together, and it can stop a retry delay. When it expires, the call throws a `TaskCanceledException` with an inner `TimeoutException`. The handler sees this as a cancellation by its caller. Thus, the fallback does not apply to it.
 - Make the `TotalTimeout` of the factory shorter than `HttpClient.Timeout`.
+
+`Examples/http-handler.cs` shows the handler.
 
 ### `StartNew`
 
@@ -794,7 +807,7 @@ To replace Polly with Corvus.Retry, read the [migration guide from Polly](Docume
 
 ## Samples
 
-The folder [`Examples`](Examples) has fifteen demos, each a standalone [Spectre.Console](https://spectreconsole.net/) app in one file. Each demo shows one feature or one scenario, simulates the dependency it retries against, and renders what the library did: the attempts, the delays, the state of the circuit, or which hedged attempt won. The demos need only the .NET 10 SDK and no network access. Each demo uses the library source with `#:project`, thus it always uses the code in this repository.
+The folder [`Examples`](Examples) has sixteen demos, each a standalone [Spectre.Console](https://spectreconsole.net/) app in one file. Each demo shows one feature or one scenario, simulates the dependency it retries against, and renders what the library did: the attempts, the delays, the state of the circuit, or which hedged attempt won. The demos need only the .NET 10 SDK and no network access. Each demo uses the library source with `#:project`, thus it always uses the code in this repository.
 
 Run the interactive launcher, every demo in order, or any demo directly, from the root of the repository:
 

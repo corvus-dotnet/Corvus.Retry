@@ -274,31 +274,31 @@ These points apply:
 
 ### Option B: a `RetryHandler` in the HttpClient
 
-<!-- This option describes RetryHandler as planned. Check it against the implementation. -->
-
-`AirshipClient` receives its `HttpClient` from the caller. Thus, the caller can put a `RetryHandler` in the client, and `AirshipClient` sends its request with no retry code. The default `CanRetryRequest` does not retry a POST request. `StringContent` can be sent again, thus set `CanRetryRequest = RetryHandler.CanReplayContent`:
+`AirshipClient` receives its `HttpClient` from the caller. Thus, the caller can put a `RetryHandler` in the client, and `AirshipClient` sends its request with no retry code. The handler sends the same `HttpRequestMessage` for each attempt, below `HttpClient`, thus the reused request is not a problem here. The default `CanRetryRequest` does not retry a POST request. `StringContent` can be sent again, thus set `CanRetryRequest = RetryHandler.CanReplayContent`:
 
 ```csharp
 // Where the application makes the HttpClient for AirshipClient
 using Corvus.Retry.Http;
 
-HttpClient client = new(new RetryHandler(retries)
+HttpClient client = new(new RetryHandler(retries, new SocketsHttpHandler())
 {
     CanRetryRequest = RetryHandler.CanReplayContent,
-    InnerHandler = new SocketsHttpHandler(),
 });
 
-// In AirshipClient: no retry code. The handler sends the same request again below HttpClient.
+// With IHttpClientFactory and the package Corvus.Retry.Extensions.Http
+services.AddHttpClient("airship").AddRetryHandler(retries, RetryHandler.CanReplayContent);
+
+// In AirshipClient: no retry code.
 HttpResponseMessage result = await this.Client.SendAsync(request);
 ```
 
-Here `retries` is the `RetryTaskFactory<HttpResponseMessage>` of option A. With `IHttpClientFactory`, use `AddRetryHandler(retries)` from the package `Corvus.Retry.Extensions.Http`.
+Here `retries` is the `RetryTaskFactory<HttpResponseMessage>` of option A. Make it one time, and share it.
 
 Do this only if the Airship API can receive the same push request two times without harm. A retry after a timeout can send a notification that the server already accepted.
 
-## HttpClient
+`SendAsync` buffers the body of the response after the handler returns. With option B, a failure during that download is not retried. With option A, the download is inside `Run`, thus the factory retries it.
 
-<!-- This section describes RetryHandler and Corvus.Retry.Extensions.Http as planned. Check it against the implementation. -->
+## HttpClient
 
 `AddStandardResilienceHandler` and `AddResilienceHandler` from `Microsoft.Extensions.Http.Resilience` put a Polly pipeline in an `HttpClient`. In Corvus.Retry, `RetryHandler` puts a `RetryTaskFactory<HttpResponseMessage>` in an `HttpClient`. With `IHttpClientFactory`, use `AddRetryHandler(factory)` from the package `Corvus.Retry.Extensions.Http`:
 
@@ -317,15 +317,18 @@ RetryTaskFactory<HttpResponseMessage> retries = new(
 services.AddHttpClient<CatalogueClient>().AddRetryHandler(retries);
 ```
 
+Make the factory one time. Each handler chain that `IHttpClientFactory` makes gets a new `RetryHandler`, and all of them share the factory and its circuit breaker.
+
 The values in this example are close to the defaults of `AddStandardResilienceHandler`. Compare them with the defaults of the version of `Microsoft.Extensions.Http.Resilience` that you use. The defaults of `new CircuitBreaker()` are a failure rate of 0.1, 100 calls, a window of 30 seconds and an open duration of 5 seconds.
 
 These differences apply:
 
 - The standard handler also has a rate limiter. Corvus.Retry has no rate limiter.
-- By default, `RetryHandler` retries only a request with a safe method (GET, HEAD, PUT, DELETE, OPTIONS or TRACE) and content that it can send again. To retry other requests, set `CanRetryRequest`, for example to `RetryHandler.CanReplayContent`.
-- `RetryHandler` does not hedge.
+- By default, `RetryHandler` retries only a request with a safe method (GET, HEAD, PUT, DELETE, OPTIONS or TRACE) and content that it can send again. To retry other requests, use `AddRetryHandler(retries, RetryHandler.CanReplayContent)`, or set `CanRetryRequest`. A request that the handler cannot retry still gets the timeouts, the circuit breaker, `CanRetryResult` and the fallback, for one attempt.
+- `RetryHandler` does not hedge. To hedge, put the call in `Run` of a `HedgedTaskFactory<T>`.
 - The synchronous `HttpClient.Send` throws a `NotSupportedException`.
-- The handler returns before `HttpClient` reads a buffered body. A failure while `HttpClient` reads the body is not retried, and `AttemptTimeout` does not include it.
-- `HttpClient.Timeout` is outside the handler, and gives a `TaskCanceledException`. Make `TotalTimeout` shorter than `HttpClient.Timeout`.
+- The handler returns when the headers arrive. A failure while `HttpClient` downloads a buffered body is not retried, and `AttemptTimeout` does not include it.
+- The attempt and total timeouts of the factory give a `RetryTimeoutException`. Polly gives a `TimeoutRejectedException`.
+- `HttpClient.Timeout` is outside the handler. It gives a `TaskCanceledException`, and the fallback does not apply to it. Make `TotalTimeout` shorter than `HttpClient.Timeout`.
 
 The [README](../README.md#retryhandler) gives all the rules of `RetryHandler`.

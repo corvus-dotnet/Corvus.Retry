@@ -80,10 +80,12 @@ not do the steps in the guide, your project can fail to compile, or your retries
   `RetryTaskFactory<HttpResponseMessage>` to each request of an `HttpClient`. By default it retries only a request
   with a safe method and content that it can send again (`RetryHandler.IsSafeToRetry`). Set `CanRetryRequest`, for
   example to `RetryHandler.CanReplayContent`, to retry other requests. A request that it cannot retry gets one attempt,
-  with the timeouts, the circuit breaker and the fallback of the factory. The synchronous `Send` throws a
-  `NotSupportedException`.
-- The new package `Corvus.Retry.Extensions.Http` has `AddRetryHandler(factory)` for `IHttpClientBuilder`. It depends
-  on `Microsoft.Extensions.Http`. The `Corvus.Retry` package keeps no runtime dependencies.
+  with the timeouts, the circuit breaker, `CanRetryResult` and the fallback of the factory. The handler sends the same
+  request message for each attempt. The synchronous `Send` throws a `NotSupportedException`. The handler does not
+  hedge.
+- The new package `Corvus.Retry.Extensions.Http` has `AddRetryHandler(factory)` and
+  `AddRetryHandler(factory, canRetryRequest)` for `IHttpClientBuilder`. It depends on `Corvus.Retry` and
+  `Microsoft.Extensions.Http`. The `Corvus.Retry` package keeps no runtime dependencies.
 - The `Exponential` strategy doubles the delay before each retry. With jitter, it uses decorrelated jitter. A maximum
   delay shorter than the base delay makes every delay the maximum.
 - `Linear` and `Incremental` have new constructor overloads with the parameters `maxDelay` and `useJitter`.
@@ -121,7 +123,7 @@ not do the steps in the guide, your project can fail to compile, or your retries
 - The benchmarks report the number of exceptions for each operation.
 - The benchmarks measure `Run` and `RunValueTask` of the factories, the fallback, the circuit breaker, hedging, the new strategies and the new
   policies. `DelayBenchmarks` replaces `SleepBenchmarks`.
-- The `Examples` folder has fifteen demos, each a single-file .NET 10 app that renders what the library did
+- The `Examples` folder has sixteen demos, each a single-file .NET 10 app that renders what the library did
   with Spectre.Console, and an interactive launcher (`dotnet run Examples/menu.cs`). They replace the three
   samples in `Documentation/Examples`, and need no network access. See `Examples/README.md`.
 - ADR 0002 records the decision to use `TimeProvider`. It replaces ADR 0001. ADR 0003 records the decision to follow
