@@ -3,7 +3,8 @@
 
 // Hedging cuts the long tail of a slow service: when an attempt has not answered within a short stagger, the factory
 // starts a second attempt in parallel and takes whichever answers first. The demo compares twenty calls with and
-// without hedging, then sends the hedged attempt to a second region with OperationForAttempt.
+// without hedging, sends the hedged attempt to a second region with OperationForAttempt, shows the one-off
+// HedgedTask<T>.Run, and hedges a 503 response (not an exception) with ResultIsFailure and a Fallback.
 //
 //   dotnet run Examples/hedging.cs
 
@@ -138,7 +139,64 @@ foreach (var behaviour in new[] { "fast", "slow", "fails" })
 
 AnsiConsole.Write(regionTable);
 AnsiConsole.MarkupLine("[grey]  A failure starts the hedge at once; a slow answer, after the 200 ms stagger.[/]");
-AnsiConsole.MarkupLine($"[grey]  Hedging trades extra calls ({hedgedService.Invocations} instead of {plainService.Invocations}) for a short tail.[/]");
+AnsiConsole.WriteLine();
+
+// Part 3: the one-off form. HedgedTask<T>.Run uses the default factory: 1 extra attempt, a 2 s stagger, and any
+// exception is a failure. A failure starts the next attempt at once, so a call that fails once and then answers does not
+// wait for the stagger. Both attempts run the operation given to Run.
+AnsiConsole.Write(new Rule("[deepskyblue1]HedgedTask<T>.Run: the default factory[/]").LeftJustified());
+regions.EuBehaviour = "fails once";
+var oneOff = Stopwatch.StartNew();
+var oneOffAnswer = await HedgedTask<string>.Run(ct => regions.GetAsync("eu", ct));
+AnsiConsole.MarkupLineInterpolated($"  eu fails once: answered by [deepskyblue1]{oneOffAnswer}[/] on attempt 2 in {oneOff.ElapsedMilliseconds} ms, not after the 2 s stagger");
+AnsiConsole.WriteLine();
+
+// Part 4: a response that says 503 does not throw, so Policy never sees it. ResultIsFailure marks it as a failure: the
+// factory starts the next attempt at once, as after an exception, and disposes the rejected result. When every attempt
+// is rejected, the caller gets the last result, unless a Fallback replaces it.
+AnsiConsole.Write(new Rule("[deepskyblue1]ResultIsFailure and Fallback: hedge a 503 response[/]").LeftJustified());
+string? fallbackSaw = null;
+var statusAware = new HedgedTaskFactory<Reply>(extraAttempts: 1, stagger: TimeSpan.FromMilliseconds(200))
+{
+    ResultIsFailure = reply => reply.Status == 503,
+    OperationForAttempt = attempt => attempt == 1 ? null : ct => regions.GetReplyAsync("us", ct),
+    OnHedgedAttempt = args =>
+    {
+        hedgeCause = args.LastException is { } ex ? ex.GetType().Name : "null";
+        return ValueTask.CompletedTask;
+    },
+
+    // The fallback is the outermost part of the call. AppliesToResult sees the last result when every attempt was
+    // rejected; OnFallback runs before the factory disposes that result, and the action after.
+    Fallback = new(_ => ValueTask.FromResult(new Reply(200, "cache")))
+    {
+        AppliesToResult = reply => reply.Status == 503,
+        OnFallback = args =>
+        {
+            fallbackSaw = $"{args.Result!.Status} from {args.Result.Region}";
+            return ValueTask.CompletedTask;
+        },
+    },
+};
+
+var statusTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+    .AddColumn("eu says").AddColumn("us says").AddColumn("hedge started").AddColumn("OnFallback saw").AddColumn("answered by")
+    .AddColumn(new TableColumn("time").RightAligned());
+foreach (var (eu, us) in new[] { ("200", "200"), ("503", "200"), ("503", "503") })
+{
+    regions.EuBehaviour = eu;
+    regions.UsBehaviour = us;
+    hedgeCause = null;
+    fallbackSaw = null;
+    var watch = Stopwatch.StartNew();
+    var reply = await statusAware.Run(ct => regions.GetReplyAsync("eu", ct));
+    var hedgeStarted = hedgeCause is null ? "no hedge" : "at once, after the 503";
+    statusTable.AddRow(eu, us, hedgeStarted, fallbackSaw ?? "-", $"[deepskyblue1]{reply.Status} from {reply.Region}[/]", $"{watch.ElapsedMilliseconds} ms");
+}
+
+AnsiConsole.Write(statusTable);
+AnsiConsole.MarkupLine("[grey]  A rejected result starts the hedge at once, like a failure; OnHedgedAttempt gets LastException null.[/]");
+AnsiConsole.MarkupLine($"[grey]  Hedging trades extra calls ({hedgedService.Invocations} instead of {plainService.Invocations} in part 1) for a short tail.[/]");
 AnsiConsole.MarkupLine($"[grey]  The operation must be idempotent. Whole demo: {total.Elapsed.TotalSeconds:F1} s.[/]");
 
 static async Task RunAsync(int calls, ProgressTask bar, List<double> times, Func<Task> call)
@@ -230,20 +288,45 @@ public sealed class LongTailService(int seed)
     }
 }
 
-// Two regions. The test sets how "eu" behaves; "us" always answers in 120 ms.
+// A response with a status code, for the ResultIsFailure part. A 503 is an ordinary result, not an exception.
+public sealed record Reply(int Status, string Region);
+
+// Two regions. The test sets how each behaves: "fast", "slow", "fails", "fails once" (the first call only), or "503"
+// (answers with a 503 reply, without throwing). "us" answers in 120 ms, "eu" in 80 ms.
 public sealed class RegionService
 {
-    public string EuBehaviour { get; set; } = "fast";
+    private bool euHasFailed;
+
+    public string EuBehaviour
+    {
+        get;
+        set
+        {
+            field = value;
+            this.euHasFailed = false;
+        }
+    } = "fast";
+
+    public string UsBehaviour { get; set; } = "fast";
 
     public async Task<string> GetAsync(string region, CancellationToken cancellationToken)
     {
-        if (region == "eu" && this.EuBehaviour == "fails")
+        var behaviour = region == "eu" ? this.EuBehaviour : this.UsBehaviour;
+        if (behaviour == "fails" || (behaviour == "fails once" && !this.euHasFailed))
         {
+            this.euHasFailed = true;
             await Task.Delay(50, cancellationToken);
-            throw new HttpRequestException("eu: 503 Service Unavailable");
+            throw new HttpRequestException($"{region}: 503 Service Unavailable");
         }
 
-        await Task.Delay(region == "eu" && this.EuBehaviour == "slow" ? 1500 : region == "eu" ? 80 : 120, cancellationToken);
+        await Task.Delay(behaviour == "slow" ? 1500 : region == "eu" ? 80 : 120, cancellationToken);
         return region;
+    }
+
+    public async Task<Reply> GetReplyAsync(string region, CancellationToken cancellationToken)
+    {
+        var behaviour = region == "eu" ? this.EuBehaviour : this.UsBehaviour;
+        await Task.Delay(region == "eu" ? 80 : 120, cancellationToken);
+        return new Reply(behaviour == "503" ? 503 : 200, region);
     }
 }

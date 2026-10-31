@@ -21,15 +21,15 @@ var demos = new (string Name, string File, string Blurb)[]
     ("Timeouts", "timeouts-and-cancellation.cs", "Attempt timeout, total timeout and a caller's cancellation"),
     ("Result retries", "result-retries.cs", "Retry 503 and 429 responses, obey Retry-After, dispose the rest"),
     ("Fallback", "fallback.cs", "A cached answer when the service is down; your own bugs still surface"),
-    ("Circuit breaker", "circuit-breaker.cs", "One breaker shared by two factories, half-open, isolate and close"),
-    ("Hedging", "hedging.cs", "Race a second attempt against a slow one: p90 from 1.5 s to 300 ms"),
+    ("Circuit breaker", "circuit-breaker.cs", "One breaker shared by two factories, half-open, isolate and close, a policy for 404"),
+    ("Hedging", "hedging.cs", "Race a second attempt against a slow one: p90 from 1.5 s to 300 ms; hedge a 503 result"),
     ("Composed factories", "composed-factories.cs", "A retry factory around a hedged factory, traced attempt by attempt"),
-    ("RetryTask", "retry-task.cs", "StartNew: eight flaky operations retried on the thread pool with live progress"),
+    ("RetryTask", "retry-task.cs", "RetryTask<T>.Run in one line, then StartNew: eight flaky operations on the thread pool"),
     ("Queue consumer", "message-queue-consumer.cs", "ReliableTaskRunner restarts a consumer loop, stops on poison"),
-    ("HTTP client", "http-client-resilience.cs", "One configured factory around HttpClient: 503, hang, 429, 500, 200"),
-    ("HTTP handler", "http-handler.cs", "RetryHandler inside HttpClient: no wrapper, POST opt-in, AddRetryHandler"),
+    ("HTTP client", "http-client-resilience.cs", "One configured factory around HttpClient: 503, hang, 429, 500, a broken body, 200"),
+    ("HTTP handler", "http-handler.cs", "RetryHandler inside HttpClient: POST opt-in, AddRetryHandler, breaker, which exception"),
     ("Database startup", "database-startup.cs", "Wait for a dependency that is starting; fail fast on a wrong password"),
-    ("Testing with fake time", "testing-with-fake-time.cs", "Minutes of back-off tested in milliseconds with a FakeTimeProvider"),
+    ("Testing with fake time", "testing-with-fake-time.cs", "Minutes of back-off and a breaker's window tested in milliseconds with a FakeTimeProvider"),
 };
 
 // Run from the repository root (`dotnet run Examples/menu.cs`) or from within Examples/.

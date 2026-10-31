@@ -2,9 +2,10 @@
 #:package Spectre.Console@0.57.2
 #:package Microsoft.Extensions.TimeProvider.Testing@10.11.0
 
-// A test of retry code must not wait for the retries. RetryTaskFactory takes its delays and timeouts from a
-// TimeProvider, so a test gives it a FakeTimeProvider and moves the clock itself: nine minutes of backoff and a
-// 30-second attempt timeout pass in a few milliseconds. The demo is written the way a test reads.
+// A test of retry code must not wait for the retries. RetryTaskFactory and CircuitBreaker take their delays, timeouts and
+// windows from a TimeProvider, so a test gives them a FakeTimeProvider and moves the clock itself: nine minutes of
+// backoff, a 30-second attempt timeout, and a breaker's 30-second sampling window and 5-second open duration pass in a
+// few milliseconds. The demo is written the way a test reads.
 //
 //   dotnet run Examples/testing-with-fake-time.cs
 
@@ -15,6 +16,7 @@ using Microsoft.Extensions.Time.Testing;
 using Spectre.Console;
 
 using Corvus.Retry;
+using Corvus.Retry.Policies;
 using Corvus.Retry.Strategies;
 
 AnsiConsole.Write(new FigletText("Fake time").Color(Color.SpringGreen3).Centered());
@@ -125,8 +127,76 @@ catch (RetryTimeoutException ex)
 }
 
 AnsiConsole.Write(timeout);
-AnsiConsole.MarkupLine($"[grey]  {time.Elapsed + TimeSpan.FromSeconds(30):m\\:ss} of fake time passed in [white]{wallClock.ElapsedMilliseconds} ms[/] of real time.[/]");
-AnsiConsole.MarkupLine("[grey]  Backoff is randomised, so the delays differ from run to run.[/]");
+AnsiConsole.WriteLine();
+
+// ---- Test 3: a CircuitBreaker's sampling window and open duration without waiting ----
+AnsiConsole.Write(new Rule("[springgreen3]CircuitBreaker without waiting[/]").LeftJustified());
+
+// Arrange. The breaker reads the clock of its TimeProvider; it creates no timer, so the plain FakeTimeProvider is enough.
+// The settings are the defaults for the window (30 s) and the open duration (5 s), with a small call count.
+var time3 = new FakeTimeProvider();
+var changes = new List<string>();
+var breaker = new CircuitBreaker(
+    failureRate: 0.5,
+    minimumCalls: 4,
+    onStateChanged: change =>
+    {
+        changes.Add($"{change.From} → {change.To}");
+        return ValueTask.CompletedTask;
+    },
+    timeProvider: time3);
+var guarded = new RetryTaskFactory(new DoNotRetry(), AnyExceptionPolicy.Default) { CircuitBreaker = breaker, TimeProvider = time3 };
+
+// Act and assert, step by step. Each call is one attempt that fails or succeeds at once.
+var breakerStart = time3.GetUtcNow();
+var circuit = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+    .AddColumn("step").AddColumn(new TableColumn("fake clock").RightAligned()).AddColumn("outcome").AddColumn("State");
+
+async Task Step(string step, params bool[] calls)
+{
+    var outcome = "";
+    foreach (var succeeds in calls)
+    {
+        try
+        {
+            await guarded.Run(ct => succeeds ? Task.CompletedTask : Task.FromException(new HttpRequestException("503 Service Unavailable")));
+            outcome = "[green]✓ the call went through[/]";
+        }
+        catch (HttpRequestException)
+        {
+            outcome = "[red]✗ 503 (counted as a failure)[/]";
+        }
+        catch (CircuitRejectedException ex)
+        {
+            outcome = $"[yellow]CircuitRejectedException, RetryAfter = {ex.RetryAfter?.TotalMilliseconds:F0} ms[/]";
+        }
+    }
+
+    circuit.AddRow(step, $"{time3.GetUtcNow() - breakerStart:m\\:ss\\.fff}", outcome, breaker.State.ToString());
+}
+
+await Step("3 failures: fewer than minimumCalls", false, false, false);
+
+// The sampling window is 30 s: after 31 s, the three failures are too old to count.
+time3.Advance(TimeSpan.FromSeconds(31));
+await Step("Advance(31 s), then 1 failure: the window forgot the first three", false);
+
+// Three more failures make 4 calls in the window, all failures: the circuit opens on the fourth.
+await Step("3 more failures: 4 of 4 in the window, the circuit opens", false, false, false);
+
+// The open duration is 5 s. Just before it ends, a call is still rejected, and RetryAfter says how long remains.
+time3.Advance(TimeSpan.FromSeconds(4.999));
+await Step("Advance(4.999 s), then a call: still open", true);
+
+// One millisecond later, the next call is the test call. It succeeds, so the circuit closes.
+time3.Advance(TimeSpan.FromMilliseconds(1));
+await Step("Advance(1 ms), then a call: the test call succeeds", true);
+
+AnsiConsole.Write(circuit);
+AnsiConsole.MarkupLine($"  OnStateChanged: [white]{string.Join(", ", changes)}[/]");
+AnsiConsole.WriteLine();
+AnsiConsole.MarkupLine($"[grey]  {time.Elapsed + TimeSpan.FromSeconds(30) + (time3.GetUtcNow() - breakerStart):m\\:ss} of fake time passed in [white]{wallClock.ElapsedMilliseconds} ms[/] of real time.[/]");
+AnsiConsole.MarkupLine("[grey]  Backoff is randomised, so the delays in test 1 differ from run to run.[/]");
 
 // A service that fails a set number of times, then succeeds. It answers at once: the only waiting is the factory's.
 public sealed class FlakyService(int failures)

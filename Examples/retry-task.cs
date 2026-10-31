@@ -1,9 +1,11 @@
 #:project ../Solutions/Corvus.Retry/Corvus.Retry.csproj
 #:package Spectre.Console@0.57.2
 
-// RetryTask is Task.Factory.StartNew with retries: it starts a synchronous operation on the thread pool and retries it
-// there, without blocking a thread during the delays. The demo starts eight flaky operations at once, watches them
-// recover, and then shows what the returned task carries when an operation gives up.
+// RetryTask is Task with retries. RetryTask.Run is Task.Run: it runs an asynchronous operation once, with the default
+// settings, and retries it when it throws. StartNew is Task.Factory.StartNew: it starts a synchronous operation on the
+// thread pool and retries it there, without blocking a thread during the delays. The demo shows the one-off Run, then
+// starts eight flaky operations at once with StartNew, watches them recover, and shows what the returned task carries
+// when an operation gives up.
 //
 //   dotnet run Examples/retry-task.cs
 
@@ -16,15 +18,49 @@ using Corvus.Retry.Policies;
 using Corvus.Retry.Strategies;
 
 AnsiConsole.Write(new FigletText("RetryTask").Color(Color.Orange1).Centered());
-AnsiConsole.Write(new Rule("[orange1]Task.Factory.StartNew, with retries[/]"));
+AnsiConsole.Write(new Rule("[orange1]Task.Run and Task.Factory.StartNew, with retries[/]"));
 AnsiConsole.WriteLine();
 
 AnsiConsole.Write(new Panel(
-        "Eight reports are built by a [white]synchronous[/] client that fails now and then: from [white]0 to 4[/] " +
-        "times each. RetryTask runs all eight at once on the thread pool and retries each one, with " +
-        "[white]5 retries, 150 ms apart[/]. The caller only awaits the tasks.")
+        "A report client fails now and then. [white]RetryTask<T>.Run[/] retries one asynchronous call with the " +
+        "default settings, in one line. Eight reports are then built by a [white]synchronous[/] client that fails from " +
+        "[white]0 to 4[/] times each: [white]StartNew[/] runs all eight at once on the thread pool and retries each one, " +
+        "with [white]5 retries, 150 ms apart[/]. The caller only awaits the tasks.")
     .Header("[white]The problem[/]").Border(BoxBorder.Rounded).BorderColor(Color.Grey));
 AnsiConsole.WriteLine();
+
+// ---- The one-off form: RetryTask<T>.Run ----
+AnsiConsole.Write(new Rule("[orange1]RetryTask<T>.Run: one asynchronous call, the default settings[/]").LeftJustified());
+
+// RetryTask.Run and RetryTask<T>.Run use the default factory: new Count() (5 tries, no delay) and AnyExceptionPolicy.
+// Compare Retriable.RetryAsync, which has the same signature and makes 10 tries. The operation gets a token, and the
+// first try runs on the caller's thread until its first await, as the operation would without retries.
+var summary = new FlakyClient("summary", failures: 2, workMs: 0);
+var oneOff = Stopwatch.StartNew();
+string headline = await RetryTask<string>.Run(ct => summary.BuildAsync(ct));
+AnsiConsole.MarkupLineInterpolated($"  RetryTask<string>.Run: [white]{headline}[/] after [white]{summary.Attempts}[/] attempts, {oneOff.ElapsedMilliseconds} ms");
+
+// The non-generic RetryTask.Run is for an operation that returns a Task with no result.
+var audit = new FlakyClient("audit", failures: 1, workMs: 0);
+await RetryTask.Run(async ct => { await audit.BuildAsync(ct); });
+AnsiConsole.MarkupLineInterpolated($"  RetryTask.Run:         [white]audit written[/] after [white]{audit.Attempts}[/] attempts");
+
+// When the 5 tries run out, Run throws the exception of the last try itself, not an AggregateException.
+var offline = new FlakyClient("offline", failures: int.MaxValue, workMs: 0);
+try
+{
+    await RetryTask<string>.Run(ct => offline.BuildAsync(ct));
+}
+catch (TransientException ex)
+{
+    AnsiConsole.MarkupLineInterpolated($"  Gave up:               [red]{ex.GetType().Name}[/] after [white]{offline.Attempts}[/] attempts: {ex.Message}");
+}
+
+AnsiConsole.MarkupLine("[grey]  For other settings, make a RetryTaskFactory<T> and call its Run: see timeouts-and-cancellation.cs.[/]");
+AnsiConsole.WriteLine();
+
+// ---- StartNew: a synchronous operation on the thread pool ----
+AnsiConsole.Write(new Rule("[orange1]StartNew: eight synchronous operations on the thread pool[/]").LeftJustified());
 
 // Constant: the same 150 ms before each retry, at most 5 retries (6 attempts), so every operation here recovers.
 var strategy = RetryStrategies.Constant(retries: 5, delay: TimeSpan.FromMilliseconds(150));
@@ -166,6 +202,13 @@ public sealed class FlakyClient(string name, int failures, int workMs = 120)
 
         this.OnAttempt?.Invoke(true);
         return this.Result = $"{name}: {attempt * 37 % 90 + 10} pages";
+    }
+
+    // The asynchronous form of the same client, for Run. The token is what a real client would pass to its I/O.
+    public async Task<string> BuildAsync(CancellationToken cancellationToken)
+    {
+        await Task.Delay(10, cancellationToken);
+        return this.Build();
     }
 }
 

@@ -3,7 +3,8 @@
 
 // Shows one CircuitBreaker shared by two factories that call the same failing service. When failures through either
 // factory cross the threshold, the circuit opens for both: calls fail fast instead of queueing up behind a dead
-// dependency, and one test call decides when the service is back.
+// dependency, and one test call decides when the service is back. The breaker's policy decides which exceptions are
+// failures: a 404 is the caller's mistake, not the service's, so it does not count.
 //
 //   dotnet run Examples/circuit-breaker.cs
 
@@ -38,6 +39,11 @@ var breaker = new CircuitBreaker(
     minimumCalls: 4,
     samplingWindow: TimeSpan.FromSeconds(10),
     openDuration: TimeSpan.FromSeconds(1),
+
+    // The policy selects the exceptions that are failures. TransientHttp accepts a 5xx, a 408 or a 429, a connection
+    // error and an attempt timeout; it refuses a 404, so a lookup of a missing item counts as a successful call. The
+    // default, AnyExceptionPolicy, would open the circuit for a run of 404s.
+    policy: RetryPolicies.TransientHttp,
     onStateChanged: change =>
     {
         changes.Add((clock.Elapsed, change));
@@ -96,6 +102,15 @@ await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("Driving the i
     await Call("A", factoryA);
     breaker.Close();
     await Call("B", factoryB);
+
+    // Close() also cleared the counts. Four 404s in a row are four calls at a 100 % exception rate, but the breaker's
+    // policy refuses a 404, so each one counts as a success and the circuit stays closed.
+    Phase("A 404 is not a failure: the policy refuses it");
+    service.IsMissing = true;
+    foreach (var (name, factory) in new[] { ("A", factoryA), ("B", factoryB), ("A", factoryA), ("B", factoryB) })
+    {
+        await Call(name, factory);
+    }
 });
 
 var log = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).Title("[hotpink]Call log[/]")
@@ -126,6 +141,7 @@ AnsiConsole.Write(timeline);
 AnsiConsole.WriteLine();
 AnsiConsole.MarkupLine("[grey]  RetryAfter counts down to the end of the break, and is null while half-open.[/]");
 AnsiConsole.MarkupLine("[grey]  Open → HalfOpen happens on the first call after the break, not when it ends.[/]");
+AnsiConsole.MarkupLine("[grey]  The 404s are calls that succeeded, as far as the breaker's policy is concerned.[/]");
 
 // Calls the service through one factory and records what happened. The row is added when the call starts, so that
 // overlapping calls are listed in the order in which they started.
@@ -152,9 +168,9 @@ async Task Call(string name, RetryTaskFactory factory, string note = "")
         retryAfter = ex.RetryAfter is { } wait ? $"{wait.TotalMilliseconds:F0} ms" : "null";
         outcome = "[red]CircuitRejectedException[/]";
     }
-    catch (HttpRequestException)
+    catch (HttpRequestException ex)
     {
-        outcome = "[yellow]failed: 503[/]";
+        outcome = $"[yellow]failed: {(int)ex.StatusCode.GetValueOrDefault()}[/]";
     }
 
     calls[index] = new(number, at, name, outcome, retryAfter, breaker.State);
@@ -176,9 +192,12 @@ static string Coloured(CircuitState state) => state switch
 sealed record CallRecord(int Number, TimeSpan At, string Via, string Outcome, string RetryAfter, CircuitState StateAfter);
 
 // A simulated inventory service that can go down and come back, with no network. It honours the cancellation token.
+// With IsMissing set, the item is not in the catalogue: the service answers 404, which the client throws.
 sealed class InventoryService
 {
     public bool IsDown { get; set; }
+
+    public bool IsMissing { get; set; }
 
     public int LatencyMs { get; set; } = 20;
 
@@ -188,6 +207,11 @@ sealed class InventoryService
         if (this.IsDown)
         {
             throw new HttpRequestException("503 Service Unavailable", null, HttpStatusCode.ServiceUnavailable);
+        }
+
+        if (this.IsMissing)
+        {
+            throw new HttpRequestException("404 Not Found", null, HttpStatusCode.NotFound);
         }
 
         return 42;

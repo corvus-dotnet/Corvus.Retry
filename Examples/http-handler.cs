@@ -6,6 +6,8 @@
 // RetryHandler puts a RetryTaskFactory<HttpResponseMessage> inside HttpClient, as a DelegatingHandler, so the call site
 // is a plain HttpClient call with no wrapper. A GET is retried, a POST gets one attempt unless you opt it in, and
 // AddRetryHandler (in Corvus.Retry.Extensions.Http) adds the same handler to a client from IHttpClientFactory. The
+// demo then shows the limits of a handler: a body that breaks after the headers is not retried; a circuit breaker and a
+// fallback inside the client; and which exception the caller sees for each kind of timeout and cancellation. The
 // service is a scripted HttpMessageHandler, so the demo needs no network.
 //
 //   dotnet run Examples/http-handler.cs
@@ -37,7 +39,8 @@ AnsiConsole.WriteLine();
 var log = new List<string>();
 var clock = new Stopwatch();
 
-// Make the factory once and share it: it is immutable, and every handler that uses it shares its circuit breaker.
+// Make the factory once and share it: it is immutable, and every handler that uses it shares its settings (and its
+// circuit breaker, when it has one: see section 6).
 var retries = new RetryTaskFactory<HttpResponseMessage>(
     // The server's Retry-After header wins when it sends one; otherwise exponential backoff from 200 ms.
     RetryStrategies.RetryAfter(RetryStrategies.Exponential(retries: 4, baseDelay: TimeSpan.FromMilliseconds(200))),
@@ -102,15 +105,127 @@ await using (ServiceProvider provider = services.BuildServiceProvider())
     Show("4. services.AddHttpClient(\"catalogue\").AddRetryHandler(retries)", factoryService, body, Color.Green);
 }
 
+// 5. The handler returns the response when the headers arrive. HttpClient reads the body after that, outside the
+// handler, so a body that breaks is not retried: the caller gets the HttpRequestException that HttpClient makes from the
+// IOException, and the service saw one request. To retry this, wrap the call: Examples/http-client-resilience.cs does.
+var broken = new ScriptedHandler(Step.BrokenBody(), Step.Json("""{ "id": 42, "name": "Raven feeder", "stock": 7 }"""));
+using (var client = new HttpClient(new RetryHandler(retries, broken)) { BaseAddress = new Uri("https://catalogue.example/") })
+{
+    string outcome;
+    try
+    {
+        outcome = await RunAsync("GET /products/42", () => client.GetStringAsync("products/42"));
+    }
+    catch (HttpRequestException ex)
+    {
+        outcome = $"{ex.GetType().Name}: {ex.Message} (inner: {ex.InnerException?.GetType().Name})";
+    }
+
+    Show("5. GET /products/42, the body breaks after the headers: not retried", broken, outcome, Color.Orange1);
+}
+
+// 6. A circuit breaker and a fallback inside the client. The copy constructor adds them to the shared factory. The
+// small minimumCalls lets the demo open the circuit within one call; a real service uses the defaults.
+var breaker = new CircuitBreaker(
+    failureRate: 0.5,
+    minimumCalls: 2,
+    openDuration: TimeSpan.FromSeconds(5),
+    onStateChanged: change =>
+    {
+        log.Add($"  [orange1]circuit {change.From} → {change.To}[/] at {clock.ElapsedMilliseconds} ms");
+        return ValueTask.CompletedTask;
+    });
+var guarded = new RetryTaskFactory<HttpResponseMessage>(retries)
+{
+    CircuitBreaker = breaker,
+    Fallback = new(_ => ValueTask.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new StringContent("""{ "id": 42, "name": "Raven feeder", "stock": null, "cached": "10 min ago" }"""),
+    }))
+    {
+        // The cache answers an open circuit, and a response that is still transient when the retries run out. Any
+        // other exception, such as a timeout, still reaches the caller: section 7 shows which.
+        Policy = RetryPolicies.For<CircuitRejectedException>(),
+        AppliesToResult = RetryPolicies.IsTransientHttpResponse,
+        OnFallback = args =>
+        {
+            log.Add($"  [orange1]fallback[/] after {(args.Exception is { } ex ? ex.GetType().Name : $"a {(int?)args.Result?.StatusCode} response")} at {clock.ElapsedMilliseconds} ms");
+            return ValueTask.CompletedTask;
+        },
+    },
+};
+var down = new ScriptedHandler(Step.Status(HttpStatusCode.ServiceUnavailable));
+using (var client = new HttpClient(new RetryHandler(guarded, down)) { BaseAddress = new Uri("https://catalogue.example/") })
+{
+    // Call 1: 503, 503, and the circuit opens; the third attempt is rejected, TransientHttp does not retry a
+    // CircuitRejectedException, and the fallback answers. Call 2: rejected at once, no request, the fallback answers.
+    for (var call = 1; call <= 2; call++)
+    {
+        string body = await RunAsync("GET /products/42", () => client.GetStringAsync("products/42"));
+        Show($"6{(call == 1 ? "a" : "b")}. GET /products/42 while the service is down, call {call}: breaker and fallback", down, body, Color.Orange1);
+    }
+}
+
+// 7. Which exception the caller sees. A factory with two attempts of 300 ms each, and no fallback.
+var timed = new RetryTaskFactory<HttpResponseMessage>(RetryStrategies.Constant(retries: 1, delay: TimeSpan.FromMilliseconds(100)), RetryPolicies.TransientHttp)
+{
+    AttemptTimeout = TimeSpan.FromMilliseconds(300),
+};
+var exceptions = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
+    .AddColumn("Cause").AddColumn("Exception").AddColumn("Detail").AddColumn(new TableColumn("Requests").RightAligned()).AddColumn(new TableColumn("Time").RightAligned());
+
+// a. The factory's attempt timeout, on both attempts. The handler throws RetryTimeoutException, and HttpClient passes it on.
+var hanging = new ScriptedHandler(Step.Hang());
+using (var client = new HttpClient(new RetryHandler(timed, hanging)) { BaseAddress = new Uri("https://catalogue.example/") })
+{
+    var watch = Stopwatch.StartNew();
+    var (type, detail) = await CatchAsync(() => client.GetAsync("products/42"));
+    exceptions.AddRow("AttemptTimeout 300 ms, twice", type, detail, $"{hanging.Calls.Count}", $"{watch.ElapsedMilliseconds} ms");
+}
+
+// b. HttpClient.Timeout sits outside the handler: it cancels the attempts and the delays together. HttpClient throws
+// TaskCanceledException with an inner TimeoutException. The handler saw its caller cancel, so it did not retry, and a
+// fallback would not have applied.
+var hangingToo = new ScriptedHandler(Step.Hang());
+using (var client = new HttpClient(new RetryHandler(timed, hangingToo)) { BaseAddress = new Uri("https://catalogue.example/"), Timeout = TimeSpan.FromMilliseconds(500) })
+{
+    var watch = Stopwatch.StartNew();
+    var (type, detail) = await CatchAsync(() => client.GetAsync("products/42"));
+    exceptions.AddRow("HttpClient.Timeout 500 ms", type, detail, $"{hangingToo.Calls.Count}", $"{watch.ElapsedMilliseconds} ms");
+}
+
+// c. The caller cancels: TaskCanceledException that carries the caller's token. Never retried.
+var hangingStill = new ScriptedHandler(Step.Hang());
+using (var client = new HttpClient(new RetryHandler(timed, hangingStill)) { BaseAddress = new Uri("https://catalogue.example/") })
+{
+    using var caller = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+    var watch = Stopwatch.StartNew();
+    string type = "none", detail = "returned";
+    try
+    {
+        await client.GetAsync("products/42", caller.Token);
+    }
+    catch (OperationCanceledException ex)
+    {
+        (type, detail) = (ex.GetType().Name, $"carries the caller's token: {ex.CancellationToken == caller.Token}");
+    }
+
+    exceptions.AddRow("The caller cancels at 150 ms", type, detail, $"{hangingStill.Calls.Count}", $"{watch.ElapsedMilliseconds} ms");
+}
+
+AnsiConsole.Write(new Rule("[deepskyblue1]7. Which exception the caller sees[/]").LeftJustified());
+AnsiConsole.Write(exceptions);
+AnsiConsole.WriteLine();
+
 AnsiConsole.Write(new Panel(
         "[white]Wrap the call instead[/] ([white]factory.Run(ct => client.GetStringAsync(uri, ct))[/]) when:\n" +
         "• A failure while the body downloads must be retried. The handler returns when the headers arrive, and " +
-        "HttpClient reads a buffered body after that, so a broken body is not retried.\n" +
+        "HttpClient reads a buffered body after that, so a broken body is not retried (section 5).\n" +
         "• The attempt timeout must cover the body too. AttemptTimeout ends when the handler returns.\n" +
         "• You want to hedge. Attempts at the same time cannot share one HttpRequestMessage.\n" +
         "• You call the synchronous HttpClient.Send. The handler throws NotSupportedException.\n\n" +
         "[white]HttpClient.Timeout[/] sits outside the handler: it limits all the attempts and delays, and throws a " +
-        "TaskCanceledException. Keep the factory's TotalTimeout shorter.")
+        "TaskCanceledException (section 7). Keep the factory's TotalTimeout shorter.")
     .Header("[white]When to wrap instead[/]").Border(BoxBorder.Rounded).BorderColor(Color.Grey));
 
 async Task<T> RunAsync<T>(string status, Func<Task<T>> call)
@@ -118,6 +233,24 @@ async Task<T> RunAsync<T>(string status, Func<Task<T>> call)
     log.Clear();
     clock.Restart();
     return await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync(status, _ => call());
+}
+
+// Runs one call and reports the exception that reached the caller.
+static async Task<(string Type, string Detail)> CatchAsync(Func<Task<HttpResponseMessage>> call)
+{
+    try
+    {
+        using var response = await call();
+        return ("none", $"{(int)response.StatusCode}");
+    }
+    catch (RetryTimeoutException ex)
+    {
+        return (ex.GetType().Name, $"Timeout = {ex.Timeout.TotalMilliseconds:F0} ms");
+    }
+    catch (OperationCanceledException ex)
+    {
+        return (ex.GetType().Name, $"inner: {ex.InnerException?.GetType().Name ?? "none"}");
+    }
 }
 
 void Show(string title, ScriptedHandler handler, string result, Color colour)
@@ -133,19 +266,47 @@ void Show(string title, ScriptedHandler handler, string result, Color colour)
     AnsiConsole.WriteLine();
 }
 
-// One scripted answer: a description for the log, and the response that the handler gives.
-internal sealed record Step(string Description, Func<HttpResponseMessage> Respond)
+// One scripted answer: a description for the log, and the response (or the hang) that the handler gives.
+internal sealed record Step(string Description, Func<CancellationToken, Task<HttpResponseMessage>> Respond)
 {
-    public static Step Status(HttpStatusCode code) => new($"{(int)code}", () => new HttpResponseMessage(code));
+    public static Step Status(HttpStatusCode code) => new($"{(int)code}", _ => Task.FromResult(new HttpResponseMessage(code)));
 
     public static Step TooManyRequests(TimeSpan retryAfter) =>
-        new($"429 (Retry-After: {retryAfter.TotalSeconds:F0})", () => new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+        new($"429 (Retry-After: {retryAfter.TotalSeconds:F0})", _ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.TooManyRequests)
         {
             Headers = { RetryAfter = new RetryConditionHeaderValue(retryAfter) },
-        });
+        }));
 
     public static Step Json(string json) =>
-        new("200", () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) });
+        new("200", _ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) }));
+
+    // The headers say 200, and the body fails while HttpClient reads it, after the handler has returned.
+    public static Step BrokenBody() =>
+        new("200, then the body broke", _ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new BrokenContent() }));
+
+    // Waits without answering until the token is cancelled, as a connection that hangs would.
+    public static Step Hang() =>
+        new("hung", async ct =>
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+}
+
+// A body that breaks part-way through. HttpClient wraps the IOException in an HttpRequestException.
+internal sealed class BrokenContent : HttpContent
+{
+    protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+    {
+        stream.Write("""{ "id": 42, "na"""u8);
+        throw new IOException("The connection was reset while the body was being read.");
+    }
+
+    protected override bool TryComputeLength(out long length)
+    {
+        length = 0;
+        return false;
+    }
 }
 
 // An HttpMessageHandler that plays a script, one step for each request. The last step repeats.
@@ -157,6 +318,6 @@ internal sealed class ScriptedHandler(params Step[] steps) : HttpMessageHandler
     {
         var step = steps[Math.Min(this.Calls.Count, steps.Length - 1)];
         this.Calls.Add($"{request.Method} {step.Description}");
-        return Task.FromResult(step.Respond());
+        return step.Respond(cancellationToken);
     }
 }
