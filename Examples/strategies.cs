@@ -71,7 +71,7 @@ foreach (var row in rows)
     }
 
     var delays = Sequence(row.Strategy, row.Results);
-    var cells = new List<string> { Markup.Escape(row.Name) + (row.Random ? " [grey]*[/]" : ""), $"[white]{delays.Count + 1}[/]" };
+    List<string> cells = new() { Markup.Escape(row.Name) + (row.Random ? " [grey]*[/]" : ""), $"[white]{delays.Count + 1}[/]" };
     cells.AddRange(delays.Take(Columns).Select(Format));
     if (cells.Count < Columns + 2)
     {
@@ -106,9 +106,9 @@ AnsiConsole.MarkupLine($"[grey]  Total wait: {plain.Sum(d => d.TotalSeconds):0.0
 // Asks the strategy for each delay in turn, as the library would after each failed attempt, until it says stop.
 static List<TimeSpan> Sequence(IRetryStrategy strategy, HttpResponseMessage[]? results = null)
 {
-    var delays = new List<TimeSpan>();
+    List<TimeSpan> delays = new();
     var previous = TimeSpan.Zero;
-    var failure = new HttpRequestException("simulated failure");
+    HttpRequestException failure = new("simulated failure");
     for (var attempt = 1; attempt <= 20; attempt++)
     {
         object? result = results is not null && attempt <= results.Length ? results[attempt - 1] : null;
@@ -130,7 +130,7 @@ static string Format(TimeSpan delay) => delay == TimeSpan.Zero
 
 static HttpResponseMessage Response(HttpStatusCode status, TimeSpan? retryAfter)
 {
-    var response = new HttpResponseMessage(status);
+    HttpResponseMessage response = new(status);
     if (retryAfter is TimeSpan delta)
     {
         response.Headers.RetryAfter = new(delta);

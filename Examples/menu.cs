@@ -134,7 +134,7 @@ return 0;
 // output appears in place, styled or plain as the console allows.
 static int Run(string dir, string file)
 {
-    var start = new ProcessStartInfo("dotnet") { UseShellExecute = false };
+    ProcessStartInfo start = new("dotnet") { UseShellExecute = false };
     start.ArgumentList.Add("run");
     start.ArgumentList.Add(Path.Combine(dir, file));
 

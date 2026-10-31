@@ -30,13 +30,13 @@ AnsiConsole.WriteLine();
 const int Calls = 20;
 
 // Without hedging: the slow call does not fail, so a retry would not help. Make it one attempt.
-var plain = new RetryTaskFactory { Strategy = new DoNotRetry() };
+RetryTaskFactory plain = new() { Strategy = new DoNotRetry() };
 
 // With hedging: a stagger of 200 ms is twice the usual latency, so a healthy call never starts a hedge, but a slow one
 // does long before its 1.5 s are up. extraAttempts: 2 permits a third attempt if the second one is also slow.
-var hedgingEvents = new ConcurrentQueue<(int Call, HedgedAttemptEventArgs Args)>();
+ConcurrentQueue<(int Call, HedgedAttemptEventArgs Args)> hedgingEvents = new();
 int currentCall = 0;
-var hedged = new HedgedTaskFactory(extraAttempts: 2, stagger: TimeSpan.FromMilliseconds(200))
+HedgedTaskFactory hedged = new(extraAttempts: 2, stagger: TimeSpan.FromMilliseconds(200))
 {
     OnHedgedAttempt = args =>
     {
@@ -46,11 +46,11 @@ var hedged = new HedgedTaskFactory(extraAttempts: 2, stagger: TimeSpan.FromMilli
 };
 
 // The same seed for both runs, so both see the same long tail and the output repeats from run to run.
-var plainService = new LongTailService(seed: 29);
-var hedgedService = new LongTailService(seed: 29);
-var plainTimes = new List<double>();
-var hedgedTimes = new List<double>();
-var hedgedCalls = new List<CallLog>();
+LongTailService plainService = new(seed: 29);
+LongTailService hedgedService = new(seed: 29);
+List<double> plainTimes = new();
+List<double> hedgedTimes = new();
+List<CallLog> hedgedCalls = new();
 
 var total = Stopwatch.StartNew();
 await AnsiConsole.Progress()
@@ -64,12 +64,12 @@ await AnsiConsole.Progress()
         await Task.WhenAll(
             RunAsync(Calls, plainBar, plainTimes, async () =>
             {
-                var log = new CallLog();
+                CallLog log = new();
                 await plain.Run(ct => plainService.GetAsync(log, ct));
             }),
             RunAsync(Calls, hedgedBar, hedgedTimes, async () =>
             {
-                var log = new CallLog();
+                CallLog log = new();
                 hedgedCalls.Add(log);
                 Volatile.Write(ref currentCall, hedgedCalls.Count);
                 await hedged.Run(ct => hedgedService.GetAsync(log, ct));
@@ -92,7 +92,7 @@ var slowIndex = hedgedCalls.FindIndex(c => c.Attempts is [{ Slow: true }, { Outc
 if (slowIndex >= 0)
 {
     var call = hedgedCalls[slowIndex];
-    var tree = new Tree($"[deepskyblue1]Hedged call {slowIndex + 1}[/] answered in {call.Attempts.Min(a => a.EndedAtMs ?? double.MaxValue):F0} ms");
+    Tree tree = new($"[deepskyblue1]Hedged call {slowIndex + 1}[/] answered in {call.Attempts.Min(a => a.EndedAtMs ?? double.MaxValue):F0} ms");
     foreach (var attempt in call.Attempts)
     {
         var colour = attempt.Outcome == "won" ? "green" : attempt.Outcome == "cancelled" ? "grey" : "yellow";
@@ -113,9 +113,9 @@ if (slowIndex >= 0)
 // Part 2: OperationForAttempt sends each hedged attempt somewhere else. Attempt 1 uses the operation given to Run
 // (the "eu" region, because the function returns null for it); attempt 2 goes to "us".
 AnsiConsole.Write(new Rule("[deepskyblue1]OperationForAttempt: hedge to another region[/]").LeftJustified());
-var regions = new RegionService();
+RegionService regions = new();
 string? hedgeCause = null;
-var regional = new HedgedTaskFactory<string>(extraAttempts: 1, stagger: TimeSpan.FromMilliseconds(200))
+HedgedTaskFactory<string> regional = new(extraAttempts: 1, stagger: TimeSpan.FromMilliseconds(200))
 {
     OnHedgedAttempt = args =>
     {
@@ -156,7 +156,7 @@ AnsiConsole.WriteLine();
 // is rejected, the caller gets the last result, unless a Fallback replaces it.
 AnsiConsole.Write(new Rule("[deepskyblue1]ResultIsFailure and Fallback: hedge a 503 response[/]").LeftJustified());
 string? fallbackSaw = null;
-var statusAware = new HedgedTaskFactory<Reply>(extraAttempts: 1, stagger: TimeSpan.FromMilliseconds(200))
+HedgedTaskFactory<Reply> statusAware = new(extraAttempts: 1, stagger: TimeSpan.FromMilliseconds(200))
 {
     ResultIsFailure = reply => reply.Status == 503,
     OperationForAttempt = attempt => attempt == 1 ? null : ct => regions.GetReplyAsync("us", ct),
@@ -327,6 +327,6 @@ public sealed class RegionService
     {
         var behaviour = region == "eu" ? this.EuBehaviour : this.UsBehaviour;
         await Task.Delay(region == "eu" ? 80 : 120, cancellationToken);
-        return new Reply(behaviour == "503" ? 503 : 200, region);
+        return new(behaviour == "503" ? 503 : 200, region);
     }
 }

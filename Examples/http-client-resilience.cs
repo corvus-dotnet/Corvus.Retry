@@ -34,16 +34,16 @@ AnsiConsole.Write(new Panel(
     .Header("[white]The problem[/]").Border(BoxBorder.Rounded).BorderColor(Color.Grey));
 AnsiConsole.WriteLine();
 
-var log = new List<Row>();
-var circuitChanges = new List<string>();
-var clock = new Stopwatch();
+List<Row> log = new();
+List<string> circuitChanges = new();
+Stopwatch clock = new();
 var fellBack = false;
 var run = 0;
 StatusContext? spinner = null;
 
 // One breaker for the service, shared by every request. It opens when three calls in four fail, but only after it
 // has seen eight calls, so that one bad request does not cut the service off.
-var breaker = new CircuitBreaker(
+CircuitBreaker breaker = new(
     failureRate: 0.75,
     minimumCalls: 8,
     openDuration: TimeSpan.FromSeconds(5),
@@ -54,7 +54,7 @@ var breaker = new CircuitBreaker(
     });
 
 // Build the factory once and keep it: it is immutable, and many requests can use it at the same time.
-var factory = new RetryTaskFactory<HttpResponseMessage>(
+RetryTaskFactory<HttpResponseMessage> factory = new(
 
     // The server's Retry-After header wins when it sends one. Otherwise exponential backoff with jitter, so that many
     // clients do not retry in step; maxDelay caps the growth so that the fifth retry does not wait 3.2 s or more.
@@ -132,7 +132,7 @@ async Task SendAsync(string title, ScriptedHandler handler)
     fellBack = false;
     run++;
     clock.Restart();
-    using var client = new HttpClient(handler) { BaseAddress = new Uri("https://catalogue.example/") };
+    using HttpClient client = new(handler) { BaseAddress = new("https://catalogue.example/") };
 
     using var response = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync(
         "GET /products/42",
@@ -198,7 +198,7 @@ internal sealed record Step(string Description, Func<CancellationToken, Task<Htt
     public static Step TooManyRequests(TimeSpan retryAfter) =>
         new($"answered 429, Retry-After: {retryAfter.TotalSeconds:F0}", _ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.TooManyRequests)
         {
-            Headers = { RetryAfter = new RetryConditionHeaderValue(retryAfter) },
+            Headers = { RetryAfter = new(retryAfter) },
         }));
 
     public static Step Json(string json) =>
@@ -213,7 +213,7 @@ internal sealed record Step(string Description, Func<CancellationToken, Task<Htt
         new($"hung for {duration.TotalSeconds:F0} s", async ct =>
         {
             await Task.Delay(duration, ct);
-            return new HttpResponseMessage(HttpStatusCode.OK);
+            return new(HttpStatusCode.OK);
         });
 }
 

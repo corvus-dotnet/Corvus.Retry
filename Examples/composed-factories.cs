@@ -27,14 +27,14 @@ AnsiConsole.Write(new Panel(
     .Header("[white]The problem[/]").Border(BoxBorder.Rounded).BorderColor(Color.Grey));
 AnsiConsole.WriteLine();
 
-var service = new ScriptedService();
-var trace = new Trace();
+ScriptedService service = new();
+Trace trace = new();
 
 // The circuit breaker sits on the INNER factory, so it counts every request that reaches the service, hedged ones
 // included. Do not also give the same instance to the outer factory: when the circuit is half-open, the outer attempt
 // would take the one test call, and the inner attempt inside it would then be rejected, so the circuit could never
 // close again. minimumCalls is low so that the demo opens it in a few calls.
-var breaker = new CircuitBreaker(
+CircuitBreaker breaker = new(
     failureRate: 0.5,
     minimumCalls: 6,
     openDuration: TimeSpan.FromSeconds(30),
@@ -48,7 +48,7 @@ var breaker = new CircuitBreaker(
 // INNER: hedging. After 150 ms with no answer, or at once after a failure, start a second attempt. Its policy is
 // TransientHttp, so a CircuitRejectedException is not a "failure to hedge": it leaves the inner factory immediately.
 // Each hedged attempt has its own 1 s AttemptTimeout.
-var inner = new HedgedTaskFactory<string>(extraAttempts: 1, stagger: TimeSpan.FromMilliseconds(150))
+HedgedTaskFactory<string> inner = new(extraAttempts: 1, stagger: TimeSpan.FromMilliseconds(150))
 {
     Policy = RetryPolicies.TransientHttp,
     OnHedgedAttempt = args =>
@@ -65,7 +65,7 @@ var inner = new HedgedTaskFactory<string>(extraAttempts: 1, stagger: TimeSpan.Fr
 // retries the 503 that the inner factory throws when both hedged attempts fail, but not a CircuitRejectedException:
 // retrying into an open circuit is pointless. The 3 s AttemptTimeout bounds one whole hedged call. The fallback
 // answers with a cached value for anything that gets out of the retries.
-var outer = new RetryTaskFactory<string>(
+RetryTaskFactory<string> outer = new(
     RetryStrategies.Exponential(retries: 2, baseDelay: TimeSpan.FromMilliseconds(200)),
     RetryPolicies.TransientHttp)
 {
@@ -87,7 +87,7 @@ var outer = new RetryTaskFactory<string>(
     },
 };
 
-var root = new Tree("[mediumpurple]outer.Run(ct => inner.Run(service.GetPriceAsync, ct))[/]");
+Tree root = new("[mediumpurple]outer.Run(ct => inner.Run(service.GetPriceAsync, ct))[/]");
 foreach (var (title, mode) in new[]
 {
     ("Call 1: the service has a bad moment", ServiceMode.FailTwiceThenRecover),

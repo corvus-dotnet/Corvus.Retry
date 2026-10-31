@@ -46,8 +46,8 @@ AnsiConsole.Write(policies);
 AnsiConsole.WriteLine();
 
 // 2. The database refuses five connections, and then accepts one.
-var attempts = new List<(int Attempt, string Error, TimeSpan Delay, long AtMs)>();
-var database = new StartingDatabase(refusals: 5);
+List<(int Attempt, string Error, TimeSpan Delay, long AtMs)> attempts = new();
+StartingDatabase database = new(refusals: 5);
 var clock = Stopwatch.StartNew();
 
 var connection = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("connecting to db:5432", ctx =>
@@ -78,7 +78,7 @@ AnsiConsole.MarkupLine($"  Waited [springgreen3]{waited.TotalMilliseconds:F0} ms
 AnsiConsole.WriteLine();
 
 // 3. A wrong password: the same wrapper exception, but no SocketException inside, so the policy refuses at once.
-var misconfigured = new StartingDatabase(refusals: 0, wrongPassword: true);
+StartingDatabase misconfigured = new(refusals: 0, wrongPassword: true);
 clock.Restart();
 try
 {
@@ -131,6 +131,6 @@ internal sealed class StartingDatabase(int refusals, bool wrongPassword = false)
             throw Refused("db:5432");
         }
 
-        return new Connection("db:5432");
+        return new("db:5432");
     }
 }

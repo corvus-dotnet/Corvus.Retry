@@ -35,10 +35,10 @@ var wallClock = Stopwatch.StartNew();
 // ---- Test 1: the call succeeds on the sixth attempt, after five Backoff delays ----
 
 // Arrange. MaxBackoff is raised from 30 s to 5 min so the delays really do add up to minutes.
-var time = new TimerAwareFakeTimeProvider();
-var service = new FlakyService(failures: 5);
-var delays = new List<TimeSpan>();
-var factory = new RetryTaskFactory
+TimerAwareFakeTimeProvider time = new();
+FlakyService service = new(failures: 5);
+List<TimeSpan> delays = new();
+RetryTaskFactory factory = new()
 {
     Strategy = new Backoff(maxTries: 6, deltaBackoff: TimeSpan.FromSeconds(10)) { MaxBackoff = TimeSpan.FromMinutes(5) },
     TimeProvider = time,
@@ -97,8 +97,8 @@ AnsiConsole.WriteLine();
 AnsiConsole.Write(new Rule("[springgreen3]AttemptTimeout without waiting[/]").LeftJustified());
 
 // Arrange. One attempt (no retries) with a 30 s limit; the operation never answers unless it is cancelled.
-var time2 = new TimerAwareFakeTimeProvider();
-var timeoutFactory = new RetryTaskFactory
+TimerAwareFakeTimeProvider time2 = new();
+RetryTaskFactory timeoutFactory = new()
 {
     Strategy = RetryStrategies.Constant(retries: 0, delay: TimeSpan.Zero),
     AttemptTimeout = TimeSpan.FromSeconds(30),
@@ -134,9 +134,9 @@ AnsiConsole.Write(new Rule("[springgreen3]CircuitBreaker without waiting[/]").Le
 
 // Arrange. The breaker reads the clock of its TimeProvider; it creates no timer, so the plain FakeTimeProvider is enough.
 // The settings are the defaults for the window (30 s) and the open duration (5 s), with a small call count.
-var time3 = new FakeTimeProvider();
-var changes = new List<string>();
-var breaker = new CircuitBreaker(
+FakeTimeProvider time3 = new();
+List<string> changes = new();
+CircuitBreaker breaker = new(
     failureRate: 0.5,
     minimumCalls: 4,
     onStateChanged: change =>
@@ -145,7 +145,7 @@ var breaker = new CircuitBreaker(
         return ValueTask.CompletedTask;
     },
     timeProvider: time3);
-var guarded = new RetryTaskFactory(new DoNotRetry(), AnyExceptionPolicy.Default) { CircuitBreaker = breaker, TimeProvider = time3 };
+RetryTaskFactory guarded = new(new DoNotRetry(), AnyExceptionPolicy.Default) { CircuitBreaker = breaker, TimeProvider = time3 };
 
 // Act and assert, step by step. Each call is one attempt that fails or succeeds at once.
 var breakerStart = time3.GetUtcNow();
@@ -251,7 +251,7 @@ public sealed class TimerAwareFakeTimeProvider : FakeTimeProvider
                 return Task.CompletedTask;
             }
 
-            var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource signal = new(TaskCreationOptions.RunContinuationsAsynchronously);
             this.waiters.Add((count, signal));
             return signal.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }

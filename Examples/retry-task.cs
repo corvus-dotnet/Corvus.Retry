@@ -35,18 +35,18 @@ AnsiConsole.Write(new Rule("[orange1]RetryTask<T>.Run: one asynchronous call, th
 // RetryTask.Run and RetryTask<T>.Run use the default factory: new Count() (5 tries, no delay) and AnyExceptionPolicy.
 // Compare Retriable.RetryAsync, which has the same signature and makes 10 tries. The operation gets a token, and the
 // first try runs on the caller's thread until its first await, as the operation would without retries.
-var summary = new FlakyClient("summary", failures: 2, workMs: 0);
+FlakyClient summary = new("summary", failures: 2, workMs: 0);
 var oneOff = Stopwatch.StartNew();
 string headline = await RetryTask<string>.Run(ct => summary.BuildAsync(ct));
 AnsiConsole.MarkupLineInterpolated($"  RetryTask<string>.Run: [white]{headline}[/] after [white]{summary.Attempts}[/] attempts, {oneOff.ElapsedMilliseconds} ms");
 
 // The non-generic RetryTask.Run is for an operation that returns a Task with no result.
-var audit = new FlakyClient("audit", failures: 1, workMs: 0);
+FlakyClient audit = new("audit", failures: 1, workMs: 0);
 await RetryTask.Run(async ct => { await audit.BuildAsync(ct); });
 AnsiConsole.MarkupLineInterpolated($"  RetryTask.Run:         [white]audit written[/] after [white]{audit.Attempts}[/] attempts");
 
 // When the 5 tries run out, Run throws the exception of the last try itself, not an AggregateException.
-var offline = new FlakyClient("offline", failures: int.MaxValue, workMs: 0);
+FlakyClient offline = new("offline", failures: int.MaxValue, workMs: 0);
 try
 {
     await RetryTask<string>.Run(ct => offline.BuildAsync(ct));
@@ -68,12 +68,12 @@ var policy = RetryPolicies.For<TransientException>();
 
 // A configured factory holds the strategy and the policy, as new TaskFactory(...) holds its options. Keep it in a
 // field. The StartNew overloads without a strategy or a policy use the factory's.
-var reports = new RetryTaskFactory<string>(strategy, policy);
+RetryTaskFactory<string> reports = new(strategy, policy);
 
 int[] failures = [0, 3, 1, 4, 2, 0, 3, 1];
 var clients = failures.Select((f, i) => new FlakyClient($"report {i + 1}", f)).ToArray();
 var total = Stopwatch.StartNew();
-var started = new List<Task>();
+List<Task> started = new();
 
 await AnsiConsole.Progress()
     .Columns(new TaskDescriptionColumn(), new ProgressBarColumn(), new ElapsedTimeColumn())
@@ -116,11 +116,11 @@ AnsiConsole.Write(new Rule("[orange1]When the retries run out[/]").LeftJustified
 
 // LongRunning: a hint to the scheduler that the operation blocks its thread for a long time, so it gets its own thread
 // instead of a thread-pool thread. The retries keep the option.
-var broken = new FlakyClient("report 9", failures: int.MaxValue);
+FlakyClient broken = new("report 9", failures: int.MaxValue);
 var doomed = reports.StartNew(broken.Build, TaskCreationOptions.LongRunning);
 
 // RetryTask keeps at most 100 failures: the first 99 and the last. 150 tries with no delay show the cap.
-var hopeless = new FlakyClient("report 10", failures: int.MaxValue, workMs: 0);
+FlakyClient hopeless = new("report 10", failures: int.MaxValue, workMs: 0);
 var capped = reports.StartNew(hopeless.Build, new Count(150));
 
 await AnsiConsole.Status().StartAsync("report 9 retries on its own thread…", async _ =>
@@ -136,7 +136,7 @@ await AnsiConsole.Status().StartAsync("report 9 retries on its own thread…", a
     }
 });
 
-var faults = new Tree("[orange1]Faulted tasks[/]");
+Tree faults = new("[orange1]Faulted tasks[/]");
 foreach (var (name, task, client) in new[] { ("report 9 (6 tries)", doomed, broken), ("report 10 (150 tries)", capped, hopeless) })
 {
     // task.Exception wraps the AggregateException of the tries; its InnerExceptions are the failures, in order.
@@ -163,7 +163,7 @@ AnsiConsole.Write(new Rule("[orange1]StartNew refuses the settings that it canno
 // StartNew keeps its own scheduler-based loop, which has no timeouts, callback, breaker, result check or fallback. A
 // factory with one of these settings makes every StartNew throw, so the setting is never ignored. The copy constructor
 // makes a changed copy of a factory.
-var withTimeout = new RetryTaskFactory<string>(reports) { AttemptTimeout = TimeSpan.FromSeconds(1) };
+RetryTaskFactory<string> withTimeout = new(reports) { AttemptTimeout = TimeSpan.FromSeconds(1) };
 try
 {
     _ = withTimeout.StartNew(() => "never runs");

@@ -28,14 +28,14 @@ AnsiConsole.Write(new Panel(
     .Header("[white]The problem[/]").Border(BoxBorder.Rounded).BorderColor(Color.Grey));
 AnsiConsole.WriteLine();
 
-var handler = new ScriptedHandler(
+ScriptedHandler handler = new(
     (HttpStatusCode.ServiceUnavailable, null),
     (HttpStatusCode.TooManyRequests, TimeSpan.FromSeconds(1)),
     (HttpStatusCode.OK, null));
-using var client = new HttpClient(handler) { BaseAddress = new Uri("https://catalogue.example/") };
+using HttpClient client = new(handler) { BaseAddress = new("https://catalogue.example/") };
 
-var retries = new Dictionary<int, RetryObservation>();
-var factory = new RetryTaskFactory<HttpResponseMessage>(
+Dictionary<int, RetryObservation> retries = new();
+RetryTaskFactory<HttpResponseMessage> factory = new(
 
     // RetryAfter takes the delay from the Retry-After header when there is one, and from the inner strategy when
     // there is not. The 100 ms base keeps the demo short; the 429 overrides it with the full second the server asked for.
@@ -141,7 +141,7 @@ sealed class ScriptedHandler(params (HttpStatusCode Status, TimeSpan? RetryAfter
     {
         this.clock.Start();
         var (status, retryAfter) = script[Math.Min(this.Sent.Count, script.Length - 1)];
-        var response = new TrackedResponse(status)
+        TrackedResponse response = new(status)
         {
             RequestMessage = request,
             Content = new StringContent(status == HttpStatusCode.OK
@@ -151,7 +151,7 @@ sealed class ScriptedHandler(params (HttpStatusCode Status, TimeSpan? RetryAfter
 
         if (retryAfter is { } delay)
         {
-            response.Headers.RetryAfter = new RetryConditionHeaderValue(delay);
+            response.Headers.RetryAfter = new(delay);
         }
 
         this.Sent.Add(new(this.Sent.Count + 1, this.clock.Elapsed, response));

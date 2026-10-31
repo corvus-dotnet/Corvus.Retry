@@ -29,9 +29,9 @@ AnsiConsole.Write(new Panel(
 AnsiConsole.WriteLine();
 
 var clock = Stopwatch.StartNew();
-var changes = new List<(TimeSpan At, CircuitStateChange Change)>();
+List<(TimeSpan At, CircuitStateChange Change)> changes = new();
 // The settings are constructor parameters, because the breaker starts its clock when it is constructed.
-var breaker = new CircuitBreaker(
+CircuitBreaker breaker = new(
 
     // Real services use larger numbers (the defaults are 10 % of at least 100 calls in 30 s, and a 5 s open duration).
     // These small ones make the circuit open after a handful of calls, and close again within the demo.
@@ -52,11 +52,11 @@ var breaker = new CircuitBreaker(
 
 // Two independent factories share the one breaker instance, and so share its state. DoNotRetry makes each call one
 // attempt, so that each row of the call log is exactly one call that the breaker counts or rejects.
-var factoryA = new RetryTaskFactory(new DoNotRetry(), AnyExceptionPolicy.Default) { CircuitBreaker = breaker };
-var factoryB = new RetryTaskFactory(new DoNotRetry(), AnyExceptionPolicy.Default) { CircuitBreaker = breaker };
+RetryTaskFactory factoryA = new(new DoNotRetry(), AnyExceptionPolicy.Default) { CircuitBreaker = breaker };
+RetryTaskFactory factoryB = new(new DoNotRetry(), AnyExceptionPolicy.Default) { CircuitBreaker = breaker };
 
-var service = new InventoryService();
-var calls = new List<CallRecord>();
+InventoryService service = new();
+List<CallRecord> calls = new();
 var callCount = 0;
 
 await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("Driving the inventory service…", async _ =>

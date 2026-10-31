@@ -69,7 +69,7 @@ AnsiConsole.MarkupLine("[grey]  Uncapped jitter can push the last retry minutes 
 // dependency is still down. Each returned delay goes back in as PreviousDelay, which decorrelated jitter depends on.
 static IEnumerable<TimeSpan> RetryInstants(IRetryStrategy strategy)
 {
-    var failure = new HttpRequestException("connection refused");
+    HttpRequestException failure = new("connection refused");
     var now = TimeSpan.Zero;
     var previous = TimeSpan.Zero;
     for (var attempt = 1; strategy.GetRetryDelay(new RetryAttempt(attempt, failure, null, previous)) is TimeSpan delay; attempt++)

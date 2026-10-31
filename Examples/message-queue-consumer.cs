@@ -28,8 +28,8 @@ AnsiConsole.Write(new Panel(
 AnsiConsole.WriteLine();
 
 var clock = Stopwatch.StartNew();
-var queue = new SimulatedQueue(count: 20);
-var consumer = new OrderConsumer(queue, clock);
+SimulatedQueue queue = new(count: 20);
+OrderConsumer consumer = new(queue, clock);
 
 // No limit on the number of restarts, because the consumer must keep going; the delay starts at 200 ms and doubles,
 // and maxDelay caps it at 1 s so that a recovered store is not left idle for long.
@@ -149,7 +149,7 @@ internal sealed class OrderConsumer(SimulatedQueue queue, Stopwatch clock)
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        var run = new RunRecord(this.Runs.Count + 1, clock.Elapsed);
+        RunRecord run = new(this.Runs.Count + 1, clock.Elapsed);
         this.Runs.Add(run);
         Log(run, "", "[grey]run started[/]");
         try

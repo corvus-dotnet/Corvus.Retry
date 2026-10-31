@@ -26,7 +26,7 @@ AnsiConsole.Write(new Panel(
     .Header("[white]The problem[/]").Border(BoxBorder.Rounded).BorderColor(Color.Grey));
 AnsiConsole.WriteLine();
 
-var journal = new List<string>();
+List<string> journal = new();
 
 // OnFallback runs before the factory disposes a rejected result, so it can still log the body.
 Func<FallbackEventArgs<HttpResponseMessage>, ValueTask> logFailure = async args =>
@@ -55,7 +55,7 @@ Func<FallbackEventArgs<HttpResponseMessage>, ValueTask<HttpResponseMessage>> use
     return ValueTask.FromResult(Catalogue.Cached());
 };
 
-var factory = new RetryTaskFactory<HttpResponseMessage>(
+RetryTaskFactory<HttpResponseMessage> factory = new(
     RetryStrategies.Constant(retries: 2, delay: TimeSpan.FromMilliseconds(100)),
 
     // Retry transport failures and 5xx responses. An ArgumentException is a bug in our request: retrying cannot help.
@@ -76,7 +76,7 @@ var factory = new RetryTaskFactory<HttpResponseMessage>(
 
 // A factory is immutable, so the copy constructor makes the variant for scenario 4 without changing the original. Its
 // fallback accepts every exception, to show that the OnRetry exception bypasses the fallback all the same.
-var auditedFactory = new RetryTaskFactory<HttpResponseMessage>(factory)
+RetryTaskFactory<HttpResponseMessage> auditedFactory = new(factory)
 {
     OnRetry = _ => throw new InvalidOperationException("The audit log is full."),
     Fallback = new(useCache)
@@ -106,7 +106,7 @@ AnsiConsole.MarkupLine("[grey]  attempts, and nothing else. Scenarios 3 and 4 re
 async Task Run(string scenario, RetryTaskFactory<HttpResponseMessage> target, Behaviour behaviour, string whyNoFallback)
 {
     journal.Clear();
-    var service = new Catalogue(behaviour);
+    Catalogue service = new(behaviour);
     string value;
     try
     {

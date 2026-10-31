@@ -29,9 +29,9 @@ AnsiConsole.WriteLine();
 
 // ── 1. An attempt timeout turns the slow attempt into a retry ────────────────────────────────────────────────────
 {
-    var service = new PricingService(latencies: [900, 150]);
-    var asked = new List<string>();
-    var factory = new RetryTaskFactory
+    PricingService service = new(latencies: [900, 150]);
+    List<string> asked = new();
+    RetryTaskFactory factory = new()
     {
         // 400 ms is well above the usual latency, so only the slow outlier is cut short.
         AttemptTimeout = TimeSpan.FromMilliseconds(400),
@@ -52,8 +52,8 @@ AnsiConsole.WriteLine();
 
 // ── 2. A total timeout stops a delay that would overrun it ───────────────────────────────────────────────────────
 {
-    var service = new PricingService(latencies: [100, 100, 100], fail: true);
-    var factory = new RetryTaskFactory
+    PricingService service = new(latencies: [100, 100, 100], fail: true);
+    RetryTaskFactory factory = new()
     {
         // The total timeout covers the attempts and the delays. The exponential delays (200 ms, then 400 ms) would end
         // after 800 ms, so the limit expires during the second delay and no third attempt starts.
@@ -83,9 +83,9 @@ AnsiConsole.WriteLine();
 
 // ── 3. The caller cancels during an attempt ──────────────────────────────────────────────────────────────────────
 {
-    var service = new PricingService(latencies: [900]);
-    var asked = new List<string>();
-    var factory = new RetryTaskFactory
+    PricingService service = new(latencies: [900]);
+    List<string> asked = new();
+    RetryTaskFactory factory = new()
     {
         AttemptTimeout = TimeSpan.FromMilliseconds(400),
         Strategy = RetryStrategies.Constant(retries: 2, delay: TimeSpan.FromMilliseconds(100)),
@@ -95,7 +95,7 @@ AnsiConsole.WriteLine();
     };
 
     // The user navigates away 250 ms into the first attempt, before the attempt timeout.
-    using var caller = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+    using CancellationTokenSource caller = new(TimeSpan.FromMilliseconds(250));
     var verdict = await RunAsync("Calling the pricing service", async () =>
     {
         try

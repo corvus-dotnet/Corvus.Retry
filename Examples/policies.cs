@@ -84,7 +84,7 @@ foreach (var (code, _) in exceptions)
 
 foreach (var (name, policy) in policies)
 {
-    var cells = new List<string> { Markup.Escape(name) };
+    List<string> cells = new() { Markup.Escape(name) };
     foreach (var (code, _) in exceptions)
     {
         cells.Add(Retries(policy, code) ? "[green]✓[/]" : "[red]✗[/]");
@@ -139,7 +139,7 @@ AnsiConsole.MarkupLine($"[grey]  {calls} calls of the 6 permitted: the 404 is pe
 // Runs one call through Retriable with a strategy that allows two tries, and reports whether the second try ran.
 static bool Retries(IRetryPolicy policy, string code)
 {
-    using var caller = new CancellationTokenSource();
+    using CancellationTokenSource caller = new();
     var calls = 0;
     try
     {

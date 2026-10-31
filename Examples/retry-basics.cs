@@ -29,11 +29,11 @@ AnsiConsole.WriteLine();
 
 // 1. The defaults: RetryStrategies.Default (a shared Count(10): ten tries, no delay) and AnyExceptionPolicy.
 AnsiConsole.Write(new Rule("[aqua]1. The defaults[/]").LeftJustified());
-var syncService = new FlakyService("inventory", failuresBeforeSuccess: 3);
+FlakyService syncService = new("inventory", failuresBeforeSuccess: 3);
 var reply = Retriable.Retry(() => syncService.Ping());
 AnsiConsole.MarkupLine($"  [grey]Retry:[/]      [white]{Markup.Escape(reply)}[/] after [white]{syncService.Calls}[/] calls");
 
-var asyncService = new FlakyService("pricing", failuresBeforeSuccess: 3);
+FlakyService asyncService = new("pricing", failuresBeforeSuccess: 3);
 var asyncReply = await Retriable.RetryAsync(() => asyncService.PingAsync());
 AnsiConsole.MarkupLine($"  [grey]RetryAsync:[/] [white]{Markup.Escape(asyncReply)}[/] after [white]{asyncService.Calls}[/] calls");
 AnsiConsole.MarkupLine("[grey]  Ten tries and no delay by default: three failures cost nothing visible.[/]");
@@ -45,7 +45,7 @@ AnsiConsole.Write(new Rule("[aqua]2. RetryStrategies.Constant(retries: 3, delay:
 var attempts = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn("Attempt").AddColumn("Outcome").AddColumn("Next attempt").AddColumn(new TableColumn("Delay").RightAligned())
     .AddColumn(new TableColumn("Elapsed").RightAligned());
-var constantService = new FlakyService("orders", failuresBeforeSuccess: 3);
+FlakyService constantService = new("orders", failuresBeforeSuccess: 3);
 var stopwatch = Stopwatch.StartNew();
 string? constantReply = null;
 
@@ -78,8 +78,8 @@ AnsiConsole.WriteLine();
 // 3. Cancellation. The token is examined before each attempt and stops a delay immediately, so the caller gets
 // control back as soon as it asks, not after the strategy has run out.
 AnsiConsole.Write(new Rule("[aqua]3. A cancellation token stops the retries[/]").LeftJustified());
-var downService = new FlakyService("billing", failuresBeforeSuccess: int.MaxValue);
-using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(700)))
+FlakyService downService = new("billing", failuresBeforeSuccess: int.MaxValue);
+using (CancellationTokenSource cancellation = new(TimeSpan.FromMilliseconds(700)))
 {
     stopwatch.Restart();
     try
@@ -105,7 +105,7 @@ AnsiConsole.WriteLine();
 // 4. A service that never recovers. When the strategy runs out, Retriable rethrows the last exception itself, not a
 // wrapper, so existing catch blocks and stack traces keep working.
 AnsiConsole.Write(new Rule("[aqua]4. The service never recovers[/]").LeftJustified());
-var deadService = new FlakyService("search", failuresBeforeSuccess: int.MaxValue);
+FlakyService deadService = new("search", failuresBeforeSuccess: int.MaxValue);
 try
 {
     await Retriable.RetryAsync(
