@@ -12,7 +12,7 @@ using Corvus.Retry.Strategies;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
-/// Each <c>RunValueTask</c> method of <see cref="RetryTaskFactory"/> and <see cref="RetryTaskFactory{T}"/> gives the
+/// Each <c>Run</c> and <c>RunValueTask</c> method of <see cref="RetryTaskFactory"/> and <see cref="RetryTaskFactory{T}"/> gives the
 /// same outcome for every <see cref="OperationShape"/>: a failure is retried and the last exception is rethrown, whether
 /// the operation throws synchronously, returns a faulted value task, or faults asynchronously; a success is returned,
 /// whether it is synchronous or asynchronous; and a rejected result is disposed.
@@ -192,6 +192,74 @@ public class RetryTaskFactoryOperationShapeTests
         }
 
         Result returned = await factory.RunValueTask(PipelineOperationDriver.WithResult(shape, Next)).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.HasCount(3, results);
+        Assert.AreSame(results[2], returned);
+        Assert.IsFalse(returned.Disposed);
+        Assert.IsTrue(results[0].Disposed);
+        Assert.IsTrue(results[1].Disposed);
+    }
+
+    [TestMethod]
+    [DataRow(OperationShape.Synchronous)]
+    [DataRow(OperationShape.CompletedValueTask)]
+    [DataRow(OperationShape.AsyncBeforeAwait)]
+    [DataRow(OperationShape.AsyncAfterAwait)]
+    public async Task WithRun_WhenTheOperationWithNoResultFailsTwice_TheThirdAttemptSucceeds(OperationShape shape)
+    {
+        var op = new FlakyOperation(2);
+        var factory = new RetryTaskFactory { Strategy = new Count(3) };
+        Func<CancellationToken, ValueTask> operation = PipelineOperationDriver.WithoutResult(shape, () => op.Invoke());
+
+        await factory.Run(ct => operation(ct).AsTask()).WaitAsync(WaitLimit).ConfigureAwait(false);
+
+        Assert.AreEqual(3, op.Invocations);
+    }
+
+    [TestMethod]
+    [DataRow(OperationShape.Synchronous)]
+    [DataRow(OperationShape.CompletedValueTask)]
+    [DataRow(OperationShape.AsyncBeforeAwait)]
+    [DataRow(OperationShape.AsyncAfterAwait)]
+    public async Task WithRun_WhenTheOperationWithAResultFailsEveryTime_ItIsRetriedAndTheLastExceptionIsThrown(OperationShape shape)
+    {
+        var op = new FlakyOperation(FlakyOperation.AlwaysFails);
+        var factory = new RetryTaskFactory { Strategy = new Count(3) };
+        Func<CancellationToken, ValueTask<string>> operation = PipelineOperationDriver.WithResult(shape, op.Invoke);
+
+        InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            () => factory.Run(ct => operation(ct).AsTask()).WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        Assert.AreSame(op.LastThrown, thrown);
+        Assert.AreEqual(3, op.Invocations);
+    }
+
+    [TestMethod]
+    [DataRow(OperationShape.Synchronous)]
+    [DataRow(OperationShape.CompletedValueTask)]
+    [DataRow(OperationShape.AsyncBeforeAwait)]
+    [DataRow(OperationShape.AsyncAfterAwait)]
+    public async Task WithRun_TheGenericFactoryDisposesEachRejectedResultAndReturnsTheResultItAccepts(OperationShape shape)
+    {
+        var results = new List<Result>();
+        var factory = new RetryTaskFactory<Result>
+        {
+            Strategy = new Count(3),
+            CanRetryResult = r => !r.IsGood,
+        };
+
+        Result Next()
+        {
+            lock (results)
+            {
+                var result = new Result(isGood: results.Count == 2);
+                results.Add(result);
+                return result;
+            }
+        }
+
+        Func<CancellationToken, ValueTask<Result>> operation = PipelineOperationDriver.WithResult(shape, Next);
+        Result returned = await factory.Run(ct => operation(ct).AsTask()).WaitAsync(WaitLimit).ConfigureAwait(false);
 
         Assert.HasCount(3, results);
         Assert.AreSame(results[2], returned);
