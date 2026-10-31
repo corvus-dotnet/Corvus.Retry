@@ -112,7 +112,7 @@ await using (ServiceProvider provider = services.BuildServiceProvider())
 
     OrdersClient ordersClient = provider.GetRequiredService<OrdersClient>();
     HttpStatusCode status = await RunAsync("POST /orders", () => ordersClient.PlaceOrderAsync(sku: 42, idempotencyKey: "order-7f3a"));
-    Show("4b. AddHttpClient<OrdersClient>().AddRetryHandler(retries, CanReplayContent)", typedOrders, $"{(int)status} {status}", Color.Green);
+    Show("4b. typed OrdersClient: AddRetryHandler(retries, CanReplayContent)", typedOrders, $"{(int)status} {status}", Color.Green);
 }
 
 // 5. The handler returns the response when the headers arrive. HttpClient reads the body after that, outside the
