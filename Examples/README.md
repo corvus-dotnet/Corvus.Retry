@@ -36,6 +36,7 @@ footnote says so; otherwise the output is repeatable.
 | [`retry-task.cs`](retry-task.cs) | Eight flaky synchronous operations started at once with `RetryTask.Factory.StartNew` recover on the thread pool, and a task that gives up carries every failure, capped at 100. |
 | [`message-queue-consumer.cs`](message-queue-consumer.cs) | Keep a queue consumer loop alive with `ReliableTaskRunner`: restart after a transient fault with a delay, stop on a poison message, and shut down cleanly. |
 | [`http-client-resilience.cs`](http-client-resilience.cs) | One pipeline around an `HttpClient` call that gets 503, a hang, 429 with `Retry-After` and 500 before 200; it retries, obeys the header, times out each attempt, and falls back to a cached answer when a circuit breaker opens. |
+| [`http-handler.cs`](http-handler.cs) | `RetryHandler` puts a factory inside `HttpClient`, so the call site has no wrapper: a GET is retried through 503 and 429 with `Retry-After`, a POST gets one attempt until it opts in with `RetryHandler.CanReplayContent`, `AddRetryHandler` adds the handler to an `IHttpClientFactory` client, and a note says when to wrap the call instead. |
 | [`database-startup.cs`](database-startup.cs) | Wait for a database that is still starting by retrying a wrapped `SocketException` with backoff, and fail at once on a wrong password. |
 | [`testing-with-fake-time.cs`](testing-with-fake-time.cs) | Nine minutes of `Backoff` delays and a 30 s attempt timeout tested in milliseconds with a `FakeTimeProvider`, advancing the clock only after the library has created its timer. |
 
@@ -68,6 +69,7 @@ dotnet run Examples/composed-pipelines.cs
 dotnet run Examples/retry-task.cs
 dotnet run Examples/message-queue-consumer.cs
 dotnet run Examples/http-client-resilience.cs
+dotnet run Examples/http-handler.cs
 dotnet run Examples/database-startup.cs
 dotnet run Examples/testing-with-fake-time.cs
 ```

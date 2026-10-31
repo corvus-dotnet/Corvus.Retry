@@ -27,6 +27,7 @@ var demos = new (string Name, string File, string Blurb)[]
     ("RetryTask", "retry-task.cs", "Eight flaky operations retried on the thread pool with live progress"),
     ("Queue consumer", "message-queue-consumer.cs", "ReliableTaskRunner restarts a consumer loop, stops on poison"),
     ("HTTP client", "http-client-resilience.cs", "One composed pipeline around HttpClient: 503, hang, 429, 500, 200"),
+    ("HTTP handler", "http-handler.cs", "RetryHandler inside HttpClient: no wrapper, POST opt-in, AddRetryHandler"),
     ("Database startup", "database-startup.cs", "Wait for a dependency that is starting; fail fast on a wrong password"),
     ("Testing with fake time", "testing-with-fake-time.cs", "Minutes of back-off tested in milliseconds with a FakeTimeProvider"),
 };
