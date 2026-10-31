@@ -66,7 +66,7 @@ Connection connection = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).S
 
 Table table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).Title("[springgreen3]Connecting while the database starts[/]")
     .AddColumn("#").AddColumn("Driver threw").AddColumn(new TableColumn("Failed at").RightAligned()).AddColumn(new TableColumn("Wait").RightAligned());
-foreach ((int attempt, string? error, TimeSpan delay, long atMs) in attempts)
+foreach ((int attempt, string error, TimeSpan delay, long atMs) in attempts)
 {
     table.AddRow(attempt.ToString(), error, $"{atMs} ms", $"{delay.TotalMilliseconds:F0} ms");
 }

@@ -82,7 +82,7 @@ foreach ((string code, string _) in exceptions)
     matrix.AddColumn(new TableColumn(code).Centered().Padding(1, 0, 0, 0));
 }
 
-foreach ((string? name, IRetryPolicy? policy) in policies)
+foreach ((string name, IRetryPolicy policy) in policies)
 {
     List<string> cells = new() { Markup.Escape(name) };
     foreach ((string code, string _) in exceptions)

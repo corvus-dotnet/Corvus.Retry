@@ -88,7 +88,7 @@ RetryTaskFactory<string> outer = new(
 };
 
 Tree root = new("[mediumpurple]outer.Run(ct => inner.Run(service.GetPriceAsync, ct))[/]");
-foreach ((string? title, ServiceMode mode) in new[]
+foreach ((string title, ServiceMode mode) in new[]
 {
     ("Call 1: the service has a bad moment", ServiceMode.FailTwiceThenRecover),
     ("Call 2: the service goes down", ServiceMode.Down),

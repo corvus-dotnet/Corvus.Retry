@@ -128,7 +128,7 @@ HedgedTaskFactory<string> regional = new(extraAttempts: 1, stagger: TimeSpan.Fro
 Table regionTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn("eu behaves").AddColumn("OnHedgedAttempt LastException").AddColumn("answered by")
     .AddColumn(new TableColumn("time").RightAligned());
-foreach (string? behaviour in new[] { "fast", "slow", "fails" })
+foreach (string behaviour in new[] { "fast", "slow", "fails" })
 {
     regions.EuBehaviour = behaviour;
     hedgeCause = null;
