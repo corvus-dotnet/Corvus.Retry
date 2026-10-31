@@ -42,7 +42,7 @@ AnsiConsole.WriteLine();
 ];
 
 Table legend = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey).AddColumn("Code").AddColumn("Exception thrown");
-foreach ((string? code, string? description) in exceptions)
+foreach ((string code, string description) in exceptions)
 {
     legend.AddRow($"[orange1]{code}[/]", Markup.Escape(description));
 }
