@@ -30,11 +30,14 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Corvus.Retry\Corvus.Retry.csproj" />
+    <ProjectReference Include="..\Corvus.Retry.Extensions.Http\Corvus.Retry.Extensions.Http.csproj" />
   </ItemGroup>
 
 </Project>
