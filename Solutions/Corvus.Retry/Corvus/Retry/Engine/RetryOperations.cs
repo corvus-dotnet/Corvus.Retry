@@ -13,8 +13,8 @@ using System.Threading.Tasks;
 /// Adapters that let the engine run each shape of operation that the public API accepts.
 /// </summary>
 /// <remarks>
-/// Each adapter is a readonly struct that holds the caller's delegate. Only <see cref="ResultCheckedOperation{T}"/> can
-/// treat a result as a failure.
+/// Each adapter is a readonly struct that holds the caller's delegate. Only <see cref="ResultCheckedOperation{T}"/> and
+/// <see cref="ResultCheckedTaskOperation{T}"/> can treat a result as a failure.
 /// </remarks>
 internal static class RetryOperations
 {
@@ -196,6 +196,31 @@ internal static class RetryOperations
         public ValueTask<T> InvokeAsync(CancellationToken cancellationToken)
         {
             return operation(cancellationToken);
+        }
+
+        /// <inheritdoc/>
+        public bool IsFailure(T result)
+        {
+            return isFailure?.Invoke(result) ?? false;
+        }
+    }
+
+    /// <summary>
+    /// Adapts a <see cref="Func{T, TResult}"/> that takes a token and returns a <see cref="Task{TResult}"/>, and uses a
+    /// predicate to find the results that are failures.
+    /// </summary>
+    /// <typeparam name="T">The type of the result.</typeparam>
+    /// <param name="operation">The operation.</param>
+    /// <param name="isFailure">
+    /// The predicate that returns <see langword="true"/> for a result that is a failure, or <see langword="null"/> if
+    /// no result is a failure.
+    /// </param>
+    internal readonly struct ResultCheckedTaskOperation<T>(Func<CancellationToken, Task<T>> operation, Func<T, bool>? isFailure) : IRetryOperation<T>
+    {
+        /// <inheritdoc/>
+        public ValueTask<T> InvokeAsync(CancellationToken cancellationToken)
+        {
+            return FromTask(operation(cancellationToken));
         }
 
         /// <inheritdoc/>
