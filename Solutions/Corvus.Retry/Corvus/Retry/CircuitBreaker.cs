@@ -21,10 +21,9 @@ using Corvus.Retry.Policies;
 /// </para>
 /// <para>
 /// When the circuit is closed, the breaker counts the calls and the failures in a sliding window of
-/// <see cref="CircuitBreakerOptions.SamplingDuration"/>, with 10 buckets. When the window has
-/// <see cref="CircuitBreakerOptions.MinimumThroughput"/> calls or more, and the ratio of failures is
-/// <see cref="CircuitBreakerOptions.FailureRatio"/> or more, the circuit opens. An open circuit rejects each call with a
-/// <see cref="CircuitRejectedException"/>. After <see cref="CircuitBreakerOptions.BreakDuration"/>, the circuit is
+/// <see cref="SamplingWindow"/>, with 10 buckets. When the window has <see cref="MinimumCalls"/> calls or more, and the
+/// ratio of failures is <see cref="FailureRate"/> or more, the circuit opens. An open circuit rejects each call with a
+/// <see cref="CircuitRejectedException"/>. After <see cref="OpenDuration"/>, the circuit is
 /// half-open: the breaker lets one test call through, and rejects the other calls. If the test call succeeds, the
 /// circuit closes and the counts start again. If it fails, the circuit opens again. The outcome of a test call that
 /// started before <see cref="Isolate"/>, <see cref="Close"/> or a later break does not change the state. If the circuit
@@ -32,12 +31,12 @@ using Corvus.Retry.Policies;
 /// started again.
 /// </para>
 /// <para>
-/// A failure is an exception that <see cref="CircuitBreakerOptions.Policy"/> accepts, a <see cref="RetryTimeoutException"/>,
+/// A failure is an exception that <see cref="Policy"/> accepts, a <see cref="RetryTimeoutException"/>,
 /// or a result that <see cref="ReliabilityPipelineOptions{T}.ShouldRetryResult"/> rejects. A cancellation by the caller is not
 /// a call and not a failure. A call that the breaker rejects is not a call.
 /// </para>
 /// <para>
-/// The breaker changes its state under a lock, and calls <see cref="CircuitBreakerOptions.OnStateChanged"/> after it
+/// The breaker changes its state under a lock, and calls <see cref="OnStateChanged"/> after it
 /// releases the lock.
 /// </para>
 /// </remarks>
@@ -46,11 +45,14 @@ public sealed class CircuitBreaker
     private const int BucketCount = 10;
 
     private static readonly TimeSpan MinimumDuration = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan DefaultSamplingWindow = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DefaultOpenDuration = TimeSpan.FromSeconds(5);
 
     private readonly Lock sync = new();
-    private readonly double failureRatio;
-    private readonly int minimumThroughput;
-    private readonly TimeSpan breakDuration;
+    private readonly double failureRate;
+    private readonly int minimumCalls;
+    private readonly TimeSpan samplingWindow;
+    private readonly TimeSpan openDuration;
     private readonly long bucketTicks;
     private readonly IRetryPolicy policy;
     private readonly Func<CircuitStateChange, ValueTask>? onStateChanged;
@@ -80,48 +82,154 @@ public sealed class CircuitBreaker
     /// <summary>
     /// Initialises a new instance of the <see cref="CircuitBreaker"/> class.
     /// </summary>
-    /// <param name="options">The settings of the breaker.</param>
-    /// <exception cref="ArgumentNullException">
-    /// <paramref name="options"/>, <see cref="CircuitBreakerOptions.Policy"/> or
-    /// <see cref="CircuitBreakerOptions.TimeProvider"/> is <see langword="null"/>.
-    /// </exception>
+    /// <param name="failureRate">
+    /// The ratio of failures to calls at which the circuit opens. The default is 0.1. The value must be greater than 0
+    /// and not greater than 1. The circuit opens when the ratio in the sampling window is equal to this value or greater.
+    /// </param>
+    /// <param name="minimumCalls">
+    /// The smallest number of calls in the sampling window before the circuit can open. The default is 100. The value
+    /// must be 2 or more.
+    /// </param>
+    /// <param name="samplingWindow">
+    /// The length of the sliding window in which the breaker counts the calls and the failures, or
+    /// <see langword="null"/> for the default of 30 seconds. The value must be 500 milliseconds or more, and not greater
+    /// than about 49.7 days. The breaker divides the window into 10 buckets, and drops a bucket when it becomes older
+    /// than the window.
+    /// </param>
+    /// <param name="openDuration">
+    /// The time for which the circuit stays open before it lets a test call through, or <see langword="null"/> for the
+    /// default of 5 seconds. The value must be 500 milliseconds or more, and not greater than about 49.7 days.
+    /// </param>
+    /// <param name="policy">
+    /// The policy that selects the exceptions that are failures, or <see langword="null"/> for
+    /// <see cref="AnyExceptionPolicy.Default"/>. See <see cref="Policy"/>.
+    /// </param>
+    /// <param name="onStateChanged">
+    /// A callback that the breaker calls after each change of its state, or <see langword="null"/>. See
+    /// <see cref="OnStateChanged"/>.
+    /// </param>
+    /// <param name="timeProvider">
+    /// The time provider that gives the current time for the sampling window and the open duration, or
+    /// <see langword="null"/> for <see cref="TimeProvider.System"/>. A test can use a fake time provider.
+    /// </param>
     /// <exception cref="ArgumentOutOfRangeException">
-    /// <see cref="CircuitBreakerOptions.FailureRatio"/> is not greater than 0 or is greater than 1,
-    /// <see cref="CircuitBreakerOptions.MinimumThroughput"/> is less than 2, or
-    /// <see cref="CircuitBreakerOptions.SamplingDuration"/> or <see cref="CircuitBreakerOptions.BreakDuration"/> is less
-    /// than 500 milliseconds or greater than the longest time that a timer supports.
+    /// <paramref name="failureRate"/> is not greater than 0 or is greater than 1, <paramref name="minimumCalls"/> is less
+    /// than 2, or <paramref name="samplingWindow"/> or <paramref name="openDuration"/> is less than 500 milliseconds or
+    /// greater than the longest time that a timer supports.
     /// </exception>
     /// <remarks>
-    /// The <see cref="ArgumentException.ParamName"/> of each exception is the name of the property that is not correct.
+    /// <para>
+    /// The <see cref="ArgumentException.ParamName"/> of each exception is the name of the parameter that is not correct.
+    /// </para>
+    /// <para>
+    /// The settings are constructor parameters, not properties that an object initialiser sets, because the breaker
+    /// reads the clock of <paramref name="timeProvider"/> when it is constructed.
+    /// </para>
     /// </remarks>
-    public CircuitBreaker(CircuitBreakerOptions options)
+    public CircuitBreaker(
+        double failureRate = 0.1,
+        int minimumCalls = 100,
+        TimeSpan? samplingWindow = null,
+        TimeSpan? openDuration = null,
+        IRetryPolicy? policy = null,
+        Func<CircuitStateChange, ValueTask>? onStateChanged = null,
+        TimeProvider? timeProvider = null)
     {
-        ArgumentNullException.ThrowIfNull(options);
+        TimeSpan window = samplingWindow ?? DefaultSamplingWindow;
+        TimeSpan open = openDuration ?? DefaultOpenDuration;
 
         // This also rejects NaN.
-        if (!(options.FailureRatio > 0 && options.FailureRatio <= 1))
+        if (!(failureRate > 0 && failureRate <= 1))
         {
             throw new ArgumentOutOfRangeException(
-                nameof(CircuitBreakerOptions.FailureRatio),
-                options.FailureRatio,
-                "The failure ratio must be greater than 0 and not greater than 1.");
+                nameof(failureRate),
+                failureRate,
+                "The failure rate must be greater than 0 and not greater than 1.");
         }
 
-        ArgumentOutOfRangeException.ThrowIfLessThan(options.MinimumThroughput, 2, nameof(CircuitBreakerOptions.MinimumThroughput));
-        ThrowIfOutOfRange(options.SamplingDuration, nameof(CircuitBreakerOptions.SamplingDuration));
-        ThrowIfOutOfRange(options.BreakDuration, nameof(CircuitBreakerOptions.BreakDuration));
-        ArgumentNullException.ThrowIfNull(options.Policy, nameof(CircuitBreakerOptions.Policy));
-        ArgumentNullException.ThrowIfNull(options.TimeProvider, nameof(CircuitBreakerOptions.TimeProvider));
+        ArgumentOutOfRangeException.ThrowIfLessThan(minimumCalls, 2, nameof(minimumCalls));
+        ThrowIfOutOfRange(window, nameof(samplingWindow));
+        ThrowIfOutOfRange(open, nameof(openDuration));
 
-        this.failureRatio = options.FailureRatio;
-        this.minimumThroughput = options.MinimumThroughput;
-        this.breakDuration = options.BreakDuration;
-        this.bucketTicks = options.SamplingDuration.Ticks / BucketCount;
-        this.policy = options.Policy;
-        this.onStateChanged = options.OnStateChanged;
-        this.timeProvider = options.TimeProvider;
+        this.failureRate = failureRate;
+        this.minimumCalls = minimumCalls;
+        this.samplingWindow = window;
+        this.openDuration = open;
+        this.bucketTicks = window.Ticks / BucketCount;
+        this.policy = policy ?? AnyExceptionPolicy.Default;
+        this.onStateChanged = onStateChanged;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         this.originTimestamp = this.timeProvider.GetTimestamp();
     }
+
+    /// <summary>
+    /// Gets the ratio of failures to calls at which the circuit opens.
+    /// </summary>
+    /// <remarks>
+    /// The circuit opens when the ratio in the sampling window is equal to this value or greater, and the window has
+    /// <see cref="MinimumCalls"/> calls or more.
+    /// </remarks>
+    public double FailureRate => this.failureRate;
+
+    /// <summary>
+    /// Gets the smallest number of calls in the sampling window before the circuit can open.
+    /// </summary>
+    public int MinimumCalls => this.minimumCalls;
+
+    /// <summary>
+    /// Gets the length of the sliding window in which the breaker counts the calls and the failures.
+    /// </summary>
+    public TimeSpan SamplingWindow => this.samplingWindow;
+
+    /// <summary>
+    /// Gets the time for which the circuit stays open before it lets a test call through.
+    /// </summary>
+    public TimeSpan OpenDuration => this.openDuration;
+
+    /// <summary>
+    /// Gets the policy that selects the exceptions that are failures.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A call that throws an exception that the policy refuses counts as a call that succeeded.
+    /// </para>
+    /// <para>
+    /// When a call throws an <see cref="AggregateException"/>, the breaker asks the policy about the exceptions inside
+    /// it, not about the wrapper, in depth-first order. The call is a failure only if the policy accepts each of them.
+    /// An <see cref="AggregateException"/> with no inner exceptions is itself the exception that the policy gets.
+    /// </para>
+    /// <para>
+    /// A <see cref="RetryTimeoutException"/> is always a failure. The breaker does not ask the policy about it. If the
+    /// policy throws, the call throws that exception, and the call is not counted.
+    /// </para>
+    /// </remarks>
+    public IRetryPolicy Policy => this.policy;
+
+    /// <summary>
+    /// Gets the callback that the breaker calls after each change of its state, or <see langword="null"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The breaker calls the callback after it releases its lock, so the callback can read <see cref="State"/>, and can
+    /// call <see cref="Isolate"/> or <see cref="Close"/>.
+    /// </para>
+    /// <para>
+    /// A factory awaits the callback, and an exception from the callback stops the call. The <see cref="Isolate"/> and
+    /// <see cref="Close"/> methods block until the callback completes, so the callback must be quick.
+    /// </para>
+    /// <para>
+    /// When <see cref="Isolate"/> or <see cref="Close"/> calls it, the callback runs with no
+    /// <see cref="SynchronizationContext"/>, and with <see cref="TaskScheduler.Default"/> as the current scheduler. If it
+    /// awaits, the continuation runs on the thread pool. Do not use a callback that must continue on a custom
+    /// <see cref="TaskScheduler"/>.
+    /// </para>
+    /// </remarks>
+    public Func<CircuitStateChange, ValueTask>? OnStateChanged => this.onStateChanged;
+
+    /// <summary>
+    /// Gets the time provider that gives the current time for the sampling window and the open duration.
+    /// </summary>
+    public TimeProvider TimeProvider => this.timeProvider;
 
     /// <summary>
     /// Gets the state of the circuit.
@@ -138,7 +246,7 @@ public sealed class CircuitBreaker
     /// <see cref="Close"/> is called.
     /// </summary>
     /// <remarks>
-    /// If the circuit is not isolated already, this calls <see cref="CircuitBreakerOptions.OnStateChanged"/>, and waits
+    /// If the circuit is not isolated already, this calls <see cref="OnStateChanged"/>, and waits
     /// until the callback completes. The callback runs with no <see cref="SynchronizationContext"/>, and with
     /// <see cref="TaskScheduler.Default"/> as the current scheduler.
     /// </remarks>
@@ -162,7 +270,7 @@ public sealed class CircuitBreaker
     /// Closes the circuit, and clears the counts of calls and failures.
     /// </summary>
     /// <remarks>
-    /// If the circuit is not closed already, this calls <see cref="CircuitBreakerOptions.OnStateChanged"/>, and waits
+    /// If the circuit is not closed already, this calls <see cref="OnStateChanged"/>, and waits
     /// until the callback completes. The callback runs with no <see cref="SynchronizationContext"/>, and with
     /// <see cref="TaskScheduler.Default"/> as the current scheduler.
     /// </remarks>
@@ -300,7 +408,7 @@ public sealed class CircuitBreaker
     /// <remarks>
     /// <para>
     /// A <see cref="RetryTimeoutException"/> is always a failure, and the breaker does not ask
-    /// <see cref="CircuitBreakerOptions.Policy"/> about it. Another exception that the policy refuses is not a failure, so
+    /// <see cref="Policy"/> about it. Another exception that the policy refuses is not a failure, so
     /// the call counts as a success. For an <see cref="AggregateException"/>, the breaker asks the policy about each
     /// exception inside it, and the call is a failure only if the policy accepts all of them. The
     /// <see cref="CircuitStateChange.LastException"/> of a change is the exception as the call threw it.
@@ -330,7 +438,7 @@ public sealed class CircuitBreaker
                 {
                     this.Slide(now);
                     this.Record(failed: true);
-                    if (this.windowCalls >= this.minimumThroughput && this.windowFailures / (double)this.windowCalls >= this.failureRatio)
+                    if (this.windowCalls >= this.minimumCalls && this.windowFailures / (double)this.windowCalls >= this.failureRate)
                     {
                         this.Open(now);
                         return new CircuitStateChange(CircuitState.Closed, CircuitState.Open, exception);
@@ -367,7 +475,7 @@ public sealed class CircuitBreaker
     }
 
     /// <summary>
-    /// Calls <see cref="CircuitBreakerOptions.OnStateChanged"/> for a change of state, if there is a change and a
+    /// Calls <see cref="OnStateChanged"/> for a change of state, if there is a change and a
     /// callback.
     /// </summary>
     /// <param name="change">The change of state, or <see langword="null"/>.</param>
@@ -428,7 +536,7 @@ public sealed class CircuitBreaker
     private void Open(TimeSpan now)
     {
         this.state = CircuitState.Open;
-        this.breakUntil = now + this.breakDuration;
+        this.breakUntil = now + this.openDuration;
         this.probeInFlight = 0;
     }
 
