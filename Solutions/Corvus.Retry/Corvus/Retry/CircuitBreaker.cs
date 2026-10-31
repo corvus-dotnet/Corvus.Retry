@@ -24,7 +24,7 @@ using Corvus.Retry.Policies;
 /// <see cref="CircuitBreakerOptions.SamplingDuration"/>, with 10 buckets. When the window has
 /// <see cref="CircuitBreakerOptions.MinimumThroughput"/> calls or more, and the ratio of failures is
 /// <see cref="CircuitBreakerOptions.FailureRatio"/> or more, the circuit opens. An open circuit rejects each call with a
-/// <see cref="BrokenCircuitException"/>. After <see cref="CircuitBreakerOptions.BreakDuration"/>, the circuit is
+/// <see cref="CircuitRejectedException"/>. After <see cref="CircuitBreakerOptions.BreakDuration"/>, the circuit is
 /// half-open: the breaker lets one test call through, and rejects the other calls. If the test call succeeds, the
 /// circuit closes and the counts start again. If it fails, the circuit opens again. The outcome of a test call that
 /// started before <see cref="Isolate"/>, <see cref="Close"/> or a later break does not change the state. If the circuit
@@ -134,7 +134,7 @@ public sealed class CircuitBreaker
     public CircuitState State => this.state;
 
     /// <summary>
-    /// Isolates the circuit: the breaker rejects each call with an <see cref="IsolatedCircuitException"/> until
+    /// Isolates the circuit: the breaker rejects each call with a <see cref="CircuitIsolatedException"/> until
     /// <see cref="Close"/> is called.
     /// </summary>
     /// <remarks>
@@ -203,7 +203,7 @@ public sealed class CircuitBreaker
     /// <see cref="OnFailure"/> or <see cref="Abandon"/>, and passes <paramref name="change"/> to
     /// <see cref="NotifyAsync"/>.
     /// </remarks>
-    internal bool TryAcquire(out int probe, out BrokenCircuitException? rejection, out CircuitStateChange? change)
+    internal bool TryAcquire(out int probe, out CircuitRejectedException? rejection, out CircuitStateChange? change)
     {
         probe = 0;
         rejection = null;
@@ -249,9 +249,9 @@ public sealed class CircuitBreaker
         // Make the exception after the lock is released.
         rejection = rejectedState switch
         {
-            CircuitState.Isolated => new IsolatedCircuitException(),
-            CircuitState.HalfOpen => new BrokenCircuitException("The circuit is half-open, and a test call is in progress."),
-            _ => new BrokenCircuitException("The circuit is open.", retryAfter),
+            CircuitState.Isolated => new CircuitIsolatedException(),
+            CircuitState.HalfOpen => new CircuitRejectedException("The circuit is half-open, and a test call is in progress."),
+            _ => new CircuitRejectedException("The circuit is open.", retryAfter),
         };
 
         return false;

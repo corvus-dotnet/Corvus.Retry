@@ -798,7 +798,7 @@ internal static class HedgingEngine
                 // The circuit breaker is outside the attempt timeout.
                 if (breaker is not null)
                 {
-                    acquired = breaker.TryAcquire(out probe, out BrokenCircuitException? rejection, out CircuitStateChange? change);
+                    acquired = breaker.TryAcquire(out probe, out CircuitRejectedException? rejection, out CircuitStateChange? change);
                     if (acquired)
                     {
                         // From now on the engine can take the permit. The exchange is a full fence, so the engine sees the

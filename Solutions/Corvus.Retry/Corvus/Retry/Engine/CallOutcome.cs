@@ -13,7 +13,7 @@ using System;
 /// <para>
 /// An engine sets <see cref="Exception"/> immediately before it throws an exception that is the outcome of the
 /// attempts: the exception of the last attempt, a <see cref="RetryTimeoutException"/>, or a
-/// <see cref="BrokenCircuitException"/>. It does not set it for an exception from a callback, a strategy or a policy.
+/// <see cref="CircuitRejectedException"/>. It does not set it for an exception from a callback, a strategy or a policy.
 /// </para>
 /// <para>
 /// The fallback of <see cref="ReliabilityPipeline{T}"/> compares the exception that it catches with this value. It

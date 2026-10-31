@@ -18,7 +18,7 @@ using Corvus.Retry.Policies;
 /// <para>
 /// The fallback is the outermost part of the pipeline. It receives the exception or the result after the retries, the
 /// total timeout and the circuit breaker. It applies to a <see cref="RetryTimeoutException"/> and to a
-/// <see cref="BrokenCircuitException"/>. It never applies when the caller cancels the token.
+/// <see cref="CircuitRejectedException"/>. It never applies when the caller cancels the token.
 /// </para>
 /// <para>
 /// The fallback applies only to the outcome of the attempts. It does not apply to an exception from a callback, a

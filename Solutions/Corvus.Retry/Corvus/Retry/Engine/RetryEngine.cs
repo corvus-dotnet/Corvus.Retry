@@ -65,7 +65,7 @@ internal static class RetryEngine
     /// <exception cref="RetryTimeoutException">
     /// The total timeout expired, or the last attempt timed out and was not retried.
     /// </exception>
-    /// <exception cref="BrokenCircuitException">
+    /// <exception cref="CircuitRejectedException">
     /// The circuit breaker rejected the last attempt, and the strategy or the policy refused a retry.
     /// </exception>
     /// <remarks>
@@ -129,7 +129,7 @@ internal static class RetryEngine
                 int probe = 0;
                 if (circuitBreaker is not null)
                 {
-                    acquired = circuitBreaker.TryAcquire(out probe, out BrokenCircuitException? rejection, out CircuitStateChange? change);
+                    acquired = circuitBreaker.TryAcquire(out probe, out CircuitRejectedException? rejection, out CircuitStateChange? change);
                     if (change.HasValue)
                     {
                         try

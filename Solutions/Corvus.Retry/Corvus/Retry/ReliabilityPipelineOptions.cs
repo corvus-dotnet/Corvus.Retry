@@ -107,7 +107,7 @@ public record ReliabilityPipelineOptions
     /// attempt timeout as a failure. Many pipelines can share one breaker.
     /// </para>
     /// <para>
-    /// When the breaker rejects an attempt, the attempt fails with a <see cref="BrokenCircuitException"/>. The strategy
+    /// When the breaker rejects an attempt, the attempt fails with a <see cref="CircuitRejectedException"/>. The strategy
     /// and the policy decide whether to retry it, as for any exception.
     /// </para>
     /// </remarks>

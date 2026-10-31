@@ -10,7 +10,7 @@ using System.Net.Http.Headers;
 
 /// <summary>
 /// A <see cref="IRetryStrategy"/> that uses the <c>Retry-After</c> header of an <see cref="HttpResponseMessage"/>
-/// result, or the <see cref="BrokenCircuitException.RetryAfter"/> of a rejection by a circuit breaker, when there is
+/// result, or the <see cref="CircuitRejectedException.RetryAfter"/> of a rejection by a circuit breaker, when there is
 /// one, and otherwise the delay of an inner strategy.
 /// </summary>
 /// <remarks>Created by <see cref="RetryStrategies.RetryAfter(IRetryStrategy, TimeProvider?)"/>.</remarks>
@@ -52,7 +52,7 @@ internal sealed class RetryAfterStrategy : IRetryStrategy
             }
         }
 
-        if (attempt.Exception is BrokenCircuitException { RetryAfter: TimeSpan breakRemaining })
+        if (attempt.Exception is CircuitRejectedException { RetryAfter: TimeSpan breakRemaining })
         {
             // An open circuit rejects every call until its break ends.
             return RetryDelay.Clamp(breakRemaining);

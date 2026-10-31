@@ -15,7 +15,7 @@ public enum CircuitState
     Closed,
 
     /// <summary>
-    /// The breaker rejects each call with a <see cref="BrokenCircuitException"/> until the break ends.
+    /// The breaker rejects each call with a <see cref="CircuitRejectedException"/> until the break ends.
     /// </summary>
     Open,
 
@@ -25,7 +25,7 @@ public enum CircuitState
     HalfOpen,
 
     /// <summary>
-    /// The breaker rejects each call with an <see cref="IsolatedCircuitException"/> until
+    /// The breaker rejects each call with a <see cref="CircuitIsolatedException"/> until
     /// <see cref="CircuitBreaker.Close"/> is called.
     /// </summary>
     Isolated,
