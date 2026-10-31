@@ -93,16 +93,26 @@ using (HttpClient client = new(optedIn) { BaseAddress = new("https://orders.exam
 }
 
 // 4. IHttpClientFactory: AddRetryHandler adds a new RetryHandler to each handler chain, and every one uses this factory.
+// A named client gets the default CanRetryRequest. A typed client for the orders service passes RetryHandler.CanReplayContent,
+// so its POSTs are retried too: the service ignores a repeated order with the same idempotency key.
 ScriptedHandler factoryService = new(Step.Status(HttpStatusCode.BadGateway), Step.Json("""{ "id": 42, "stock": 7 }"""));
+ScriptedHandler typedOrders = new(Step.Status(HttpStatusCode.ServiceUnavailable), Step.Status(HttpStatusCode.Created));
 ServiceCollection services = new();
 services.AddHttpClient("catalogue", c => c.BaseAddress = new("https://catalogue.example/"))
     .ConfigurePrimaryHttpMessageHandler(() => factoryService)
     .AddRetryHandler(retries);
+services.AddHttpClient<OrdersClient>(c => c.BaseAddress = new("https://orders.example/"))
+    .ConfigurePrimaryHttpMessageHandler(() => typedOrders)
+    .AddRetryHandler(retries, RetryHandler.CanReplayContent);
 await using (ServiceProvider provider = services.BuildServiceProvider())
 {
     HttpClient client = provider.GetRequiredService<IHttpClientFactory>().CreateClient("catalogue");
     string body = await RunAsync("GET /products/42", () => client.GetStringAsync("products/42"));
-    Show("4. services.AddHttpClient(\"catalogue\").AddRetryHandler(retries)", factoryService, body, Color.Green);
+    Show("4a. services.AddHttpClient(\"catalogue\").AddRetryHandler(retries)", factoryService, body, Color.Green);
+
+    OrdersClient ordersClient = provider.GetRequiredService<OrdersClient>();
+    HttpStatusCode status = await RunAsync("POST /orders", () => ordersClient.PlaceOrderAsync(sku: 42, idempotencyKey: "order-7f3a"));
+    Show("4b. AddHttpClient<OrdersClient>().AddRetryHandler(retries, CanReplayContent)", typedOrders, $"{(int)status} {status}", Color.Green);
 }
 
 // 5. The handler returns the response when the headers arrive. HttpClient reads the body after that, outside the
@@ -264,6 +274,18 @@ void Show(string title, ScriptedHandler handler, string result, Color colour)
     AnsiConsole.MarkupLine($"  The service saw [white]{handler.Calls.Count}[/] request(s): {string.Join(", ", handler.Calls)}");
     AnsiConsole.Write(new Panel(Markup.Escape(result)).Header("[white]The caller got[/]").Border(BoxBorder.Rounded).BorderColor(colour).Expand());
     AnsiConsole.WriteLine();
+}
+
+// A typed client, as IHttpClientFactory makes it: the HttpClient that it receives already has the RetryHandler inside.
+internal sealed class OrdersClient(HttpClient http)
+{
+    public async Task<HttpStatusCode> PlaceOrderAsync(int sku, string idempotencyKey)
+    {
+        using HttpRequestMessage request = new(HttpMethod.Post, "orders") { Content = new StringContent($$"""{ "sku": {{sku}} }""") };
+        request.Headers.Add("Idempotency-Key", idempotencyKey);
+        using HttpResponseMessage response = await http.SendAsync(request);
+        return response.StatusCode;
+    }
 }
 
 // One scripted answer: a description for the log, and the response (or the hang) that the handler gives.
