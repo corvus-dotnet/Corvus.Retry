@@ -22,8 +22,8 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 /// lock for every change, and does not count cancellations by the caller or exceptions that its policy refuses.
 /// </summary>
 /// <remarks>
-/// Most tests run the breaker through a <see cref="ReliabilityPipeline"/> that makes one attempt, so that each call to the
-/// pipeline is one call to the breaker. Each test has its own fake time provider, so the tests run in parallel.
+/// Most tests run the breaker through a <see cref="RetryTaskFactory"/> that makes one attempt, so that each call to the
+/// factory is one call to the breaker. Each test has its own fake time provider, so the tests run in parallel.
 /// </remarks>
 [TestClass]
 public class CircuitBreakerTests
@@ -49,28 +49,74 @@ public class CircuitBreakerTests
     }
 
     [TestMethod]
-    public void TheOptionsHaveTheDocumentedDefaults()
+    public void TheSettingsHaveTheDocumentedDefaults()
     {
-        CircuitBreakerOptions options = new();
+        CircuitBreaker breaker = new();
 
-        Assert.AreEqual(0.1, options.FailureRatio);
-        Assert.AreEqual(100, options.MinimumThroughput);
-        Assert.AreEqual(TimeSpan.FromSeconds(30), options.SamplingDuration);
-        Assert.AreEqual(TimeSpan.FromSeconds(5), options.BreakDuration);
-        Assert.AreSame(AnyExceptionPolicy.Default, options.Policy);
-        Assert.IsNull(options.OnStateChanged);
-        Assert.AreSame(TimeProvider.System, options.TimeProvider);
-        Assert.AreEqual(CircuitState.Closed, new CircuitBreaker(options).State);
+        Assert.AreEqual(0.1, breaker.FailureRate);
+        Assert.AreEqual(100, breaker.MinimumCalls);
+        Assert.AreEqual(TimeSpan.FromSeconds(30), breaker.SamplingWindow);
+        Assert.AreEqual(TimeSpan.FromSeconds(5), breaker.OpenDuration);
+        Assert.AreSame(AnyExceptionPolicy.Default, breaker.Policy);
+        Assert.IsNull(breaker.OnStateChanged);
+        Assert.AreSame(TimeProvider.System, breaker.TimeProvider);
+        Assert.AreEqual(CircuitState.Closed, breaker.State);
+    }
+
+    [TestMethod]
+    public void TheConstructorKeepsEachSetting()
+    {
+        IRetryPolicy policy = RetryPolicies.For<TimeoutException>();
+        Func<CircuitStateChange, ValueTask> onStateChanged = this.Record;
+
+        CircuitBreaker breaker = new(
+            failureRate: 0.25,
+            minimumCalls: 7,
+            samplingWindow: TimeSpan.FromSeconds(12),
+            openDuration: TimeSpan.FromSeconds(3),
+            policy: policy,
+            onStateChanged: onStateChanged,
+            timeProvider: this.fake);
+
+        Assert.AreEqual(0.25, breaker.FailureRate);
+        Assert.AreEqual(7, breaker.MinimumCalls);
+        Assert.AreEqual(TimeSpan.FromSeconds(12), breaker.SamplingWindow);
+        Assert.AreEqual(TimeSpan.FromSeconds(3), breaker.OpenDuration);
+        Assert.AreSame(policy, breaker.Policy);
+        Assert.AreSame(onStateChanged, breaker.OnStateChanged);
+        Assert.AreSame(this.fake, breaker.TimeProvider);
+    }
+
+    [TestMethod]
+    public async Task TheBreakerMeasuresTheBreakWithTheTimeProviderGivenToItsConstructor()
+    {
+        // The fake clock is far from zero before the breaker reads it, so a breaker that read another clock for its
+        // origin would not end the break at the right time.
+        var clock = new FakeTimeProvider(new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        clock.Advance(TimeSpan.FromDays(400));
+        CircuitBreaker breaker = new(failureRate: 1, minimumCalls: 2, openDuration: TimeSpan.FromSeconds(10), timeProvider: clock);
+        var factory = new RetryTaskFactory { Strategy = new DoNotRetry(), CircuitBreaker = breaker, TimeProvider = clock };
+        await FailAsync(factory, 2).ConfigureAwait(false);
+        Assert.AreEqual(CircuitState.Open, breaker.State);
+
+        clock.Advance(TimeSpan.FromSeconds(10) - TimeSpan.FromTicks(1));
+        CircuitRejectedException rejected = await Assert.ThrowsExactlyAsync<CircuitRejectedException>(
+            () => factory.Run(_ => Task.FromResult("ok")).WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Assert.AreEqual(TimeSpan.FromTicks(1), rejected.RetryAfter);
+
+        clock.Advance(TimeSpan.FromTicks(1));
+        Assert.AreEqual("ok", await factory.Run(_ => Task.FromResult("ok")).WaitAsync(WaitLimit).ConfigureAwait(false));
+        Assert.AreEqual(CircuitState.Closed, breaker.State);
     }
 
     [TestMethod]
     public async Task FiveFailuresInTenCalls_OpenTheCircuit()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        RetryTaskFactory factory = this.NewFactory(breaker);
 
-        await SucceedAsync(pipeline, 5).ConfigureAwait(false);
-        Exception last = await FailAsync(pipeline, 5).ConfigureAwait(false);
+        await SucceedAsync(factory, 5).ConfigureAwait(false);
+        Exception last = await FailAsync(factory, 5).ConfigureAwait(false);
 
         Assert.AreEqual(CircuitState.Open, breaker.State);
         Assert.AreSequenceEqual(new[] { new CircuitStateChange(CircuitState.Closed, CircuitState.Open, last) }, this.Changes);
@@ -80,10 +126,10 @@ public class CircuitBreakerTests
     public async Task NineCallsWithFiveFailures_DoNotOpenTheCircuit()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        RetryTaskFactory factory = this.NewFactory(breaker);
 
-        await SucceedAsync(pipeline, 4).ConfigureAwait(false);
-        await FailAsync(pipeline, 5).ConfigureAwait(false);
+        await SucceedAsync(factory, 4).ConfigureAwait(false);
+        await FailAsync(factory, 5).ConfigureAwait(false);
 
         Assert.AreEqual(CircuitState.Closed, breaker.State);
         Assert.AreEqual((9, 5), breaker.GetCounts());
@@ -94,10 +140,10 @@ public class CircuitBreakerTests
     public async Task FailuresWithARatioBelowTheLimit_DoNotOpenTheCircuit()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        RetryTaskFactory factory = this.NewFactory(breaker);
 
-        await SucceedAsync(pipeline, 6).ConfigureAwait(false);
-        await FailAsync(pipeline, 4).ConfigureAwait(false);
+        await SucceedAsync(factory, 6).ConfigureAwait(false);
+        await FailAsync(factory, 4).ConfigureAwait(false);
 
         Assert.AreEqual(CircuitState.Closed, breaker.State);
         Assert.AreEqual((10, 4), breaker.GetCounts());
@@ -109,13 +155,13 @@ public class CircuitBreakerTests
     public async Task FailuresOutsideTheSamplingWindow_DoNotCount(int secondsLater, CircuitState expected)
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        RetryTaskFactory factory = this.NewFactory(breaker);
 
         // Four old failures, then five successes and one failure: five failures in ten calls only if the old ones count.
-        await FailAsync(pipeline, 4).ConfigureAwait(false);
+        await FailAsync(factory, 4).ConfigureAwait(false);
         this.fake.Advance(TimeSpan.FromSeconds(secondsLater));
-        await SucceedAsync(pipeline, 5).ConfigureAwait(false);
-        await FailAsync(pipeline, 1).ConfigureAwait(false);
+        await SucceedAsync(factory, 5).ConfigureAwait(false);
+        await FailAsync(factory, 1).ConfigureAwait(false);
 
         Assert.AreEqual(expected, breaker.State);
     }
@@ -130,12 +176,12 @@ public class CircuitBreakerTests
         // The window of 30 seconds has 10 buckets of 3 seconds. The failures are in the bucket that starts at 0 s, and
         // the successes in the bucket that starts at 15 s. Each bucket leaves the window 30 seconds after it starts.
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        RetryTaskFactory factory = this.NewFactory(breaker);
         TimeSpan elapsed = TimeSpan.Zero;
 
-        await FailAsync(pipeline, 4).ConfigureAwait(false);
+        await FailAsync(factory, 4).ConfigureAwait(false);
         AdvanceTo(TimeSpan.FromSeconds(15));
-        await SucceedAsync(pipeline, 2).ConfigureAwait(false);
+        await SucceedAsync(factory, 2).ConfigureAwait(false);
 
         AdvanceTo(TimeSpan.FromTicks(firstTicks));
         Assert.AreEqual((firstCalls, firstFailures), breaker.GetCounts());
@@ -155,15 +201,15 @@ public class CircuitBreakerTests
     public async Task WhenTheWallClockMovesBack_TheSamplingWindowStillMovesWithTheMonotonicClock()
     {
         var clock = new SplitClockTimeProvider();
-        CircuitBreaker breaker = this.NewBreaker(options => options with { TimeProvider = clock });
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        CircuitBreaker breaker = this.NewBreaker(timeProvider: clock);
+        RetryTaskFactory factory = this.NewFactory(breaker);
 
         // The old failures leave the window only if the breaker ignores the wall clock.
-        await FailAsync(pipeline, 4).ConfigureAwait(false);
+        await FailAsync(factory, 4).ConfigureAwait(false);
         clock.MoveWallClock(TimeSpan.FromHours(-1));
         clock.MoveMonotonicClock(TimeSpan.FromSeconds(30));
-        await SucceedAsync(pipeline, 5).ConfigureAwait(false);
-        await FailAsync(pipeline, 1).ConfigureAwait(false);
+        await SucceedAsync(factory, 5).ConfigureAwait(false);
+        await FailAsync(factory, 1).ConfigureAwait(false);
 
         Assert.AreEqual(CircuitState.Closed, breaker.State);
         Assert.AreEqual((6, 1), breaker.GetCounts());
@@ -173,21 +219,21 @@ public class CircuitBreakerTests
     public async Task WhenTheWallClockMoves_TheBreakStillEndsWithTheMonotonicClock()
     {
         var clock = new SplitClockTimeProvider();
-        CircuitBreaker breaker = this.NewBreaker(options => options with { TimeProvider = clock });
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
-        await FailAsync(pipeline, 10).ConfigureAwait(false);
+        CircuitBreaker breaker = this.NewBreaker(timeProvider: clock);
+        RetryTaskFactory factory = this.NewFactory(breaker);
+        await FailAsync(factory, 10).ConfigureAwait(false);
 
         // A jump of the wall clock past the break does not end the break.
         clock.MoveWallClock(TimeSpan.FromDays(1));
         clock.MoveMonotonicClock(TimeSpan.FromSeconds(2));
-        BrokenCircuitException thrown = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        CircuitRejectedException thrown = await Assert.ThrowsExactlyAsync<CircuitRejectedException>(
+            () => factory.RunValueTask(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
         Assert.AreEqual(TimeSpan.FromSeconds(3), thrown.RetryAfter);
 
         // A move of the wall clock back does not make the break longer.
         clock.MoveWallClock(TimeSpan.FromDays(-2));
         clock.MoveMonotonicClock(TimeSpan.FromSeconds(3));
-        await SucceedAsync(pipeline, 1).ConfigureAwait(false);
+        await SucceedAsync(factory, 1).ConfigureAwait(false);
 
         Assert.AreEqual(CircuitState.Closed, breaker.State);
     }
@@ -196,13 +242,13 @@ public class CircuitBreakerTests
     public async Task AnOpenCircuit_RejectsCallsWithTheTimeThatRemainsInTheBreak()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
-        await FailAsync(pipeline, 10).ConfigureAwait(false);
+        RetryTaskFactory factory = this.NewFactory(breaker);
+        await FailAsync(factory, 10).ConfigureAwait(false);
         int invocations = 0;
 
         this.fake.Advance(TimeSpan.FromSeconds(2));
-        BrokenCircuitException thrown = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<int>(Interlocked.Increment(ref invocations))).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        CircuitRejectedException thrown = await Assert.ThrowsExactlyAsync<CircuitRejectedException>(
+            () => factory.RunValueTask(_ => new ValueTask<int>(Interlocked.Increment(ref invocations))).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
         Assert.AreEqual(TimeSpan.FromSeconds(3), thrown.RetryAfter);
         Assert.AreEqual(0, invocations);
@@ -213,17 +259,17 @@ public class CircuitBreakerTests
     public async Task AfterTheBreak_OneCallGoesThroughAndTheOthersAreRejected_AndASuccessClosesTheCircuit()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
-        Exception opening = await FailAsync(pipeline, 10).ConfigureAwait(false);
+        RetryTaskFactory factory = this.NewFactory(breaker);
+        Exception opening = await FailAsync(factory, 10).ConfigureAwait(false);
         TaskCompletionSource<string> probeResult = new();
 
         this.fake.Advance(BreakDuration);
-        Task<string> probe = pipeline.ExecuteAsync(ct => new ValueTask<string>(probeResult.Task.WaitAsync(ct))).AsTask();
+        Task<string> probe = factory.RunValueTask(ct => new ValueTask<string>(probeResult.Task.WaitAsync(ct))).AsTask();
 
         Assert.IsFalse(probe.IsCompleted);
         Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
-        BrokenCircuitException rejected = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<string>("other")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        CircuitRejectedException rejected = await Assert.ThrowsExactlyAsync<CircuitRejectedException>(
+            () => factory.RunValueTask(_ => new ValueTask<string>("other")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
         Assert.IsNull(rejected.RetryAfter);
 
         probeResult.SetResult("probe");
@@ -245,18 +291,18 @@ public class CircuitBreakerTests
     public async Task AfterTheBreak_AFailureOfTheTestCallOpensTheCircuitAgain()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
-        await FailAsync(pipeline, 10).ConfigureAwait(false);
+        RetryTaskFactory factory = this.NewFactory(breaker);
+        await FailAsync(factory, 10).ConfigureAwait(false);
 
         this.fake.Advance(BreakDuration);
-        Exception probeFailure = await FailAsync(pipeline, 1).ConfigureAwait(false);
+        Exception probeFailure = await FailAsync(factory, 1).ConfigureAwait(false);
 
         Assert.AreEqual(CircuitState.Open, breaker.State);
         Assert.AreEqual(new CircuitStateChange(CircuitState.HalfOpen, CircuitState.Open, probeFailure), this.Changes[^1]);
 
         // The new break is a full break from the failure of the test call.
-        BrokenCircuitException thrown = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        CircuitRejectedException thrown = await Assert.ThrowsExactlyAsync<CircuitRejectedException>(
+            () => factory.RunValueTask(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
         Assert.AreEqual(BreakDuration, thrown.RetryAfter);
     }
 
@@ -276,29 +322,29 @@ public class CircuitBreakerTests
     }
 
     [TestMethod]
-    public async Task IsolateRejectsEveryCallWithIsolatedCircuitException_AndCloseClosesTheCircuit()
+    public async Task IsolateRejectsEveryCallWithCircuitIsolatedException_AndCloseClosesTheCircuit()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        RetryTaskFactory factory = this.NewFactory(breaker);
         int invocations = 0;
 
         breaker.Isolate();
 
         Assert.AreEqual(CircuitState.Isolated, breaker.State);
-        IsolatedCircuitException thrown = await Assert.ThrowsExactlyAsync<IsolatedCircuitException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<int>(Interlocked.Increment(ref invocations))).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        CircuitIsolatedException thrown = await Assert.ThrowsExactlyAsync<CircuitIsolatedException>(
+            () => factory.RunValueTask(_ => new ValueTask<int>(Interlocked.Increment(ref invocations))).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
         Assert.IsNull(thrown.RetryAfter);
         Assert.AreEqual(0, invocations);
 
         // The break duration does not end an isolation.
         this.fake.Advance(BreakDuration);
-        await Assert.ThrowsExactlyAsync<IsolatedCircuitException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        await Assert.ThrowsExactlyAsync<CircuitIsolatedException>(
+            () => factory.RunValueTask(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
         breaker.Close();
 
         Assert.AreEqual(CircuitState.Closed, breaker.State);
-        await SucceedAsync(pipeline, 1).ConfigureAwait(false);
+        await SucceedAsync(factory, 1).ConfigureAwait(false);
         Assert.AreSequenceEqual(
             new[]
             {
@@ -312,8 +358,8 @@ public class CircuitBreakerTests
     public async Task IsolateAndCloseRaiseNoEventWhenTheStateDoesNotChange_AndCloseClearsTheCounts()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
-        await FailAsync(pipeline, 3).ConfigureAwait(false);
+        RetryTaskFactory factory = this.NewFactory(breaker);
+        await FailAsync(factory, 3).ConfigureAwait(false);
 
         breaker.Close();
 
@@ -330,8 +376,8 @@ public class CircuitBreakerTests
     public async Task CloseFromAnOpenCircuit_ReportsTheChangeAndLetsCallsThrough()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
-        Exception opening = await FailAsync(pipeline, 10).ConfigureAwait(false);
+        RetryTaskFactory factory = this.NewFactory(breaker);
+        Exception opening = await FailAsync(factory, 10).ConfigureAwait(false);
 
         breaker.Close();
 
@@ -344,7 +390,7 @@ public class CircuitBreakerTests
                 new CircuitStateChange(CircuitState.Open, CircuitState.Closed, null),
             },
             this.Changes);
-        await SucceedAsync(pipeline, 1).ConfigureAwait(false);
+        await SucceedAsync(factory, 1).ConfigureAwait(false);
         Assert.AreEqual((1, 0), breaker.GetCounts());
     }
 
@@ -352,19 +398,19 @@ public class CircuitBreakerTests
     public async Task EachRejection_HasAMessageThatSaysWhy()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
-        await FailAsync(pipeline, 10).ConfigureAwait(false);
+        RetryTaskFactory factory = this.NewFactory(breaker);
+        await FailAsync(factory, 10).ConfigureAwait(false);
 
-        BrokenCircuitException open = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        CircuitRejectedException open = await Assert.ThrowsExactlyAsync<CircuitRejectedException>(
+            () => factory.RunValueTask(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
         this.fake.Advance(BreakDuration);
         TaskCompletionSource<string> probeResult = new();
-        Task<string> probe = pipeline.ExecuteAsync(ct => new ValueTask<string>(probeResult.Task.WaitAsync(ct))).AsTask();
-        BrokenCircuitException halfOpen = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        Task<string> probe = factory.RunValueTask(ct => new ValueTask<string>(probeResult.Task.WaitAsync(ct))).AsTask();
+        CircuitRejectedException halfOpen = await Assert.ThrowsExactlyAsync<CircuitRejectedException>(
+            () => factory.RunValueTask(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
         breaker.Isolate();
-        IsolatedCircuitException isolated = await Assert.ThrowsExactlyAsync<IsolatedCircuitException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        CircuitIsolatedException isolated = await Assert.ThrowsExactlyAsync<CircuitIsolatedException>(
+            () => factory.RunValueTask(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
         Assert.AreEqual("The circuit is open.", open.Message);
         Assert.AreEqual("The circuit is half-open, and a test call is in progress.", halfOpen.Message);
@@ -377,21 +423,21 @@ public class CircuitBreakerTests
     public async Task TheRetryAfterOfARejection_DecreasesAsTheBreakPasses()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
-        await FailAsync(pipeline, 10).ConfigureAwait(false);
+        RetryTaskFactory factory = this.NewFactory(breaker);
+        await FailAsync(factory, 10).ConfigureAwait(false);
         TimeSpan elapsed = TimeSpan.Zero;
 
         foreach (TimeSpan time in new[] { TimeSpan.Zero, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(3500), BreakDuration - TimeSpan.FromTicks(1) })
         {
             this.fake.Advance(time - elapsed);
             elapsed = time;
-            BrokenCircuitException rejected = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
-                () => pipeline.ExecuteAsync(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+            CircuitRejectedException rejected = await Assert.ThrowsExactlyAsync<CircuitRejectedException>(
+                () => factory.RunValueTask(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
             Assert.AreEqual(BreakDuration - time, rejected.RetryAfter);
         }
 
         this.fake.Advance(BreakDuration - elapsed);
-        await SucceedAsync(pipeline, 1).ConfigureAwait(false);
+        await SucceedAsync(factory, 1).ConfigureAwait(false);
         Assert.AreEqual(CircuitState.Closed, breaker.State);
     }
 
@@ -401,17 +447,17 @@ public class CircuitBreakerTests
     public async Task TheShortestAndTheLongestBreak_EndAtTheRightTime(bool longest)
     {
         TimeSpan breakDuration = longest ? RetryDelay.MaxSupported : TimeSpan.FromMilliseconds(500);
-        CircuitBreaker breaker = this.NewBreaker(o => o with { BreakDuration = breakDuration });
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        CircuitBreaker breaker = this.NewBreaker(openDuration: breakDuration);
+        RetryTaskFactory factory = this.NewFactory(breaker);
         OpenDirectly(breaker);
 
-        BrokenCircuitException atStart = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        CircuitRejectedException atStart = await Assert.ThrowsExactlyAsync<CircuitRejectedException>(
+            () => factory.RunValueTask(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
         this.fake.Advance(breakDuration - TimeSpan.FromTicks(1));
-        BrokenCircuitException atEnd = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        CircuitRejectedException atEnd = await Assert.ThrowsExactlyAsync<CircuitRejectedException>(
+            () => factory.RunValueTask(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
         this.fake.Advance(TimeSpan.FromTicks(1));
-        await SucceedAsync(pipeline, 1).ConfigureAwait(false);
+        await SucceedAsync(factory, 1).ConfigureAwait(false);
 
         Assert.AreEqual(breakDuration, atStart.RetryAfter);
         Assert.AreEqual(TimeSpan.FromTicks(1), atEnd.RetryAfter);
@@ -422,8 +468,8 @@ public class CircuitBreakerTests
     public async Task IsolateAndCloseWorkFromAnOpenCircuit()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
-        Exception opening = await FailAsync(pipeline, 10).ConfigureAwait(false);
+        RetryTaskFactory factory = this.NewFactory(breaker);
+        Exception opening = await FailAsync(factory, 10).ConfigureAwait(false);
 
         breaker.Isolate();
         breaker.Close();
@@ -436,19 +482,19 @@ public class CircuitBreakerTests
                 new CircuitStateChange(CircuitState.Isolated, CircuitState.Closed, null),
             },
             this.Changes);
-        await SucceedAsync(pipeline, 1).ConfigureAwait(false);
+        await SucceedAsync(factory, 1).ConfigureAwait(false);
     }
 
     [TestMethod]
     public async Task ACancellationByTheCaller_IsNotACallAndNotAFailure()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        RetryTaskFactory factory = this.NewFactory(breaker);
 
         for (int i = 0; i < 10; i++)
         {
             using CancellationTokenSource cts = new();
-            Task<string> call = pipeline.ExecuteAsync(NeverCompletesAsync, cts.Token).AsTask();
+            Task<string> call = factory.RunValueTask(NeverCompletesAsync, cts.Token).AsTask();
             await cts.CancelAsync().ConfigureAwait(false);
             TaskCanceledException cancelled = await Assert.ThrowsExactlyAsync<TaskCanceledException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
             Assert.AreEqual(cts.Token, cancelled.CancellationToken);
@@ -457,8 +503,8 @@ public class CircuitBreakerTests
         Assert.AreEqual((0, 0), breaker.GetCounts());
 
         // Five failures in ten calls open the circuit only if the cancellations did not count.
-        await SucceedAsync(pipeline, 5).ConfigureAwait(false);
-        await FailAsync(pipeline, 5).ConfigureAwait(false);
+        await SucceedAsync(factory, 5).ConfigureAwait(false);
+        await FailAsync(factory, 5).ConfigureAwait(false);
         Assert.AreEqual(CircuitState.Open, breaker.State);
     }
 
@@ -466,12 +512,12 @@ public class CircuitBreakerTests
     public async Task ATestCallThatTheCallerCancels_LetsTheNextCallMakeTheTest()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
-        await FailAsync(pipeline, 10).ConfigureAwait(false);
+        RetryTaskFactory factory = this.NewFactory(breaker);
+        await FailAsync(factory, 10).ConfigureAwait(false);
         this.fake.Advance(BreakDuration);
 
         using CancellationTokenSource cts = new();
-        Task<string> probe = pipeline.ExecuteAsync(NeverCompletesAsync, cts.Token).AsTask();
+        Task<string> probe = factory.RunValueTask(NeverCompletesAsync, cts.Token).AsTask();
         Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
         int changesBefore = this.Changes.Count;
         await cts.CancelAsync().ConfigureAwait(false);
@@ -480,7 +526,7 @@ public class CircuitBreakerTests
         Assert.AreEqual(cts.Token, cancelled.CancellationToken);
         Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
         Assert.HasCount(changesBefore, this.Changes);
-        await SucceedAsync(pipeline, 1).ConfigureAwait(false);
+        await SucceedAsync(factory, 1).ConfigureAwait(false);
         Assert.AreEqual(CircuitState.Closed, breaker.State);
         Assert.AreEqual(new CircuitStateChange(CircuitState.HalfOpen, CircuitState.Closed, null), this.Changes[^1]);
     }
@@ -489,20 +535,20 @@ public class CircuitBreakerTests
     public async Task ATestCallFromBeforeIsolateAndClose_DoesNotCloseTheCircuitWhileALaterTestCallIsInFlight()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
-        await FailAsync(pipeline, 10).ConfigureAwait(false);
+        RetryTaskFactory factory = this.NewFactory(breaker);
+        await FailAsync(factory, 10).ConfigureAwait(false);
         this.fake.Advance(BreakDuration);
         TaskCompletionSource<string> staleResult = new();
-        Task<string> stale = pipeline.ExecuteAsync(ct => new ValueTask<string>(staleResult.Task.WaitAsync(ct))).AsTask();
+        Task<string> stale = factory.RunValueTask(ct => new ValueTask<string>(staleResult.Task.WaitAsync(ct))).AsTask();
         Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
 
         // The circuit opens again, and a new test call starts while the old one still runs.
         breaker.Isolate();
         breaker.Close();
-        await FailAsync(pipeline, 10).ConfigureAwait(false);
+        await FailAsync(factory, 10).ConfigureAwait(false);
         this.fake.Advance(BreakDuration);
         TaskCompletionSource<string> currentResult = new();
-        Task<string> current = pipeline.ExecuteAsync(ct => new ValueTask<string>(currentResult.Task.WaitAsync(ct))).AsTask();
+        Task<string> current = factory.RunValueTask(ct => new ValueTask<string>(currentResult.Task.WaitAsync(ct))).AsTask();
         Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
 
         int changesBefore = this.Changes.Count;
@@ -512,8 +558,8 @@ public class CircuitBreakerTests
         // The old test call does not decide the state, and the new test call is still the only test call.
         Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
         Assert.HasCount(changesBefore, this.Changes);
-        await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<string>("other")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        await Assert.ThrowsExactlyAsync<CircuitRejectedException>(
+            () => factory.RunValueTask(_ => new ValueTask<string>("other")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
         currentResult.SetResult("current");
         Assert.AreEqual("current", await current.WaitAsync(WaitLimit).ConfigureAwait(false));
@@ -524,19 +570,19 @@ public class CircuitBreakerTests
     public async Task ATestCallFromBeforeIsolateAndCloseThatTheCallerCancels_DoesNotLetASecondTestCallStart()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
-        await FailAsync(pipeline, 10).ConfigureAwait(false);
+        RetryTaskFactory factory = this.NewFactory(breaker);
+        await FailAsync(factory, 10).ConfigureAwait(false);
         this.fake.Advance(BreakDuration);
         using CancellationTokenSource cts = new();
-        Task<string> stale = pipeline.ExecuteAsync(NeverCompletesAsync, cts.Token).AsTask();
+        Task<string> stale = factory.RunValueTask(NeverCompletesAsync, cts.Token).AsTask();
         Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
 
         breaker.Isolate();
         breaker.Close();
-        await FailAsync(pipeline, 10).ConfigureAwait(false);
+        await FailAsync(factory, 10).ConfigureAwait(false);
         this.fake.Advance(BreakDuration);
         TaskCompletionSource<string> currentResult = new();
-        Task<string> current = pipeline.ExecuteAsync(ct => new ValueTask<string>(currentResult.Task.WaitAsync(ct))).AsTask();
+        Task<string> current = factory.RunValueTask(ct => new ValueTask<string>(currentResult.Task.WaitAsync(ct))).AsTask();
         Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
 
         int changesBefore = this.Changes.Count;
@@ -548,8 +594,8 @@ public class CircuitBreakerTests
 
         // The test call that started after the break is still in flight, so the breaker rejects another call.
         int invocations = 0;
-        await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<int>(Interlocked.Increment(ref invocations))).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        await Assert.ThrowsExactlyAsync<CircuitRejectedException>(
+            () => factory.RunValueTask(_ => new ValueTask<int>(Interlocked.Increment(ref invocations))).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
         Assert.AreEqual(0, invocations);
 
         currentResult.SetResult("current");
@@ -577,20 +623,20 @@ public class CircuitBreakerTests
     {
         // The stale timeouts are longer than the break, so that they expire only when the test makes them expire.
         TimeSpan staleTimeout = TimeSpan.FromMinutes(1);
-        CircuitBreaker breaker = this.NewBreaker(o => o with { Policy = RetryPolicies.Handle<InvalidOperationException>() });
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
-        var stalePipeline = new ReliabilityPipeline<int>(new ReliabilityPipelineOptions<int>
+        CircuitBreaker breaker = this.NewBreaker(policy: RetryPolicies.For<InvalidOperationException>());
+        RetryTaskFactory factory = this.NewFactory(breaker);
+        var staleFactory = new RetryTaskFactory<int>
         {
             Strategy = new DoNotRetry(),
             AttemptTimeout = staleExit == CircuitBreakerExit.AttemptTimeout ? staleTimeout : null,
             TotalTimeout = staleExit == CircuitBreakerExit.TotalTimeout ? staleTimeout : null,
             CircuitBreaker = breaker,
             TimeProvider = this.fake,
-        });
-        await FailAsync(pipeline, 10).ConfigureAwait(false);
+        };
+        await FailAsync(factory, 10).ConfigureAwait(false);
         this.fake.Advance(BreakDuration);
         TaskCompletionSource<int> staleResult = new();
-        Task<int> stale = stalePipeline.ExecuteAsync(ct => new ValueTask<int>(staleResult.Task.WaitAsync(ct))).AsTask();
+        Task<int> stale = staleFactory.RunValueTask(ct => new ValueTask<int>(staleResult.Task.WaitAsync(ct))).AsTask();
         Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
 
         if (interruption == CircuitBreakerInterruption.IsolateAndClose)
@@ -599,13 +645,13 @@ public class CircuitBreakerTests
         }
 
         breaker.Close();
-        await FailAsync(pipeline, 10).ConfigureAwait(false);
+        await FailAsync(factory, 10).ConfigureAwait(false);
         this.fake.Advance(BreakDuration);
         TaskCompletionSource<string> currentResult = new();
         Task<string>? current = null;
         if (interruption != CircuitBreakerInterruption.LaterBreakThatHasEnded)
         {
-            current = pipeline.ExecuteAsync(ct => new ValueTask<string>(currentResult.Task.WaitAsync(ct))).AsTask();
+            current = factory.RunValueTask(ct => new ValueTask<string>(currentResult.Task.WaitAsync(ct))).AsTask();
             Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
         }
 
@@ -643,15 +689,15 @@ public class CircuitBreakerTests
         if (current is null)
         {
             // The break has ended and no test call is in flight, so the next call is the test call.
-            current = pipeline.ExecuteAsync(ct => new ValueTask<string>(currentResult.Task.WaitAsync(ct))).AsTask();
+            current = factory.RunValueTask(ct => new ValueTask<string>(currentResult.Task.WaitAsync(ct))).AsTask();
             Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
             Assert.AreEqual(new CircuitStateChange(CircuitState.Open, CircuitState.HalfOpen, null), this.Changes[^1]);
         }
         else
         {
             // The current test call is still the only test call.
-            BrokenCircuitException rejected = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
-                () => pipeline.ExecuteAsync(_ => new ValueTask<string>("other")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+            CircuitRejectedException rejected = await Assert.ThrowsExactlyAsync<CircuitRejectedException>(
+                () => factory.RunValueTask(_ => new ValueTask<string>("other")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
             Assert.AreEqual("The circuit is half-open, and a test call is in progress.", rejected.Message);
         }
 
@@ -669,16 +715,16 @@ public class CircuitBreakerTests
     public async Task ATestCallFromBeforeCloseThatEndsAfterClose_IsNotCountedInTheNewWindow(bool staleFails)
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
-        Exception opening = await FailAsync(pipeline, 10).ConfigureAwait(false);
+        RetryTaskFactory factory = this.NewFactory(breaker);
+        Exception opening = await FailAsync(factory, 10).ConfigureAwait(false);
         this.fake.Advance(BreakDuration);
         TaskCompletionSource<string> staleResult = new();
-        Task<string> stale = pipeline.ExecuteAsync(ct => new ValueTask<string>(staleResult.Task.WaitAsync(ct))).AsTask();
+        Task<string> stale = factory.RunValueTask(ct => new ValueTask<string>(staleResult.Task.WaitAsync(ct))).AsTask();
         Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
 
         // The circuit closes while the test call is in flight, and the new window gets one call.
         breaker.Close();
-        await SucceedAsync(pipeline, 1).ConfigureAwait(false);
+        await SucceedAsync(factory, 1).ConfigureAwait(false);
         Assert.AreEqual((1, 0), breaker.GetCounts());
 
         if (staleFails)
@@ -710,10 +756,10 @@ public class CircuitBreakerTests
     [TestMethod]
     public async Task AnExceptionThatThePolicyRefuses_IsNotAFailure()
     {
-        CircuitBreaker breaker = this.NewBreaker(o => o with { Policy = RetryPolicies.Handle<TimeoutException>() });
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        CircuitBreaker breaker = this.NewBreaker(policy: RetryPolicies.For<TimeoutException>());
+        RetryTaskFactory factory = this.NewFactory(breaker);
 
-        await FailAsync(pipeline, 10).ConfigureAwait(false);
+        await FailAsync(factory, 10).ConfigureAwait(false);
 
         Assert.AreEqual(CircuitState.Closed, breaker.State);
         Assert.AreEqual((10, 0), breaker.GetCounts());
@@ -722,12 +768,12 @@ public class CircuitBreakerTests
     [TestMethod]
     public async Task AnAggregateException_IsAFailureWhenThePolicyAcceptsTheExceptionsInsideIt()
     {
-        CircuitBreaker breaker = this.NewBreaker(o => o with { Policy = RetryPolicies.Handle<HttpRequestException>() });
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        CircuitBreaker breaker = this.NewBreaker(policy: RetryPolicies.For<HttpRequestException>());
+        RetryTaskFactory factory = this.NewFactory(breaker);
         AggregateException failure = new(new HttpRequestException("Failure"));
 
         AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(
-            () => pipeline.ExecuteAsync<string>(_ => throw failure).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+            () => factory.RunValueTask<string>(_ => throw failure).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
         Assert.AreSame(failure, thrown);
         Assert.AreEqual((1, 1), breaker.GetCounts());
@@ -737,9 +783,8 @@ public class CircuitBreakerTests
     public async Task AnAggregateExceptionWithNoInnerExceptions_IsPassedToThePolicyItself()
     {
         List<Exception> consulted = [];
-        CircuitBreaker breaker = this.NewBreaker(o => o with
-        {
-            Policy = RetryPolicies.FromPredicate(ex =>
+        CircuitBreaker breaker = this.NewBreaker(
+            policy: RetryPolicies.FromPredicate(ex =>
             {
                 lock (consulted)
                 {
@@ -747,13 +792,12 @@ public class CircuitBreakerTests
                 }
 
                 return ex is AggregateException;
-            }),
-        });
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+            }));
+        RetryTaskFactory factory = this.NewFactory(breaker);
         AggregateException failure = new();
 
         AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(
-            () => pipeline.ExecuteAsync<string>(_ => throw failure).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+            () => factory.RunValueTask<string>(_ => throw failure).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
         Assert.AreSame(failure, thrown);
         Assert.AreSame(failure, Assert.ContainsSingle(consulted));
@@ -764,18 +808,18 @@ public class CircuitBreakerTests
     public async Task AResultThatIsAFailure_CountsAsAFailure()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        var pipeline = new ReliabilityPipeline<int>(new ReliabilityPipelineOptions<int>
+        var factory = new RetryTaskFactory<int>
         {
             Strategy = new DoNotRetry(),
-            ShouldRetryResult = static r => r < 0,
+            CanRetryResult = static r => r < 0,
             CircuitBreaker = breaker,
             TimeProvider = this.fake,
-        });
+        };
 
         for (int i = 0; i < 10; i++)
         {
             int result = i % 2 == 0 ? 1 : -1;
-            Assert.AreEqual(result, await pipeline.ExecuteAsync(_ => new ValueTask<int>(result)).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false));
+            Assert.AreEqual(result, await factory.RunValueTask(_ => new ValueTask<int>(result)).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false));
         }
 
         Assert.AreEqual(CircuitState.Open, breaker.State);
@@ -786,15 +830,15 @@ public class CircuitBreakerTests
     public async Task AnAttemptTimeout_CountsAsAFailure()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+        var factory = new RetryTaskFactory
         {
             Strategy = new DoNotRetry(),
             AttemptTimeout = TimeSpan.FromSeconds(1),
             CircuitBreaker = breaker,
             TimeProvider = this.fake,
-        });
+        };
 
-        Task<string> call = pipeline.ExecuteAsync(NeverCompletesAsync).AsTask();
+        Task<string> call = factory.RunValueTask(NeverCompletesAsync).AsTask();
         Assert.IsFalse(call.IsCompleted);
         this.fake.Advance(TimeSpan.FromSeconds(1));
 
@@ -805,13 +849,13 @@ public class CircuitBreakerTests
     [TestMethod]
     public async Task AnAttemptTimeoutCountsAsAFailure_WhenThePolicyOfTheBreakerDoesNotHandleTimeouts()
     {
-        CircuitBreaker breaker = this.NewBreaker(o => o with { MinimumThroughput = 2, Policy = RetryPolicies.Handle<HttpRequestException>() });
-        ReliabilityPipeline pipeline = this.NewPipelineWithAttemptTimeout(breaker);
+        CircuitBreaker breaker = this.NewBreaker(minimumCalls: 2, policy: RetryPolicies.For<HttpRequestException>());
+        RetryTaskFactory factory = this.NewFactoryWithAttemptTimeout(breaker);
 
         RetryTimeoutException? last = null;
         for (int i = 0; i < 2; i++)
         {
-            Task<string> call = pipeline.ExecuteAsync(NeverCompletesAsync).AsTask();
+            Task<string> call = factory.RunValueTask(NeverCompletesAsync).AsTask();
             this.fake.Advance(TimeSpan.FromSeconds(1));
             last = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => call.WaitAsync(WaitLimit)).ConfigureAwait(false);
         }
@@ -823,12 +867,12 @@ public class CircuitBreakerTests
     [TestMethod]
     public async Task ATestCallThatTimesOut_OpensTheCircuitAgain_WhenThePolicyDoesNotHandleTimeouts()
     {
-        CircuitBreaker breaker = this.NewBreaker(o => o with { Policy = RetryPolicies.Handle<InvalidOperationException>() });
-        await FailAsync(this.NewPipeline(breaker), 10).ConfigureAwait(false);
+        CircuitBreaker breaker = this.NewBreaker(policy: RetryPolicies.For<InvalidOperationException>());
+        await FailAsync(this.NewFactory(breaker), 10).ConfigureAwait(false);
         this.fake.Advance(BreakDuration);
-        ReliabilityPipeline pipeline = this.NewPipelineWithAttemptTimeout(breaker);
+        RetryTaskFactory factory = this.NewFactoryWithAttemptTimeout(breaker);
 
-        Task<string> probe = pipeline.ExecuteAsync(NeverCompletesAsync).AsTask();
+        Task<string> probe = factory.RunValueTask(NeverCompletesAsync).AsTask();
         Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
         this.fake.Advance(TimeSpan.FromSeconds(1));
         RetryTimeoutException thrown = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => probe.WaitAsync(WaitLimit)).ConfigureAwait(false);
@@ -859,7 +903,7 @@ public class CircuitBreakerTests
         Assert.IsEmpty(this.Changes);
 
         // The call holds nothing, so the next call goes through and is counted.
-        await SucceedAsync(this.NewPipeline(breaker), 1).ConfigureAwait(false);
+        await SucceedAsync(this.NewFactory(breaker), 1).ConfigureAwait(false);
         Assert.AreEqual((calls + 1, failures), breaker.GetCounts());
     }
 
@@ -892,12 +936,12 @@ public class CircuitBreakerTests
 
         Assert.AreSequenceEqual(expectedChanges, this.Changes);
 
-        ReliabilityPipeline next = this.NewPipeline(breaker);
+        RetryTaskFactory next = this.NewFactory(breaker);
         if (expected == CircuitState.Open)
         {
             // A failure of the test call starts a full new break.
-            BrokenCircuitException rejected = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
-                () => next.ExecuteAsync(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+            CircuitRejectedException rejected = await Assert.ThrowsExactlyAsync<CircuitRejectedException>(
+                () => next.RunValueTask(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
             Assert.AreEqual(BreakDuration, rejected.RetryAfter);
             this.fake.Advance(BreakDuration);
         }
@@ -911,22 +955,19 @@ public class CircuitBreakerTests
     public async Task WhenThePolicyOfTheBreakerThrowsDuringTheTestCall_TheCallThrowsThatExceptionAndTheNextCallMakesTheTest()
     {
         var policyFailure = new ArithmeticException("The policy failed");
-        CircuitBreaker breaker = this.NewBreaker(o => o with
-        {
-            Policy = RetryPolicies.FromPredicate(ex => ex is FormatException ? throw policyFailure : true),
-        });
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
-        await FailAsync(pipeline, 10).ConfigureAwait(false);
+        CircuitBreaker breaker = this.NewBreaker(policy: RetryPolicies.FromPredicate(ex => ex is FormatException ? throw policyFailure : true));
+        RetryTaskFactory factory = this.NewFactory(breaker);
+        await FailAsync(factory, 10).ConfigureAwait(false);
         this.fake.Advance(BreakDuration);
 
         ArithmeticException thrown = await Assert.ThrowsExactlyAsync<ArithmeticException>(
-            () => pipeline.ExecuteAsync<string>(_ => throw new FormatException("Failure")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+            () => factory.RunValueTask<string>(_ => throw new FormatException("Failure")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
         // The call has no outcome, so there is no change from half-open.
         Assert.AreSame(policyFailure, thrown);
         Assert.AreEqual(CircuitState.HalfOpen, breaker.State);
         Assert.AreEqual(new CircuitStateChange(CircuitState.Open, CircuitState.HalfOpen, null), this.Changes[^1]);
-        await SucceedAsync(pipeline, 1).ConfigureAwait(false);
+        await SucceedAsync(factory, 1).ConfigureAwait(false);
         Assert.AreEqual(CircuitState.Closed, breaker.State);
         Assert.AreEqual(new CircuitStateChange(CircuitState.HalfOpen, CircuitState.Closed, null), this.Changes[^1]);
         Assert.HasCount(3, this.Changes);
@@ -938,15 +979,13 @@ public class CircuitBreakerTests
     public async Task IsolateAndCloseCompleteWhenOnStateChangedAwaitsOnASingleThreadedSynchronizationContext(bool close)
     {
         SynchronizationContext? contextInCallback = null;
-        CircuitBreaker breaker = this.NewBreaker(o => o with
-        {
-            OnStateChanged = async change =>
+        CircuitBreaker breaker = this.NewBreaker(
+            onStateChanged: async change =>
             {
                 contextInCallback = SynchronizationContext.Current;
                 await Task.Yield();
                 await this.Record(change).ConfigureAwait(false);
-            },
-        });
+            });
         if (close)
         {
             breaker.Isolate();
@@ -982,15 +1021,13 @@ public class CircuitBreakerTests
     public async Task IsolateAndCloseCompleteWhenOnStateChangedAwaitsOnAnExclusiveScheduler(bool close)
     {
         TaskScheduler? schedulerInCallback = null;
-        CircuitBreaker breaker = this.NewBreaker(o => o with
-        {
-            OnStateChanged = async change =>
+        CircuitBreaker breaker = this.NewBreaker(
+            onStateChanged: async change =>
             {
                 schedulerInCallback = TaskScheduler.Current;
                 await Task.Yield();
                 await this.Record(change).ConfigureAwait(false);
-            },
-        });
+            });
         if (close)
         {
             breaker.Isolate();
@@ -1035,15 +1072,13 @@ public class CircuitBreakerTests
     {
         CircuitState target = close ? CircuitState.Closed : CircuitState.Isolated;
         InvalidCastException callbackFailure = new("Callback failed");
-        CircuitBreaker breaker = this.NewBreaker(o => o with
-        {
-            OnStateChanged = change => change.To != target
+        CircuitBreaker breaker = this.NewBreaker(
+            onStateChanged: change => change.To != target
                 ? this.Record(change)
                 : awaitsOnASingleThreadedSynchronizationContext
                     ? this.RecordThenThrowAfterYieldAsync(change, callbackFailure)
-                    : this.RecordThenThrow(change, callbackFailure),
-        });
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+                    : this.RecordThenThrow(change, callbackFailure));
+        RetryTaskFactory factory = this.NewFactory(breaker);
         if (close)
         {
             breaker.Isolate();
@@ -1093,40 +1128,40 @@ public class CircuitBreakerTests
         // A later call sees the new state.
         if (close)
         {
-            await SucceedAsync(pipeline, 1).ConfigureAwait(false);
+            await SucceedAsync(factory, 1).ConfigureAwait(false);
             Assert.AreEqual((1, 0), breaker.GetCounts());
         }
         else
         {
-            await Assert.ThrowsExactlyAsync<IsolatedCircuitException>(
-                () => pipeline.ExecuteAsync(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+            await Assert.ThrowsExactlyAsync<CircuitIsolatedException>(
+                () => factory.RunValueTask(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
         }
     }
 
     [TestMethod]
-    public async Task TwoPipelinesThatShareOneBreaker_SeeTheSameState()
+    public async Task TwoFactorysThatShareOneBreaker_SeeTheSameState()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline first = this.NewPipeline(breaker);
-        var second = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string> { Strategy = new DoNotRetry(), CircuitBreaker = breaker, TimeProvider = this.fake });
+        RetryTaskFactory first = this.NewFactory(breaker);
+        var second = new RetryTaskFactory<string> { Strategy = new DoNotRetry(), CircuitBreaker = breaker, TimeProvider = this.fake };
 
         await SucceedAsync(first, 5).ConfigureAwait(false);
         for (int i = 0; i < 5; i++)
         {
             await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-                () => second.ExecuteAsync(_ => throw new InvalidOperationException("Failure")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+                () => second.RunValueTask(_ => throw new InvalidOperationException("Failure")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
         }
 
         Assert.AreEqual(CircuitState.Open, breaker.State);
-        await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
-            () => first.ExecuteAsync(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+        await Assert.ThrowsExactlyAsync<CircuitRejectedException>(
+            () => first.RunValueTask(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
     }
 
     [TestMethod]
     public async Task OneHundredParallelCalls_GiveAnExactCount()
     {
-        CircuitBreaker breaker = this.NewBreaker(o => o with { MinimumThroughput = 1000 });
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        CircuitBreaker breaker = this.NewBreaker(minimumCalls: 1000);
+        RetryTaskFactory factory = this.NewFactory(breaker);
 
         await Parallel.ForEachAsync(
             Enumerable.Range(0, 100),
@@ -1135,7 +1170,7 @@ public class CircuitBreakerTests
             {
                 try
                 {
-                    await pipeline.ExecuteAsync(_ => i % 2 == 0 ? new ValueTask<int>(i) : throw new InvalidOperationException("Failure")).ConfigureAwait(false);
+                    await factory.RunValueTask(_ => i % 2 == 0 ? new ValueTask<int>(i) : throw new InvalidOperationException("Failure")).ConfigureAwait(false);
                 }
                 catch (InvalidOperationException)
                 {
@@ -1150,7 +1185,7 @@ public class CircuitBreakerTests
     public async Task OneHundredParallelCallsThatOpenTheCircuit_GiveAConsistentStateAndNoDeadlock()
     {
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        RetryTaskFactory factory = this.NewFactory(breaker);
         InvalidOperationException failure = new("Failure");
         TaskCompletionSource tenStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1161,7 +1196,7 @@ public class CircuitBreakerTests
         {
             try
             {
-                await pipeline.ExecuteAsync<int>(async _ =>
+                await factory.RunValueTask<int>(async _ =>
                 {
                     if (Interlocked.Increment(ref invocations) == 10)
                     {
@@ -1172,7 +1207,7 @@ public class CircuitBreakerTests
                     throw failure;
                 }).ConfigureAwait(false);
             }
-            catch (BrokenCircuitException)
+            catch (CircuitRejectedException)
             {
                 Interlocked.Increment(ref rejections);
             }
@@ -1203,7 +1238,7 @@ public class CircuitBreakerTests
     {
         const int Callers = 32;
         CircuitBreaker breaker = this.NewBreaker();
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
+        RetryTaskFactory factory = this.NewFactory(breaker);
         OpenDirectly(breaker);
         this.fake.Advance(BreakDuration);
         TaskCompletionSource start = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1226,14 +1261,14 @@ public class CircuitBreakerTests
             await start.Task.ConfigureAwait(false);
             try
             {
-                await pipeline.ExecuteAsync(ct =>
+                await factory.RunValueTask(ct =>
                 {
                     Interlocked.Increment(ref invocations);
                     Arrive();
                     return new ValueTask<string>(probeResult.Task.WaitAsync(ct));
                 }).ConfigureAwait(false);
             }
-            catch (BrokenCircuitException)
+            catch (CircuitRejectedException)
             {
                 Interlocked.Increment(ref rejections);
                 Arrive();
@@ -1264,9 +1299,8 @@ public class CircuitBreakerTests
     {
         CircuitBreaker? breaker = null;
         bool readFromAnotherThread = false;
-        CircuitBreaker created = this.NewBreaker(o => o with
-        {
-            OnStateChanged = change =>
+        CircuitBreaker created = this.NewBreaker(
+            onStateChanged: change =>
             {
                 lock (this.changes)
                 {
@@ -1281,12 +1315,11 @@ public class CircuitBreakerTests
                 }
 
                 return ValueTask.CompletedTask;
-            },
-        });
+            });
         breaker = created;
-        ReliabilityPipeline pipeline = this.NewPipeline(created);
+        RetryTaskFactory factory = this.NewFactory(created);
 
-        await FailAsync(pipeline, 10).ConfigureAwait(false);
+        await FailAsync(factory, 10).ConfigureAwait(false);
 
         Assert.IsTrue(readFromAnotherThread);
         Assert.AreEqual(CircuitState.Closed, created.State);
@@ -1297,121 +1330,126 @@ public class CircuitBreakerTests
     public async Task AnExceptionFromTheCallbackWhenTheBreakEnds_StopsTheCallAndLetsTheNextCallMakeTheTest()
     {
         InvalidCastException callbackFailure = new("Callback failed");
-        CircuitBreaker breaker = this.NewBreaker(o => o with
-        {
-            OnStateChanged = change => change.To == CircuitState.HalfOpen && !this.Changes.Any(c => c.To == CircuitState.HalfOpen)
+        CircuitBreaker breaker = this.NewBreaker(
+            onStateChanged: change => change.To == CircuitState.HalfOpen && !this.Changes.Any(c => c.To == CircuitState.HalfOpen)
                 ? this.RecordThenThrow(change, callbackFailure)
-                : this.Record(change),
-        });
-        ReliabilityPipeline pipeline = this.NewPipeline(breaker);
-        await FailAsync(pipeline, 10).ConfigureAwait(false);
+                : this.Record(change));
+        RetryTaskFactory factory = this.NewFactory(breaker);
+        await FailAsync(factory, 10).ConfigureAwait(false);
         this.fake.Advance(BreakDuration);
         int invocations = 0;
 
         InvalidCastException thrown = await Assert.ThrowsExactlyAsync<InvalidCastException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<int>(Interlocked.Increment(ref invocations))).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+            () => factory.RunValueTask(_ => new ValueTask<int>(Interlocked.Increment(ref invocations))).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
         Assert.AreSame(callbackFailure, thrown);
         Assert.AreEqual(0, invocations);
-        await SucceedAsync(pipeline, 1).ConfigureAwait(false);
+        await SucceedAsync(factory, 1).ConfigureAwait(false);
         Assert.AreEqual(CircuitState.Closed, breaker.State);
     }
 
     [TestMethod]
-    public void BrokenCircuitExceptionHasAMessageAndAnOptionalRetryAfter()
+    public void CircuitRejectedExceptionHasAMessageAndAnOptionalRetryAfter()
     {
         InvalidOperationException inner = new();
 
-        Assert.AreEqual("The circuit is open.", new BrokenCircuitException().Message);
-        Assert.IsNull(new BrokenCircuitException().RetryAfter);
-        Assert.AreEqual("Message", new BrokenCircuitException("Message").Message);
-        Assert.AreSame(inner, new BrokenCircuitException("Message", inner).InnerException);
-        Assert.AreEqual(TimeSpan.FromSeconds(3), new BrokenCircuitException("Message", TimeSpan.FromSeconds(3)).RetryAfter);
+        // The default message does not say "open": the breaker also throws this exception for a half-open rejection.
+        Assert.AreEqual("The circuit breaker rejected the call.", new CircuitRejectedException().Message);
+        Assert.IsNull(new CircuitRejectedException().RetryAfter);
+        Assert.AreEqual("Message", new CircuitRejectedException("Message").Message);
+        Assert.AreSame(inner, new CircuitRejectedException("Message", inner).InnerException);
+        Assert.AreEqual(TimeSpan.FromSeconds(3), new CircuitRejectedException("Message", TimeSpan.FromSeconds(3)).RetryAfter);
 
         // A null second argument is not ambiguous: it is the inner exception.
-        BrokenCircuitException withNull = new("Message", null);
+        CircuitRejectedException withNull = new("Message", null);
         Assert.IsNull(withNull.InnerException);
         Assert.IsNull(withNull.RetryAfter);
-        Assert.AreEqual("The circuit is isolated.", new IsolatedCircuitException().Message);
-        Assert.AreEqual("Message", new IsolatedCircuitException("Message").Message);
-        Assert.AreSame(inner, new IsolatedCircuitException("Message", inner).InnerException);
-        Assert.IsInstanceOfType<BrokenCircuitException>(new IsolatedCircuitException());
+        Assert.AreEqual("The circuit is isolated.", new CircuitIsolatedException().Message);
+        Assert.AreEqual("Message", new CircuitIsolatedException("Message").Message);
+        Assert.AreSame(inner, new CircuitIsolatedException("Message", inner).InnerException);
+        Assert.IsInstanceOfType<CircuitRejectedException>(new CircuitIsolatedException());
     }
 
     [TestMethod]
-    [DataRow(nameof(CircuitBreakerOptions.FailureRatio), 0.0)]
-    [DataRow(nameof(CircuitBreakerOptions.FailureRatio), -0.1)]
-    [DataRow(nameof(CircuitBreakerOptions.FailureRatio), 1.01)]
-    [DataRow(nameof(CircuitBreakerOptions.FailureRatio), double.NaN)]
-    [DataRow(nameof(CircuitBreakerOptions.MinimumThroughput), 1.0)]
-    [DataRow(nameof(CircuitBreakerOptions.MinimumThroughput), -5.0)]
-    [DataRow(nameof(CircuitBreakerOptions.SamplingDuration), 499.0)]
-    [DataRow(nameof(CircuitBreakerOptions.SamplingDuration), -1.0)]
-    [DataRow(nameof(CircuitBreakerOptions.SamplingDuration), 4294967295.0)]
-    [DataRow(nameof(CircuitBreakerOptions.BreakDuration), 499.0)]
-    [DataRow(nameof(CircuitBreakerOptions.BreakDuration), 0.0)]
-    [DataRow(nameof(CircuitBreakerOptions.BreakDuration), 4294967295.0)]
-    public void AValueOutOfRange_IsRejectedWithThePropertyName(string property, double value)
+    [DataRow("failureRate", 0.0)]
+    [DataRow("failureRate", -0.1)]
+    [DataRow("failureRate", 1.01)]
+    [DataRow("failureRate", double.NaN)]
+    [DataRow("minimumCalls", 1.0)]
+    [DataRow("minimumCalls", -5.0)]
+    [DataRow("samplingWindow", 499.0)]
+    [DataRow("samplingWindow", -1.0)]
+    [DataRow("samplingWindow", 4294967295.0)]
+    [DataRow("openDuration", 499.0)]
+    [DataRow("openDuration", 0.0)]
+    [DataRow("openDuration", 4294967295.0)]
+    public void AValueOutOfRange_IsRejectedWithTheParameterName(string parameter, double value)
     {
-        CircuitBreakerOptions options = property switch
+        CircuitBreaker Create() => parameter switch
         {
-            nameof(CircuitBreakerOptions.FailureRatio) => new() { FailureRatio = value },
-            nameof(CircuitBreakerOptions.MinimumThroughput) => new() { MinimumThroughput = (int)value },
-            nameof(CircuitBreakerOptions.SamplingDuration) => new() { SamplingDuration = TimeSpan.FromMilliseconds(value) },
-            _ => new() { BreakDuration = TimeSpan.FromMilliseconds(value) },
+            "failureRate" => new(failureRate: value),
+            "minimumCalls" => new(minimumCalls: (int)value),
+            "samplingWindow" => new(samplingWindow: TimeSpan.FromMilliseconds(value)),
+            _ => new(openDuration: TimeSpan.FromMilliseconds(value)),
         };
 
-        ArgumentOutOfRangeException thrown = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new CircuitBreaker(options));
+        ArgumentOutOfRangeException thrown = Assert.ThrowsExactly<ArgumentOutOfRangeException>(Create);
 
-        Assert.AreEqual(property, thrown.ParamName);
+        Assert.AreEqual(parameter, thrown.ParamName);
     }
 
     [TestMethod]
     public void TheLimitsOfTheRangesAreAccepted()
     {
-        _ = new CircuitBreaker(new CircuitBreakerOptions
-        {
-            FailureRatio = 1,
-            MinimumThroughput = 2,
-            SamplingDuration = TimeSpan.FromMilliseconds(500),
-            BreakDuration = TimeSpan.FromMilliseconds(500),
-        });
-        _ = new CircuitBreaker(new CircuitBreakerOptions
-        {
-            FailureRatio = double.Epsilon,
-            SamplingDuration = RetryDelay.MaxSupported,
-            BreakDuration = RetryDelay.MaxSupported,
-        });
+        _ = new CircuitBreaker(
+            failureRate: 1,
+            minimumCalls: 2,
+            samplingWindow: TimeSpan.FromMilliseconds(500),
+            openDuration: TimeSpan.FromMilliseconds(500));
+        _ = new CircuitBreaker(
+            failureRate: double.Epsilon,
+            samplingWindow: RetryDelay.MaxSupported,
+            openDuration: RetryDelay.MaxSupported);
     }
 
     [TestMethod]
-    public void ANullValue_IsRejectedWithThePropertyName()
+    public void ANullPolicyOrTimeProvider_MeansTheDefault()
     {
-        ArgumentNullException options = Assert.ThrowsExactly<ArgumentNullException>(() => new CircuitBreaker(null!));
-        ArgumentNullException policy = Assert.ThrowsExactly<ArgumentNullException>(() => new CircuitBreaker(new CircuitBreakerOptions { Policy = null! }));
-        ArgumentNullException timeProvider = Assert.ThrowsExactly<ArgumentNullException>(() => new CircuitBreaker(new CircuitBreakerOptions { TimeProvider = null! }));
+        // The settings are optional constructor parameters, so null means the default rather than an error.
+        CircuitBreaker withNullPolicy = new(policy: null);
+        CircuitBreaker withNullTimeProvider = new(timeProvider: null);
+        CircuitBreaker withNullCallback = new(onStateChanged: null);
 
-        Assert.AreEqual("options", options.ParamName);
-        Assert.AreEqual(nameof(CircuitBreakerOptions.Policy), policy.ParamName);
-        Assert.AreEqual(nameof(CircuitBreakerOptions.TimeProvider), timeProvider.ParamName);
+        Assert.AreSame(AnyExceptionPolicy.Default, withNullPolicy.Policy);
+        Assert.AreSame(TimeProvider.System, withNullTimeProvider.TimeProvider);
+        Assert.IsNull(withNullCallback.OnStateChanged);
     }
 
-    private static async Task SucceedAsync(ReliabilityPipeline pipeline, int times)
+    [TestMethod]
+    public void NullDurationsMeanTheDefaults()
+    {
+        CircuitBreaker breaker = new(samplingWindow: null, openDuration: null);
+
+        Assert.AreEqual(TimeSpan.FromSeconds(30), breaker.SamplingWindow);
+        Assert.AreEqual(TimeSpan.FromSeconds(5), breaker.OpenDuration);
+    }
+
+    private static async Task SucceedAsync(RetryTaskFactory factory, int times)
     {
         for (int i = 0; i < times; i++)
         {
-            Assert.AreEqual("ok", await pipeline.ExecuteAsync(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false));
+            Assert.AreEqual("ok", await factory.RunValueTask(_ => new ValueTask<string>("ok")).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false));
         }
     }
 
     // Returns the exception of the last failure.
-    private static async Task<Exception> FailAsync(ReliabilityPipeline pipeline, int times)
+    private static async Task<Exception> FailAsync(RetryTaskFactory factory, int times)
     {
         Exception? last = null;
         for (int i = 0; i < times; i++)
         {
             last = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-                () => pipeline.ExecuteAsync<string>(_ => throw new InvalidOperationException("Failure")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+                () => factory.RunValueTask<string>(_ => throw new InvalidOperationException("Failure")).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
         }
 
         return last!;
@@ -1441,35 +1479,38 @@ public class CircuitBreakerTests
         return 0;
     }
 
-    private CircuitBreaker NewBreaker(Func<CircuitBreakerOptions, CircuitBreakerOptions>? configure = null)
+    // A breaker with the settings that most tests use. A test passes only the settings that it changes.
+    private CircuitBreaker NewBreaker(
+        int minimumCalls = 10,
+        TimeSpan? openDuration = null,
+        IRetryPolicy? policy = null,
+        Func<CircuitStateChange, ValueTask>? onStateChanged = null,
+        TimeProvider? timeProvider = null)
     {
-        CircuitBreakerOptions options = new()
-        {
-            FailureRatio = 0.5,
-            MinimumThroughput = 10,
-            SamplingDuration = TimeSpan.FromSeconds(30),
-            BreakDuration = BreakDuration,
-            OnStateChanged = this.Record,
-            TimeProvider = this.fake,
-        };
-
-        return new CircuitBreaker(configure?.Invoke(options) ?? options);
+        return new CircuitBreaker(
+            failureRate: 0.5,
+            minimumCalls: minimumCalls,
+            samplingWindow: TimeSpan.FromSeconds(30),
+            openDuration: openDuration ?? BreakDuration,
+            policy: policy,
+            onStateChanged: onStateChanged ?? this.Record,
+            timeProvider: timeProvider ?? this.fake);
     }
 
-    private ReliabilityPipeline NewPipeline(CircuitBreaker breaker)
+    private RetryTaskFactory NewFactory(CircuitBreaker breaker)
     {
-        return new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new DoNotRetry(), CircuitBreaker = breaker, TimeProvider = this.fake });
+        return new RetryTaskFactory { Strategy = new DoNotRetry(), CircuitBreaker = breaker, TimeProvider = this.fake };
     }
 
-    private ReliabilityPipeline NewPipelineWithAttemptTimeout(CircuitBreaker breaker)
+    private RetryTaskFactory NewFactoryWithAttemptTimeout(CircuitBreaker breaker)
     {
-        return new ReliabilityPipeline(new ReliabilityPipelineOptions
+        return new RetryTaskFactory
         {
             Strategy = new DoNotRetry(),
             AttemptTimeout = TimeSpan.FromSeconds(1),
             CircuitBreaker = breaker,
             TimeProvider = this.fake,
-        });
+        };
     }
 
     private ValueTask Record(CircuitStateChange change)
@@ -1498,15 +1539,13 @@ public class CircuitBreakerTests
     // A breaker whose policy refuses an ArgumentException, throws for a FormatException, and accepts other exceptions.
     private CircuitBreaker NewExitBreaker()
     {
-        return this.NewBreaker(o => o with
-        {
-            Policy = RetryPolicies.FromPredicate(ex => ex switch
+        return this.NewBreaker(
+            policy: RetryPolicies.FromPredicate(ex => ex switch
             {
                 FormatException => throw this.exitPolicyFailure,
                 ArgumentException => false,
                 _ => true,
-            }),
-        });
+            }));
     }
 
     // Makes one call that the breaker permits, and ends it in the way that the exit names. Returns the exception that
@@ -1514,15 +1553,15 @@ public class CircuitBreakerTests
     private async Task<Exception?> EndPermittedCallAsync(CircuitBreaker breaker, CircuitBreakerExit exit)
     {
         const int ResultThatTheCheckThrowsFor = -2;
-        var pipeline = new ReliabilityPipeline<int>(new ReliabilityPipelineOptions<int>
+        var factory = new RetryTaskFactory<int>
         {
             Strategy = new DoNotRetry(),
-            ShouldRetryResult = r => r == ResultThatTheCheckThrowsFor ? throw this.resultCheckFailure : r < 0,
+            CanRetryResult = r => r == ResultThatTheCheckThrowsFor ? throw this.resultCheckFailure : r < 0,
             AttemptTimeout = exit == CircuitBreakerExit.AttemptTimeout ? ExitTimeout : null,
             TotalTimeout = exit == CircuitBreakerExit.TotalTimeout ? ExitTimeout : null,
             CircuitBreaker = breaker,
             TimeProvider = this.fake,
-        });
+        };
 
         // The caller's token is live, so that a token of the operation is never the caller's.
         using CancellationTokenSource caller = new();
@@ -1531,25 +1570,25 @@ public class CircuitBreakerTests
             case CircuitBreakerExit.Success:
             case CircuitBreakerExit.ResultRejected:
                 int result = exit == CircuitBreakerExit.Success ? 1 : -1;
-                Assert.AreEqual(result, await pipeline.ExecuteAsync(_ => new ValueTask<int>(result), caller.Token).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false));
+                Assert.AreEqual(result, await factory.RunValueTask(_ => new ValueTask<int>(result), caller.Token).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false));
                 return null;
 
             case CircuitBreakerExit.ResultCheckThrows:
                 InvalidCastException checkFailure = await Assert.ThrowsExactlyAsync<InvalidCastException>(
-                    () => pipeline.ExecuteAsync(_ => new ValueTask<int>(ResultThatTheCheckThrowsFor), caller.Token).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+                    () => factory.RunValueTask(_ => new ValueTask<int>(ResultThatTheCheckThrowsFor), caller.Token).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
                 Assert.AreSame(this.resultCheckFailure, checkFailure);
                 return checkFailure;
 
             case CircuitBreakerExit.AttemptTimeout:
             case CircuitBreakerExit.TotalTimeout:
-                Task<int> timedCall = pipeline.ExecuteAsync(NeverCompletesInt32Async, caller.Token).AsTask();
+                Task<int> timedCall = factory.RunValueTask(NeverCompletesInt32Async, caller.Token).AsTask();
                 this.fake.Advance(ExitTimeout);
                 RetryTimeoutException timeout = await Assert.ThrowsExactlyAsync<RetryTimeoutException>(() => timedCall.WaitAsync(WaitLimit)).ConfigureAwait(false);
                 Assert.AreEqual(ExitTimeout, timeout.Timeout);
                 return timeout;
 
             case CircuitBreakerExit.CallerCancels:
-                Task<int> cancelledCall = pipeline.ExecuteAsync(NeverCompletesInt32Async, caller.Token).AsTask();
+                Task<int> cancelledCall = factory.RunValueTask(NeverCompletesInt32Async, caller.Token).AsTask();
                 await caller.CancelAsync().ConfigureAwait(false);
                 TaskCanceledException cancelled = await Assert.ThrowsExactlyAsync<TaskCanceledException>(() => cancelledCall.WaitAsync(WaitLimit)).ConfigureAwait(false);
                 Assert.AreEqual(caller.Token, cancelled.CancellationToken);
@@ -1564,7 +1603,7 @@ public class CircuitBreakerTests
                     _ => new TaskCanceledException("The operation cancelled itself", null, new CancellationToken(canceled: true)),
                 };
                 Exception thrown = await Assert.ThrowsAsync<Exception>(
-                    () => pipeline.ExecuteAsync(_ => throw failure, caller.Token).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+                    () => factory.RunValueTask(_ => throw failure, caller.Token).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
                 Assert.AreSame(exit == CircuitBreakerExit.PolicyThrows ? this.exitPolicyFailure : failure, thrown);
                 return thrown;
         }
