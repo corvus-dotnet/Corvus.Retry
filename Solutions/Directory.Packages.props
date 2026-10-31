@@ -1,0 +1,21 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup Label="Endjin">
+    <PackageVersion Include="Endjin.RecommendedPractices.GitHub" Version="2.1.18" />
+  </ItemGroup>
+
+  <ItemGroup Label="Analyzers (same versions Endjin.RecommendedPractices 2.1.18 would inject)">
+    <PackageVersion Include="StyleCop.Analyzers" Version="1.2.0-beta.556" />
+    <PackageVersion Include="Roslynator.Analyzers" Version="5.0.1" />
+  </ItemGroup>
+
+  <ItemGroup Label="Benchmarks">
+    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+  </ItemGroup>
+
+  <!-- Testing: MSTest.Sdk (pinned in global.json "msbuild-sdks") injects the PackageVersion items for MSTest,
+       Microsoft.Testing.Platform.* and Microsoft.Testing.Extensions.*; declaring them here causes NU1506. -->
+</Project>

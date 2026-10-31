@@ -1,15 +1,28 @@
 version: 2
 updates:
 - package-ecosystem: nuget
+  # Central Package Management: all versions live in Solutions/Directory.Packages.props
   directory: /Solutions
   schedule:
     interval: daily
   open-pull-requests-limit: 10
+  # NOTE: groups are evaluated in the order declared, and a dependency joins the
+  # FIRST group it matches. Keep microsoft-testing above the broader Microsoft.* groups.
+  #
+  # Endjin.* and Corvus.* packages are deliberately NOT grouped: pr-autoflow relies on
+  # single-package PR titles to auto-approve and merge those updates.
   groups:
+    # MSTest and the Microsoft.Testing.* platform packages follow the MSTest
+    # train, NOT the .NET runtime train. Nothing here has an explicit
+    # PackageVersion today (MSTest.Sdk injects them), but this keeps the
+    # grouping correct if one is ever pinned directly.
+    microsoft-testing:
+      patterns:
+      - Microsoft.Testing.*
+      - MSTest*
     microsoft-identity:
       patterns:
       - Microsoft.Identity.*
     microsoft-extensions:
       patterns:
       - Microsoft.Extensions.*
-

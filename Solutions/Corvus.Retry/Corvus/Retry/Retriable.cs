@@ -1,4 +1,4 @@
-﻿// <copyright file="Retriable.cs" company="Endjin Limited">
+// <copyright file="Retriable.cs" company="Endjin Limited">
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
@@ -40,7 +40,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(func));
             }
 
-            return Retry(func, CancellationToken.None, new Count(10), new AnyExceptionPolicy());
+            return Retry(func, CancellationToken.None, new Count(10), AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -74,7 +74,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(asyncFunc));
             }
 
-            return RetryAsync(asyncFunc, CancellationToken.None, new Count(10), new AnyExceptionPolicy(), continueOnCapturedContext);
+            return RetryAsync(asyncFunc, CancellationToken.None, new Count(10), AnyExceptionPolicy.Default, continueOnCapturedContext);
         }
 
         /// <summary>
@@ -88,7 +88,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(func));
             }
 
-            Retry(func, CancellationToken.None, new Count(10), new AnyExceptionPolicy());
+            Retry(func, CancellationToken.None, new Count(10), AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -103,7 +103,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(func));
             }
 
-            Retry(func, cancellationToken, new Count(10), new AnyExceptionPolicy());
+            Retry(func, cancellationToken, new Count(10), AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -136,7 +136,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(asyncFunc));
             }
 
-            return RetryAsync(asyncFunc, cancellationToken, new Count(10), new AnyExceptionPolicy());
+            return RetryAsync(asyncFunc, cancellationToken, new Count(10), AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -152,7 +152,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(asyncFunc));
             }
 
-            return RetryAsync(asyncFunc, CancellationToken.None, new Count(10), new AnyExceptionPolicy(), continueOnCapturedContext);
+            return RetryAsync(asyncFunc, CancellationToken.None, new Count(10), AnyExceptionPolicy.Default, continueOnCapturedContext);
         }
 
         /// <summary>
@@ -246,7 +246,12 @@ namespace Corvus.Retry
         /// <remarks>This function does not continue on the captured context. See the overload if you want to override this default behaviour.</remarks>
         public static Task<T> RetryAsync<T>(Func<Task<T>> asyncFunc, CancellationToken cancellationToken)
         {
-            return RetryAsync(asyncFunc, cancellationToken, new Count(10), new AnyExceptionPolicy(), false);
+            if (asyncFunc is null)
+            {
+                throw new ArgumentNullException(nameof(asyncFunc));
+            }
+
+            return RetryAsync(asyncFunc, cancellationToken, new Count(10), AnyExceptionPolicy.Default, false);
         }
 
         /// <summary>
@@ -259,35 +264,24 @@ namespace Corvus.Retry
         /// <param name="policy">The retry policy.</param>
         /// <param name="continueOnCapturedContext">Determines whether to continue on the captured context or not.</param>
         /// <returns>A task which, when complete, provides the result of the function.</returns>
-        public static async Task<T> RetryAsync<T>(Func<Task<T>> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext)
+        public static Task<T> RetryAsync<T>(Func<Task<T>> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext)
         {
-            while (true)
+            if (asyncFunc is null)
             {
-                Exception exception;
-
-                try
-                {
-                    return await asyncFunc().ConfigureAwait(continueOnCapturedContext);
-                }
-                catch (Exception ex)
-                {
-                    exception = ex;
-                }
-
-                TimeSpan delay = strategy.PrepareToRetry(exception);
-
-                if (!WillRetry(exception, cancellationToken, strategy, policy))
-                {
-                    throw exception;
-                }
-
-                strategy.OnRetrying(new RetryEventArgs(exception, delay));
-
-                if (delay != TimeSpan.Zero)
-                {
-                    await SleepService.Instance.SleepAsync(delay).ConfigureAwait(continueOnCapturedContext);
-                }
+                throw new ArgumentNullException(nameof(asyncFunc));
             }
+
+            if (strategy is null)
+            {
+                throw new ArgumentNullException(nameof(strategy));
+            }
+
+            if (policy is null)
+            {
+                throw new ArgumentNullException(nameof(policy));
+            }
+
+            return RetryCoreAsync(asyncFunc, cancellationToken, strategy, policy, continueOnCapturedContext);
         }
 
         /// <summary>
@@ -379,7 +373,7 @@ namespace Corvus.Retry
         /// <param name="policy">The retry policy.</param>
         /// <param name="continueOnCapturedContext">Whether to continue on the captured context.</param>
         /// <returns>A task which completes when the operation completes.</returns>
-        public static async Task RetryAsync(Func<Task> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext)
+        public static Task RetryAsync(Func<Task> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext)
         {
             if (asyncFunc is null)
             {
@@ -396,28 +390,66 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(policy));
             }
 
+            return RetryCoreAsync(asyncFunc, cancellationToken, strategy, policy, continueOnCapturedContext);
+        }
+
+        // The arguments are validated by the public overloads, so that a null argument throws before a task is created.
+        // This is the same loop as RetryCoreAsync<T>. It is kept separate, rather than adapting the operation to return
+        // a value, because the adapter would allocate a closure and a delegate on every call.
+        private static async Task RetryCoreAsync(Func<Task> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext)
+        {
             while (true)
             {
-                Exception exception;
+                TimeSpan delay;
 
                 try
                 {
                     await asyncFunc().ConfigureAwait(continueOnCapturedContext);
                     return;
                 }
-                catch (Exception ex)
+                catch (Exception exception)
                 {
-                    exception = ex;
+                    delay = strategy.PrepareToRetry(exception);
+
+                    if (!WillRetry(exception, cancellationToken, strategy, policy))
+                    {
+                        // Rethrow from inside the catch block so that the exception keeps its original stack trace.
+                        throw;
+                    }
+
+                    strategy.OnRetrying(new RetryEventArgs(exception, delay));
                 }
 
-                TimeSpan delay = strategy.PrepareToRetry(exception);
-
-                if (!WillRetry(exception, cancellationToken, strategy, policy))
+                if (delay != TimeSpan.Zero)
                 {
-                    throw exception;
+                    await SleepService.Instance.SleepAsync(delay).ConfigureAwait(continueOnCapturedContext);
                 }
+            }
+        }
 
-                strategy.OnRetrying(new RetryEventArgs(exception, delay));
+        // The arguments are validated by the public overloads, so that a null argument throws before a task is created.
+        private static async Task<T> RetryCoreAsync<T>(Func<Task<T>> asyncFunc, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy, bool continueOnCapturedContext)
+        {
+            while (true)
+            {
+                TimeSpan delay;
+
+                try
+                {
+                    return await asyncFunc().ConfigureAwait(continueOnCapturedContext);
+                }
+                catch (Exception exception)
+                {
+                    delay = strategy.PrepareToRetry(exception);
+
+                    if (!WillRetry(exception, cancellationToken, strategy, policy))
+                    {
+                        // Rethrow from inside the catch block so that the exception keeps its original stack trace.
+                        throw;
+                    }
+
+                    strategy.OnRetrying(new RetryEventArgs(exception, delay));
+                }
 
                 if (delay != TimeSpan.Zero)
                 {

@@ -1,0 +1,656 @@
+// <copyright file="ReliableTaskRunnerTests.cs" company="Endjin Limited">
+// Copyright (c) Endjin Limited. All rights reserved.
+// </copyright>
+
+namespace Corvus.Retry
+{
+    using System;
+    using System.Collections.Generic;
+    using System.Linq;
+    using System.Threading;
+    using System.Threading.Tasks;
+    using Corvus.Retry.Policies;
+    using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+    /// <summary>
+    /// Pins the behaviour of <see cref="ReliableTaskRunner"/>: a host that keeps a long-running operation going,
+    /// restarting it after a failure for as long as the retry policy allows, until <see cref="ReliableTaskRunner.StopAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// These tests never sleep. They synchronise with <see cref="TaskCompletionSource"/> gates and the runner's
+    /// cancellation token, and every wait is bounded by <see cref="Timeout"/> so that a regression fails instead of hanging.
+    /// </remarks>
+    [TestClass]
+    public class ReliableTaskRunnerTests
+    {
+        private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
+
+        [TestMethod]
+        public async Task RunStartsTheOperationImmediatelyWithATokenThatIsNotYetCancelled()
+        {
+            int invocations = 0;
+            CancellationToken token = default;
+
+            ReliableTaskRunner runner = ReliableTaskRunner.Run(ct =>
+            {
+                Interlocked.Increment(ref invocations);
+                token = ct;
+                return WaitForCancellationAsync(ct);
+            });
+
+            // Run invokes the operation before it returns.
+            Assert.AreEqual(1, Volatile.Read(ref invocations));
+            Assert.IsTrue(token.CanBeCanceled);
+            Assert.IsFalse(token.IsCancellationRequested);
+
+            await WaitAsync(runner.StopAsync(), "the runner to stop").ConfigureAwait(false);
+        }
+
+        [TestMethod]
+        public async Task WhenStopAsyncIsCalled_TheTokenIsCancelledAndTheReturnedTaskCompletesWhenTheOperationReturns()
+        {
+            TaskCompletionSource cancellationObserved = NewSignal();
+            TaskCompletionSource allowOperationToReturn = NewSignal();
+
+            ReliableTaskRunner runner = ReliableTaskRunner.Run(async ct =>
+            {
+                await WaitForCancellationAsync(ct).ConfigureAwait(false);
+                cancellationObserved.TrySetResult();
+                await allowOperationToReturn.Task.ConfigureAwait(false);
+            });
+
+            Task stopTask = runner.StopAsync();
+            await WaitAsync(cancellationObserved.Task, "the operation to observe cancellation").ConfigureAwait(false);
+
+            // The operation has seen the cancellation but has not returned yet, so stopping is still in progress.
+            Assert.IsFalse(stopTask.IsCompleted);
+
+            allowOperationToReturn.TrySetResult();
+            await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+
+            Assert.AreEqual(TaskStatus.RanToCompletion, stopTask.Status);
+        }
+
+        [TestMethod]
+        public async Task WhenTheOperationFailsAndThePolicyAllowsIt_TheOperationIsRestarted()
+        {
+            var failure = new InvalidOperationException("First run failed");
+            var policy = new RecordingRetryPolicy(true);
+            TaskCompletionSource secondRunStarted = NewSignal();
+            int invocations = 0;
+
+            ReliableTaskRunner runner = ReliableTaskRunner.Run(
+                ct =>
+                {
+                    if (Interlocked.Increment(ref invocations) == 1)
+                    {
+                        return FailAsynchronously(failure);
+                    }
+
+                    secondRunStarted.TrySetResult();
+                    return WaitForCancellationAsync(ct);
+                },
+                policy);
+
+            await WaitAsync(secondRunStarted.Task, "the operation to be restarted").ConfigureAwait(false);
+
+            Assert.AreEqual(2, Volatile.Read(ref invocations));
+
+            // The policy sees the exception the operation threw, not an AggregateException wrapping it (F5).
+            Assert.AreSame(failure, Assert.ContainsSingle(policy.Consulted));
+
+            Task stopTask = runner.StopAsync();
+            await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+            Assert.AreEqual(TaskStatus.RanToCompletion, stopTask.Status);
+        }
+
+        [TestMethod]
+        public async Task WhenThePolicyAcceptsOnlyTheSpecificExceptionTypeTheOperationThrows_TheOperationIsRestarted()
+        {
+            // The README-style policy: "retry only for this exception type". Before F5 the policy was handed an
+            // AggregateException, so a type test like this one never matched and the runner never restarted.
+            var policy = new RecordingRetryPolicy(exception => exception is TimeoutException);
+            TaskCompletionSource secondRunStarted = NewSignal();
+            int invocations = 0;
+
+            ReliableTaskRunner runner = ReliableTaskRunner.Run(
+                ct =>
+                {
+                    if (Interlocked.Increment(ref invocations) == 1)
+                    {
+                        return FailAsynchronously(new TimeoutException("Transient failure"));
+                    }
+
+                    secondRunStarted.TrySetResult();
+                    return WaitForCancellationAsync(ct);
+                },
+                policy);
+
+            await WaitAsync(secondRunStarted.Task, "the operation to be restarted").ConfigureAwait(false);
+
+            Assert.AreEqual(2, Volatile.Read(ref invocations));
+            Assert.IsInstanceOfType<TimeoutException>(Assert.ContainsSingle(policy.Consulted));
+
+            await WaitAsync(runner.StopAsync(), "the runner to stop").ConfigureAwait(false);
+        }
+
+        [TestMethod]
+        public async Task ItKeepsRestartingForAsLongAsThePolicyAllows()
+        {
+            const int RunsAllowed = 4;
+            var operation = new FlakyOperation(FlakyOperation.AlwaysFails);
+            TaskCompletionSource policyRefused = NewSignal();
+            int consultations = 0;
+            var policy = new RecordingRetryPolicy(_ =>
+            {
+                if (Interlocked.Increment(ref consultations) < RunsAllowed)
+                {
+                    return true;
+                }
+
+                policyRefused.TrySetResult();
+                return false;
+            });
+
+            ReliableTaskRunner runner = ReliableTaskRunner.Run(_ => FailAsynchronously(operation.Invoke), policy);
+
+            await WaitAsync(policyRefused.Task, "the policy to refuse a restart").ConfigureAwait(false);
+
+            Assert.AreEqual(RunsAllowed, operation.Invocations);
+            IReadOnlyList<Exception> thrown = operation.Thrown;
+            IReadOnlyList<Exception> consulted = policy.Consulted;
+            Assert.HasCount(RunsAllowed, consulted);
+            for (int i = 0; i < RunsAllowed; i++)
+            {
+                Assert.AreSame(thrown[i], consulted[i]);
+            }
+
+            // The runner's task is now the final, faulted run.
+            Task stopTask = runner.StopAsync();
+            await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+            InvalidOperationException actual = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => stopTask).ConfigureAwait(false);
+            Assert.AreSame(thrown[RunsAllowed - 1], actual);
+        }
+
+        [TestMethod]
+        public async Task WhenARestartedRunFailsAndIsRestartedAgain_ItsFailureIsNotReportedAsUnobserved()
+        {
+            var failures = new[] { new InvalidOperationException("Run 1 failed"), new InvalidOperationException("Run 2 failed") };
+            TaskCompletionSource thirdRunStarted = NewSignal();
+            int invocations = 0;
+            var unobserved = new List<Exception>();
+
+            void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs e)
+            {
+                lock (unobserved)
+                {
+                    // Tests run in parallel, so only count the failures this test caused.
+                    unobserved.AddRange(e.Exception.InnerExceptions.Where(ex => Array.IndexOf(failures, ex) >= 0));
+                }
+            }
+
+            TaskScheduler.UnobservedTaskException += OnUnobserved;
+            try
+            {
+                ReliableTaskRunner runner = ReliableTaskRunner.Run(ct =>
+                {
+                    int run = Interlocked.Increment(ref invocations);
+                    if (run <= failures.Length)
+                    {
+                        return FailAsynchronously(failures[run - 1]);
+                    }
+
+                    thirdRunStarted.TrySetResult();
+                    return WaitForCancellationAsync(ct);
+                });
+
+                await WaitAsync(thirdRunStarted.Task, "the third run to start").ConfigureAwait(false);
+
+                // The second run's task is no longer the runner's, so a fault nobody observed is reported when it
+                // is finalized.
+                for (int i = 0; i < 3; i++)
+                {
+                    GC.Collect();
+                    GC.WaitForPendingFinalizers();
+                }
+
+                await WaitAsync(runner.StopAsync(), "the runner to stop").ConfigureAwait(false);
+            }
+            finally
+            {
+                TaskScheduler.UnobservedTaskException -= OnUnobserved;
+            }
+
+            lock (unobserved)
+            {
+                Assert.IsEmpty(unobserved);
+            }
+        }
+
+        [TestMethod]
+        public async Task WhenTheOperationFailsAndThePolicySaysNo_ItIsNotRestartedAndStopAsyncReturnsTheFaultedTask()
+        {
+            var failure = new InvalidOperationException("Permanent failure");
+            TaskCompletionSource policyConsulted = NewSignal();
+            var policy = new RecordingRetryPolicy(_ =>
+            {
+                policyConsulted.TrySetResult();
+                return false;
+            });
+            int invocations = 0;
+
+            ReliableTaskRunner runner = ReliableTaskRunner.Run(
+                _ =>
+                {
+                    Interlocked.Increment(ref invocations);
+                    return FailAsynchronously(failure);
+                },
+                policy);
+
+            await WaitAsync(policyConsulted.Task, "the policy to be consulted").ConfigureAwait(false);
+
+            Task stopTask = runner.StopAsync();
+            await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+
+            Assert.IsTrue(stopTask.IsFaulted);
+            InvalidOperationException actual = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => stopTask).ConfigureAwait(false);
+            Assert.AreSame(failure, actual);
+            Assert.AreEqual(1, Volatile.Read(ref invocations));
+            Assert.AreSame(failure, Assert.ContainsSingle(policy.Consulted));
+        }
+
+        [TestMethod]
+        public async Task WhenTheOperationFailsWithSeveralExceptions_ItIsRestartedOnlyIfThePolicyAcceptsEveryOne()
+        {
+            var accepted = new TimeoutException("Transient failure");
+            var rejected = new InvalidOperationException("Permanent failure");
+            TaskCompletionSource rejectionSeen = NewSignal();
+            var policy = new RecordingRetryPolicy(exception =>
+            {
+                if (exception is TimeoutException)
+                {
+                    return true;
+                }
+
+                rejectionSeen.TrySetResult();
+                return false;
+            });
+            int invocations = 0;
+
+            // A task can fault with several exceptions (e.g. Task.WhenAll). Task.WhenAll does not guarantee the order
+            // of its inner exceptions, so fault the task explicitly to make the order, and so the consultations, fixed.
+            ReliableTaskRunner runner = ReliableTaskRunner.Run(
+                ct =>
+                {
+                    Interlocked.Increment(ref invocations);
+                    TaskCompletionSource failed = NewSignal();
+                    _ = Task.Run(() => failed.TrySetException(new Exception[] { accepted, rejected }));
+                    return failed.Task;
+                },
+                policy);
+
+            await WaitAsync(rejectionSeen.Task, "the policy to reject a failure").ConfigureAwait(false);
+
+            Task stopTask = runner.StopAsync();
+            await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+
+            Assert.IsTrue(stopTask.IsFaulted);
+            Assert.AreEqual(1, Volatile.Read(ref invocations));
+
+            // The policy is asked about each individual failure in turn.
+            IReadOnlyList<Exception> consulted = policy.Consulted;
+            Assert.HasCount(2, consulted);
+            Assert.AreSame(accepted, consulted[0]);
+            Assert.AreSame(rejected, consulted[1]);
+        }
+
+        [TestMethod]
+        public async Task WhenTheOperationFailsWithAnAggregateExceptionWithNoInnerExceptions_ThePolicyIsStillConsulted()
+        {
+            var failure = new AggregateException("A failure with no inner exceptions");
+            TaskCompletionSource policyConsulted = NewSignal();
+            var policy = new RecordingRetryPolicy(_ =>
+            {
+                policyConsulted.TrySetResult();
+                return false;
+            });
+            int invocations = 0;
+
+            ReliableTaskRunner runner = ReliableTaskRunner.Run(
+                _ =>
+                {
+                    Interlocked.Increment(ref invocations);
+                    return FailAsynchronously(failure);
+                },
+                policy);
+
+            await WaitAsync(policyConsulted.Task, "the policy to be consulted").ConfigureAwait(false);
+
+            Task stopTask = runner.StopAsync();
+            await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+
+            // There is nothing to flatten, so the policy is asked about the AggregateException itself, and says no.
+            Assert.IsTrue(stopTask.IsFaulted);
+            Assert.AreEqual(1, Volatile.Read(ref invocations));
+            Assert.AreSame(failure, Assert.ContainsSingle(policy.Consulted));
+        }
+
+        [TestMethod]
+        public async Task WhenTheOperationCancelsItselfAndThePolicyAllowsIt_TheOperationIsRestarted()
+        {
+            // Cancellation the runner did not ask for, such as an HttpClient timeout, is a failure like any other.
+            using CancellationTokenSource timeout = new();
+            await timeout.CancelAsync().ConfigureAwait(false);
+            var policy = new RecordingRetryPolicy(true);
+            TaskCompletionSource secondRunStarted = NewSignal();
+            int invocations = 0;
+
+            ReliableTaskRunner runner = ReliableTaskRunner.Run(
+                async ct =>
+                {
+                    if (Interlocked.Increment(ref invocations) == 1)
+                    {
+                        await Task.Yield();
+                        timeout.Token.ThrowIfCancellationRequested();
+                    }
+
+                    secondRunStarted.TrySetResult();
+                    await WaitForCancellationAsync(ct).ConfigureAwait(false);
+                },
+                policy);
+
+            await WaitAsync(secondRunStarted.Task, "the operation to be restarted").ConfigureAwait(false);
+
+            Assert.AreEqual(2, Volatile.Read(ref invocations));
+            OperationCanceledException consulted = Assert.IsInstanceOfType<OperationCanceledException>(Assert.ContainsSingle(policy.Consulted));
+            Assert.AreEqual(timeout.Token, consulted.CancellationToken);
+
+            await WaitAsync(runner.StopAsync(), "the runner to stop").ConfigureAwait(false);
+        }
+
+        [TestMethod]
+        public async Task WhenTheOperationCancelsItselfAndThePolicySaysNo_ItIsNotRestartedAndStopAsyncReturnsTheCancelledTask()
+        {
+            using CancellationTokenSource timeout = new();
+            await timeout.CancelAsync().ConfigureAwait(false);
+            TaskCompletionSource policyConsulted = NewSignal();
+            var policy = new RecordingRetryPolicy(_ =>
+            {
+                policyConsulted.TrySetResult();
+                return false;
+            });
+            int invocations = 0;
+
+            ReliableTaskRunner runner = ReliableTaskRunner.Run(
+                async _ =>
+                {
+                    Interlocked.Increment(ref invocations);
+                    await Task.Yield();
+                    timeout.Token.ThrowIfCancellationRequested();
+                },
+                policy);
+
+            await WaitAsync(policyConsulted.Task, "the policy to be consulted").ConfigureAwait(false);
+
+            Task stopTask = runner.StopAsync();
+            await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+
+            Assert.IsTrue(stopTask.IsCanceled);
+            Assert.AreEqual(1, Volatile.Read(ref invocations));
+            Assert.IsInstanceOfType<OperationCanceledException>(Assert.ContainsSingle(policy.Consulted));
+        }
+
+        [TestMethod]
+        public async Task WhenNoPolicyIsGiven_AnyFailureCausesARestart()
+        {
+            TaskCompletionSource secondRunStarted = NewSignal();
+            int invocations = 0;
+
+            ReliableTaskRunner runner = ReliableTaskRunner.Run(ct =>
+            {
+                if (Interlocked.Increment(ref invocations) == 1)
+                {
+                    return FailAsynchronously(new FormatException("An unusual failure"));
+                }
+
+                secondRunStarted.TrySetResult();
+                return WaitForCancellationAsync(ct);
+            });
+
+            await WaitAsync(secondRunStarted.Task, "the operation to be restarted").ConfigureAwait(false);
+
+            Assert.AreEqual(2, Volatile.Read(ref invocations));
+            await WaitAsync(runner.StopAsync(), "the runner to stop").ConfigureAwait(false);
+        }
+
+        [TestMethod]
+        public async Task WhenTheOperationCompletesWithoutFailing_ItIsNotRestarted()
+        {
+            var policy = new RecordingRetryPolicy(true);
+            int invocations = 0;
+
+            // The operation has already completed when Run attaches its failure continuation, so the runner has
+            // made its restart decision by the time Run returns.
+            ReliableTaskRunner runner = ReliableTaskRunner.Run(
+                _ =>
+                {
+                    Interlocked.Increment(ref invocations);
+                    return Task.CompletedTask;
+                },
+                policy);
+
+            Task stopTask = runner.StopAsync();
+            await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+
+            Assert.AreEqual(TaskStatus.RanToCompletion, stopTask.Status);
+            Assert.AreEqual(1, Volatile.Read(ref invocations));
+            Assert.IsEmpty(policy.Consulted);
+        }
+
+        [TestMethod]
+        public async Task AfterStopAsync_AFailingOperationIsNotRestarted()
+        {
+            var failure = new InvalidOperationException("Failed while stopping");
+            var policy = new RecordingRetryPolicy(true);
+            int invocations = 0;
+
+            ReliableTaskRunner runner = ReliableTaskRunner.Run(
+                async ct =>
+                {
+                    Interlocked.Increment(ref invocations);
+                    await WaitForCancellationAsync(ct).ConfigureAwait(false);
+                    throw failure;
+                },
+                policy);
+
+            Task stopTask = runner.StopAsync();
+            await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+
+            // The failure is reported to the caller of StopAsync rather than causing a restart.
+            InvalidOperationException actual = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => stopTask).ConfigureAwait(false);
+            Assert.AreSame(failure, actual);
+            Assert.AreEqual(1, Volatile.Read(ref invocations));
+            Assert.IsEmpty(policy.Consulted);
+        }
+
+        [TestMethod]
+        public async Task WhenStopAsyncIsCalledWhileTheRestartedOperationIsStarting_ItReturnsTheRestartedRun()
+        {
+            var failure = new InvalidOperationException("First run failed");
+            TaskCompletionSource restartEntered = NewSignal();
+            using var allowRestartToReturn = new ManualResetEventSlim();
+            int invocations = 0;
+
+            ReliableTaskRunner runner = ReliableTaskRunner.Run(
+                ct =>
+                {
+                    if (Interlocked.Increment(ref invocations) == 1)
+                    {
+                        return FailAsynchronously(failure);
+                    }
+
+                    // Hold the restart inside runFunction, before it has returned its task.
+                    restartEntered.TrySetResult();
+                    allowRestartToReturn.Wait(Timeout);
+                    return WaitForCancellationAsync(ct);
+                },
+                new RecordingRetryPolicy(true));
+
+            await WaitAsync(restartEntered.Task, "the restart to begin").ConfigureAwait(false);
+
+            Task stopTask = runner.StopAsync();
+
+            // StopAsync must not hand back the faulted first run while a second one is starting.
+            Assert.IsFalse(stopTask.IsCompleted);
+
+            allowRestartToReturn.Set();
+            await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+
+            Assert.AreEqual(TaskStatus.RanToCompletion, stopTask.Status);
+            Assert.AreEqual(2, Volatile.Read(ref invocations));
+        }
+
+        [TestMethod]
+        public async Task WhenStopAsyncIsCalledWhileThePolicyIsDeciding_TheOperationIsNotRestarted()
+        {
+            var failure = new InvalidOperationException("Failed just before stopping");
+            TaskCompletionSource policyEntered = NewSignal();
+            using var allowPolicyToReturn = new ManualResetEventSlim();
+            var policy = new RecordingRetryPolicy(_ =>
+            {
+                policyEntered.TrySetResult();
+                allowPolicyToReturn.Wait(Timeout);
+                return true;
+            });
+            int invocations = 0;
+
+            // The runner's continuations run on the scheduler that was current when Run was called. An exclusive
+            // scheduler runs one task at a time in order, which lets the test wait for the restart decision below.
+            TaskScheduler scheduler = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
+            ReliableTaskRunner runner = await Task.Factory.StartNew(
+                () => ReliableTaskRunner.Run(
+                    _ =>
+                    {
+                        Interlocked.Increment(ref invocations);
+                        return FailAsynchronously(failure);
+                    },
+                    policy),
+                CancellationToken.None,
+                TaskCreationOptions.None,
+                scheduler).ConfigureAwait(false);
+
+            await WaitAsync(policyEntered.Task, "the policy to be consulted").ConfigureAwait(false);
+
+            Task stopTask = runner.StopAsync();
+            allowPolicyToReturn.Set();
+
+            // This runs only after the continuation that consulted the policy has finished.
+            await WaitAsync(
+                Task.Factory.StartNew(() => { }, CancellationToken.None, TaskCreationOptions.None, scheduler),
+                "the restart decision").ConfigureAwait(false);
+
+            InvalidOperationException actual = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => stopTask).ConfigureAwait(false);
+            Assert.AreSame(failure, actual);
+            Assert.AreEqual(1, Volatile.Read(ref invocations));
+        }
+
+        [TestMethod]
+        public async Task WhenTheOperationHonoursCancellationByThrowing_StopAsyncReturnsACancelledTask()
+        {
+            var policy = new RecordingRetryPolicy(true);
+
+            ReliableTaskRunner runner = ReliableTaskRunner.Run(
+                async ct =>
+                {
+                    await WaitForCancellationAsync(ct).ConfigureAwait(false);
+                    ct.ThrowIfCancellationRequested();
+                },
+                policy);
+
+            Task stopTask = runner.StopAsync();
+            await WaitAsync(stopTask, "the runner to stop").ConfigureAwait(false);
+
+            Assert.IsTrue(stopTask.IsCanceled);
+            await Assert.ThrowsAsync<OperationCanceledException>(() => stopTask).ConfigureAwait(false);
+            Assert.IsEmpty(policy.Consulted);
+        }
+
+        [TestMethod]
+        public void WhenTheOperationThrowsSynchronously_RunPropagatesTheException()
+        {
+            var failure = new InvalidOperationException("Failed before returning a task");
+            var policy = new RecordingRetryPolicy(true);
+
+            InvalidOperationException actual = Assert.ThrowsExactly<InvalidOperationException>(
+                () => ReliableTaskRunner.Run(_ => throw failure, policy));
+
+            Assert.AreSame(failure, actual);
+            Assert.IsEmpty(policy.Consulted);
+        }
+
+        [TestMethod]
+        public void WhenTheFunctionIsNull_RunThrows()
+        {
+            ArgumentNullException withoutPolicy = Assert.ThrowsExactly<ArgumentNullException>(
+                () => ReliableTaskRunner.Run(null!));
+            ArgumentNullException withPolicy = Assert.ThrowsExactly<ArgumentNullException>(
+                () => ReliableTaskRunner.Run(null!, new AnyExceptionPolicy()));
+
+            Assert.AreEqual("runFunction", withoutPolicy.ParamName);
+            Assert.AreEqual("runFunction", withPolicy.ParamName);
+        }
+
+        [TestMethod]
+        public void WhenThePolicyIsNull_RunThrowsWithoutStartingTheOperation()
+        {
+            int invocations = 0;
+
+            ArgumentNullException actual = Assert.ThrowsExactly<ArgumentNullException>(
+                () => ReliableTaskRunner.Run(
+                    _ =>
+                    {
+                        Interlocked.Increment(ref invocations);
+                        return Task.CompletedTask;
+                    },
+                    null!));
+
+            Assert.AreEqual("retryPolicy", actual.ParamName);
+            Assert.AreEqual(0, Volatile.Read(ref invocations));
+        }
+
+        private static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>
+        /// Returns a task that completes when the token is cancelled, without throwing.
+        /// </summary>
+        private static Task WaitForCancellationAsync(CancellationToken cancellationToken)
+        {
+            TaskCompletionSource cancelled = NewSignal();
+            cancellationToken.Register(() => cancelled.TrySetResult());
+            return cancelled.Task;
+        }
+
+        /// <summary>
+        /// Returns a task that faults asynchronously, as a real long-running operation would.
+        /// </summary>
+        private static Task FailAsynchronously(Exception exception) => FailAsynchronously(() => throw exception);
+
+        private static async Task FailAsynchronously(Func<object> fail)
+        {
+            await Task.Yield();
+            fail();
+        }
+
+        /// <summary>
+        /// Waits for a task to finish (in any state) and fails the test, rather than hanging, if it does not.
+        /// </summary>
+        private static async Task WaitAsync(Task task, string description)
+        {
+            Task winner = await Task.WhenAny(task, Task.Delay(Timeout)).ConfigureAwait(false);
+            if (winner != task)
+            {
+                Assert.Fail($"Timed out after {Timeout.TotalSeconds} seconds waiting for {description}.");
+            }
+        }
+    }
+}

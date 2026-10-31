@@ -21,7 +21,8 @@ namespace Corvus.Retry.Strategies
     /// </remarks>
     public abstract class RetryStrategy : IRetryStrategy
     {
-        private readonly List<Exception> exceptions = new();
+        // Created on the first failure, so that an operation that succeeds at its first try allocates no list.
+        private List<Exception>? exceptions;
 
         /// <inheritdoc/>
         public event EventHandler<RetryEventArgs>? Retrying;
@@ -31,7 +32,7 @@ namespace Corvus.Retry.Strategies
         {
             get
             {
-                return new AggregateException(this.exceptions);
+                return new AggregateException(this.exceptions ?? (IEnumerable<Exception>)Array.Empty<Exception>());
             }
         }
 
@@ -62,16 +63,14 @@ namespace Corvus.Retry.Strategies
                 throw new ArgumentNullException(nameof(exception));
             }
 
+            List<Exception> exceptions = this.exceptions ??= new List<Exception>();
             if (exception is AggregateException aggregateException)
             {
-                foreach (Exception ex in aggregateException.InnerExceptions)
-                {
-                    this.exceptions.Add(ex);
-                }
+                exceptions.AddRange(aggregateException.InnerExceptions);
             }
             else
             {
-                this.exceptions.Add(exception);
+                exceptions.Add(exception);
             }
         }
     }

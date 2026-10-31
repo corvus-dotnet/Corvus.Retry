@@ -1,4 +1,4 @@
-﻿// <copyright file="ReliableTaskRunner.cs" company="Endjin Limited">
+// <copyright file="ReliableTaskRunner.cs" company="Endjin Limited">
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
@@ -25,7 +25,11 @@ namespace Corvus.Retry
     public sealed class ReliableTaskRunner
     {
         private readonly CancellationTokenSource cancellationTokenSource;
+
+        // Guards processingTask and stopping, so that StopAsync and a restart cannot interleave.
+        private readonly object sync = new object();
         private Task processingTask;
+        private bool stopping;
 
         /// <summary>
         /// In order to ensure that processingTask has been initialised, we need to invoke runFunction before returning.
@@ -36,7 +40,8 @@ namespace Corvus.Retry
         {
             this.cancellationTokenSource = new CancellationTokenSource();
 
-            this.RunAndAttachFailureContinuation(runFunction, retryPolicy, out this.processingTask);
+            this.processingTask = runFunction(this.cancellationTokenSource.Token);
+            this.AttachFailureContinuation(this.processingTask, runFunction, retryPolicy);
         }
 
         /// <summary>
@@ -51,7 +56,7 @@ namespace Corvus.Retry
                 throw new ArgumentNullException(nameof(runFunction));
             }
 
-            return Run(runFunction, new AnyExceptionPolicy());
+            return Run(runFunction, AnyExceptionPolicy.Default);
         }
 
         /// <summary>
@@ -81,26 +86,97 @@ namespace Corvus.Retry
         /// <returns>A task which completes when the function terminates.</returns>
         public Task StopAsync()
         {
+            Task task;
+            lock (this.sync)
+            {
+                // Once this is set no restart can begin, so the task we return is the last run there will be.
+                this.stopping = true;
+                task = this.processingTask;
+            }
+
+            // Cancel outside the lock, so that callbacks registered on the token do not run while we hold it.
             this.cancellationTokenSource.Cancel();
-            return this.processingTask;
+            return task;
         }
 
-        private void RunAndAttachFailureContinuation(Func<CancellationToken, Task> runFunction, IRetryPolicy retryPolicy, out Task task)
+        private static OperationCanceledException GetCancellation(Task cancelledTask)
         {
-            task = runFunction(this.cancellationTokenSource.Token);
+            try
+            {
+                // Rethrows the OperationCanceledException that cancelled the task, where the runtime has kept it.
+                cancelledTask.GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException ex)
+            {
+                return ex;
+            }
 
+            return new TaskCanceledException(cancelledTask);
+        }
+
+        private void Restart(Func<CancellationToken, Task> runFunction, IRetryPolicy retryPolicy)
+        {
+            // Publish a stand-in for the new run before starting it, so that a StopAsync call made while runFunction
+            // is still executing gets a task that represents the new run rather than the faulted one it replaces.
+            var nextRun = new TaskCompletionSource<Task>();
+            Task published;
+            lock (this.sync)
+            {
+                if (this.stopping)
+                {
+                    return;
+                }
+
+                published = nextRun.Task.Unwrap();
+                this.processingTask = published;
+            }
+
+            Task task;
+            try
+            {
+                task = runFunction(this.cancellationTokenSource.Token);
+            }
+            catch (Exception ex)
+            {
+                // There is no caller to throw to on a restart, so treat this like any other failed run.
+                task = Task.FromException(ex);
+            }
+
+            nextRun.SetResult(task);
+
+            // Watch the published stand-in rather than the run's own task. Unwrap observes the run's failure, and
+            // the continuation observes the stand-in's, so a run that is replaced by a further restart does not
+            // report its failure as unobserved.
+            this.AttachFailureContinuation(published, runFunction, retryPolicy);
+        }
+
+        private void AttachFailureContinuation(Task task, Func<CancellationToken, Task> runFunction, IRetryPolicy retryPolicy)
+        {
+            // The continuation is cancelled when StopAsync cancels the token, so it only runs for a failure, or a
+            // cancellation, that the operation brought on itself (for example an HttpClient timeout).
             task.ContinueWith(
             t =>
             {
-                t.Exception.Handle(_ => true);
-                if (retryPolicy.CanRetry(t.Exception))
+                bool canRetry;
+                if (t.Exception is AggregateException ex)
+                {
+                    // Consult the policy with the exceptions the operation actually threw, not the AggregateException
+                    // wrapper, as RetryTask does.
+                    canRetry = retryPolicy.CanRetryAll(ex);
+                }
+                else
+                {
+                    canRetry = retryPolicy.CanRetry(GetCancellation(t));
+                }
+
+                if (canRetry)
                 {
                     // Run again if we were allowed to
-                    this.RunAndAttachFailureContinuation(runFunction, retryPolicy, out this.processingTask);
+                    this.Restart(runFunction, retryPolicy);
                 }
             },
             this.cancellationTokenSource.Token,
-            TaskContinuationOptions.OnlyOnFaulted,
+            TaskContinuationOptions.NotOnRanToCompletion,
             TaskScheduler.Current);
         }
     }

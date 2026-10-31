@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <Import Project="$(EndjinProjectPropsPath)" Condition="$(EndjinProjectPropsPath) != ''" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <!-- BenchmarkDotNet needs optimised code with no debugger-friendly codegen; it refuses to run Debug builds. -->
+    <Optimize>true</Optimize>
+    <!-- BenchmarkDotNet requires benchmark types and methods to be public; they are not public API.
+         SA1600/SA1602/CS1591 would otherwise demand XML docs on every benchmark member.
+         SA1204 prioritises static/non-static over public/non-public, which does not suit benchmark classes. -->
+    <NoWarn>$(NoWarn);SA1204;SA1600;SA1602;CS1591</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Endjin.RecommendedPractices (Endjin.AutoPackagesLock.targets) requires Exe projects to use a package lock
+         file, locked in CI builds. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(ContinuousIntegrationBuild)' == 'true'">true</RestoreLockedMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="Endjin.RecommendedPractices.GitHub">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Corvus.Retry\Corvus.Retry.csproj" />
+  </ItemGroup>
+
+  <!-- The test suite's driver calls every public RetryTaskFactory and RetryTaskFactory<T> StartNew overload, and a test
+       fails if an overload is added without it. Sharing it keeps the overload benchmarks complete too. -->
+  <ItemGroup>
+    <Compile Include="..\Corvus.Retry.Tests\Corvus\Retry\RetryTaskFactoryDriver.cs" Link="Shared\RetryTaskFactoryDriver.cs" />
+    <Compile Include="..\Corvus.Retry.Tests\Corvus\Retry\StartNewDefaults.cs" Link="Shared\StartNewDefaults.cs" />
+    <Compile Include="..\Corvus.Retry.Tests\Corvus\Retry\StartNewOverload.cs" Link="Shared\StartNewOverload.cs" />
+  </ItemGroup>
+
+</Project>

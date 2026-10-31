@@ -1,0 +1,24 @@
+<Solution>
+  <Folder Name="/DevOps/">
+    <File Path="../.github/dependabot.yml" />
+    <File Path="../.github/workflows/build.yml" />
+    <File Path="../.gitattributes" />
+    <File Path="../.gitignore" />
+    <File Path="../.zf/config.ps1" />
+    <File Path="../build.ps1" />
+    <File Path="../GitVersion.yml" />
+    <File Path="../global.json" />
+    <File Path="../imm.yaml" />
+  </Folder>
+  <Folder Name="/Solution Items/">
+    <File Path="../LICENSE" />
+    <File Path="../README.md" />
+    <File Path=".editorconfig" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="stylecop.json" />
+  </Folder>
+  <Project Path="Corvus.Retry.Benchmarks/Corvus.Retry.Benchmarks.csproj" />
+  <Project Path="Corvus.Retry.Tests/Corvus.Retry.Tests.csproj" />
+  <Project Path="Corvus.Retry/Corvus.Retry.csproj" />
+</Solution>
