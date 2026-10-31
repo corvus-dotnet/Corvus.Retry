@@ -9,16 +9,17 @@ using System.Threading;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
+using Corvus.Retry.Policies;
 using Corvus.Retry.Strategies;
 
 /// <summary>
-/// The cost of a fallback in a <see cref="ReliabilityPipeline{T}"/> that makes one attempt, compared with the same pipeline
-/// without a fallback.
+/// The cost of a <see cref="Fallback{T}"/> in a <see cref="RetryTaskFactory{T}"/> that makes one attempt, compared with
+/// the same factory without a fallback.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Every operation, callback and fallback action completes synchronously. The "Success" category has an operation that
-/// succeeds, so the fallback does not apply; a pipeline without a fallback must allocate nothing there. The "Exception"
+/// succeeds, so the fallback does not apply; a factory without a fallback must allocate nothing there. The "Exception"
 /// category has an operation that throws, and the "Result" category has an operation that returns a result that the
 /// fallback rejects.
 /// </para>
@@ -32,8 +33,8 @@ public class FallbackBenchmarks
     private const int RejectedResult = -1;
     private const int FallbackResult = 0;
 
-    private readonly ReliabilityPipeline<int> noFallbackPipeline;
-    private readonly ReliabilityPipeline<int> fallbackPipeline;
+    private readonly RetryTaskFactory<int> noFallbackFactory;
+    private readonly RetryTaskFactory<int> fallbackFactory;
     private readonly Func<CancellationToken, ValueTask<int>> operation;
     private readonly Func<CancellationToken, ValueTask<int>> failingOperation;
     private readonly Func<CancellationToken, ValueTask<int>> rejectedOperation;
@@ -45,42 +46,40 @@ public class FallbackBenchmarks
         this.failingOperation = static _ => throw new InvalidOperationException("Failure");
         this.rejectedOperation = static _ => new ValueTask<int>(RejectedResult);
 
-        this.noFallbackPipeline = new ReliabilityPipeline<int>(new ReliabilityPipelineOptions<int> { Strategy = new DoNotRetry() });
-        this.fallbackPipeline = new ReliabilityPipeline<int>(new ReliabilityPipelineOptions<int>
+        this.noFallbackFactory = new RetryTaskFactory<int>(new DoNotRetry(), AnyExceptionPolicy.Default);
+        this.fallbackFactory = new RetryTaskFactory<int>(new DoNotRetry(), AnyExceptionPolicy.Default)
         {
-            Strategy = new DoNotRetry(),
-            Fallback = new FallbackOptions<int>
+            Fallback = new(static _ => new ValueTask<int>(FallbackResult))
             {
-                Action = static _ => new ValueTask<int>(FallbackResult),
-                ShouldFallbackResult = static r => r == RejectedResult,
+                AppliesToResult = static r => r == RejectedResult,
                 OnFallback = static _ => ValueTask.CompletedTask,
             },
-        });
+        };
     }
 
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("Success")]
-    public ValueTask<int> NoFallback_Success() => this.noFallbackPipeline.ExecuteAsync(this.operation);
+    public ValueTask<int> NoFallback_Success() => this.noFallbackFactory.RunValueTask(this.operation);
 
     [Benchmark]
     [BenchmarkCategory("Success")]
-    public ValueTask<int> Success_NoFallbackUsed() => this.fallbackPipeline.ExecuteAsync(this.operation);
+    public ValueTask<int> Success_NoFallbackUsed() => this.fallbackFactory.RunValueTask(this.operation);
 
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("Exception")]
-    public int NoFallback_Exception() => Observe(this.noFallbackPipeline.ExecuteAsync(this.failingOperation));
+    public int NoFallback_Exception() => Observe(this.noFallbackFactory.RunValueTask(this.failingOperation));
 
     [Benchmark]
     [BenchmarkCategory("Exception")]
-    public int Exception_FallbackUsed() => Observe(this.fallbackPipeline.ExecuteAsync(this.failingOperation));
+    public int Exception_FallbackUsed() => Observe(this.fallbackFactory.RunValueTask(this.failingOperation));
 
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("Result")]
-    public ValueTask<int> NoFallback_Result() => this.noFallbackPipeline.ExecuteAsync(this.rejectedOperation);
+    public ValueTask<int> NoFallback_Result() => this.noFallbackFactory.RunValueTask(this.rejectedOperation);
 
     [Benchmark]
     [BenchmarkCategory("Result")]
-    public ValueTask<int> Result_FallbackUsed() => this.fallbackPipeline.ExecuteAsync(this.rejectedOperation);
+    public ValueTask<int> Result_FallbackUsed() => this.fallbackFactory.RunValueTask(this.rejectedOperation);
 
     // Every call completes synchronously, so the exception is read without a wait.
     private static int Observe(ValueTask<int> call)

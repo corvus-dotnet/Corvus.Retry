@@ -32,12 +32,12 @@ public class PolicyBenchmarks
 
     private static readonly HttpResponseMessage TransientResponse = new(HttpStatusCode.ServiceUnavailable);
 
-    private static readonly IRetryPolicy HandlePolicy = RetryPolicies.Handle<HttpRequestException>();
-    private static readonly IRetryPolicy HandleWithPredicatePolicy =
-        RetryPolicies.Handle<HttpRequestException>(static ex => ex.StatusCode == HttpStatusCode.ServiceUnavailable);
+    private static readonly IRetryPolicy ForPolicy = RetryPolicies.For<HttpRequestException>();
+    private static readonly IRetryPolicy ForWithPredicatePolicy =
+        RetryPolicies.For<HttpRequestException>(static ex => ex.StatusCode == HttpStatusCode.ServiceUnavailable);
 
-    private static readonly IRetryPolicy HandleOrPolicy = RetryPolicies.Handle<TimeoutException>().Or<HttpRequestException>();
-    private static readonly IRetryPolicy HandleInnerPolicy = RetryPolicies.HandleInner<IOException>();
+    private static readonly IRetryPolicy ForOrPolicy = RetryPolicies.For<TimeoutException>().Or<HttpRequestException>();
+    private static readonly IRetryPolicy ForInnerPolicy = RetryPolicies.ForInner<IOException>();
     private static readonly IRetryPolicy FromPredicatePolicy = RetryPolicies.FromPredicate(static ex => ex is InvalidOperationException);
     private static readonly IRetryPolicy NotPolicy = RetryPolicies.Not(new DoNotRetryPolicy());
     private static readonly IRetryPolicy AnyTwoPolicy = RetryPolicies.Any(new DoNotRetryPolicy(), new AnyExceptionPolicy());
@@ -66,24 +66,24 @@ public class PolicyBenchmarks
     public bool FromPredicate() => FromPredicatePolicy.CanRetry(Failure);
 
     [Benchmark(Baseline = true)]
-    [BenchmarkCategory("Handle")]
-    public bool Handle_Match() => HandlePolicy.CanRetry(HttpFailure);
+    [BenchmarkCategory("For")]
+    public bool For_Match() => ForPolicy.CanRetry(HttpFailure);
 
     [Benchmark]
-    [BenchmarkCategory("Handle")]
-    public bool Handle_NoMatch() => HandlePolicy.CanRetry(Failure);
+    [BenchmarkCategory("For")]
+    public bool For_NoMatch() => ForPolicy.CanRetry(Failure);
 
     [Benchmark]
-    [BenchmarkCategory("Handle")]
-    public bool Handle_WithPredicate() => HandleWithPredicatePolicy.CanRetry(HttpFailure);
+    [BenchmarkCategory("For")]
+    public bool For_WithPredicate() => ForWithPredicatePolicy.CanRetry(HttpFailure);
 
     [Benchmark]
-    [BenchmarkCategory("Handle")]
-    public bool Handle_Or_SecondTypeMatch() => HandleOrPolicy.CanRetry(HttpFailure);
+    [BenchmarkCategory("For")]
+    public bool For_Or_SecondTypeMatch() => ForOrPolicy.CanRetry(HttpFailure);
 
     [Benchmark]
-    [BenchmarkCategory("Handle")]
-    public bool HandleInner_DepthThree() => HandleInnerPolicy.CanRetry(NestedFailure);
+    [BenchmarkCategory("For")]
+    public bool ForInner_DepthThree() => ForInnerPolicy.CanRetry(NestedFailure);
 
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("Combinators")]
