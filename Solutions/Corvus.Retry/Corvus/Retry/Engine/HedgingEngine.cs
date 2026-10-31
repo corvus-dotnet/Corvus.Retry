@@ -158,7 +158,7 @@ internal static class HedgingEngine
             timeProvider,
             continueOnCapturedContext,
             outcome);
-        Func<HedgingEventArgs, ValueTask>? onHedging = hedging.OnHedging;
+        Func<HedgedAttemptEventArgs, ValueTask>? onHedging = hedging.OnHedging;
         TimeSpan delay = hedging.Delay;
 
         // A zero delay starts the attempts one after the other until an outcome wins, and an infinite delay starts an
@@ -344,7 +344,7 @@ internal static class HedgingEngine
             call.ThrowIfStopped();
             if (onHedging is not null)
             {
-                await onHedging(new HedgingEventArgs(call.NextAttemptNumber, exception)).ConfigureAwait(continueOnCapturedContext);
+                await onHedging(new HedgedAttemptEventArgs(call.NextAttemptNumber, exception)).ConfigureAwait(continueOnCapturedContext);
             }
         }
 

@@ -64,7 +64,7 @@ public static class RetryPolicies
     /// <returns>
     /// The policy. Use <see cref="ExceptionTypeRetryPolicy.Or{TException}(Func{TException, bool}?)"/> to add more types.
     /// </returns>
-    public static ExceptionTypeRetryPolicy Handle<TException>(Func<TException, bool>? predicate = null)
+    public static ExceptionTypeRetryPolicy For<TException>(Func<TException, bool>? predicate = null)
         where TException : Exception
     {
         return ExceptionTypeRetryPolicy.Create(predicate);
@@ -84,7 +84,7 @@ public static class RetryPolicies
     /// The policy examines the exception, its <see cref="Exception.InnerException"/> chain, and the
     /// <see cref="AggregateException.InnerExceptions"/> of an <see cref="AggregateException"/>, depth first.
     /// </remarks>
-    public static IRetryPolicy HandleInner<TException>(Func<TException, bool>? predicate = null)
+    public static IRetryPolicy ForInner<TException>(Func<TException, bool>? predicate = null)
         where TException : Exception
     {
         return new InnerExceptionRetryPolicy(ExceptionTypeRetryPolicy.CreateMatch(predicate));

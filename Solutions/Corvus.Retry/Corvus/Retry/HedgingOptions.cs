@@ -92,5 +92,5 @@ public sealed record HedgingOptions
     /// callback stops the call. The callback can run for an attempt that does not start, when another attempt wins while
     /// the callback runs.
     /// </remarks>
-    public Func<HedgingEventArgs, ValueTask>? OnHedging { get; init; }
+    public Func<HedgedAttemptEventArgs, ValueTask>? OnHedging { get; init; }
 }

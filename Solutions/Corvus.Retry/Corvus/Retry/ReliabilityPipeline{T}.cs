@@ -40,7 +40,7 @@ public sealed class ReliabilityPipeline<T>
     private readonly CircuitBreaker? circuitBreaker;
     private readonly bool continueOnCapturedContext;
     private readonly Func<T, bool>? shouldRetryResult;
-    private readonly FallbackOptions<T>? fallback;
+    private readonly Fallback<T>? fallback;
     private readonly HedgingOptions? hedging;
     private readonly Func<int, Func<CancellationToken, ValueTask<T>>?>? hedgingActionGenerator;
 
@@ -50,8 +50,8 @@ public sealed class ReliabilityPipeline<T>
     /// <param name="options">The settings of the pipeline.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="options"/>, <see cref="ReliabilityPipelineOptions.Policy"/>,
-    /// <see cref="ReliabilityPipelineOptions.TimeProvider"/>, the <see cref="FallbackOptions{T}.Action"/> or the
-    /// <see cref="FallbackOptions{T}.Policy"/> of <see cref="ReliabilityPipelineOptions{T}.Fallback"/>, or the
+    /// <see cref="ReliabilityPipelineOptions.TimeProvider"/>, the <see cref="Fallback{T}.Action"/> or the
+    /// <see cref="Fallback{T}.Policy"/> of <see cref="ReliabilityPipelineOptions{T}.Fallback"/>, or the
     /// <see cref="HedgingOptions.Policy"/> of <see cref="ReliabilityPipelineOptions.Hedging"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
@@ -94,7 +94,7 @@ public sealed class ReliabilityPipeline<T>
     /// <param name="cancellationToken">The caller's token.</param>
     /// <returns>
     /// The result of the first attempt that succeeds, or the last result if it is a failure and no retries remain. When
-    /// the fallback applies, the value of <see cref="FallbackOptions{T}.Action"/>.
+    /// the fallback applies, the value of <see cref="Fallback{T}.Action"/>.
     /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="operation"/> is <see langword="null"/>.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
@@ -154,7 +154,7 @@ public sealed class ReliabilityPipeline<T>
         return this.fallback is null ? core : this.WithFallbackAsync(core, this.fallback, outcome!, cancellationToken);
     }
 
-    private static void ValidateFallback(FallbackOptions<T>? fallback)
+    private static void ValidateFallback(Fallback<T>? fallback)
     {
         if (fallback is null)
         {
@@ -174,11 +174,11 @@ public sealed class ReliabilityPipeline<T>
 
     // Asks the predicate about a result. An exception from the predicate stops the call. The caller does not get the
     // result, so the pipeline disposes it, and ignores an exception from the disposal.
-    private static bool ShouldFallBack(Func<T, bool> shouldFallbackResult, T result)
+    private static bool ShouldFallBack(Func<T, bool> appliesToResult, T result)
     {
         try
         {
-            return shouldFallbackResult(result);
+            return appliesToResult(result);
         }
         catch
         {
@@ -206,7 +206,7 @@ public sealed class ReliabilityPipeline<T>
         }
     }
 
-    private async ValueTask<T> WithFallbackAsync(ValueTask<T> core, FallbackOptions<T> fallback, CallOutcome outcome, CancellationToken cancellationToken)
+    private async ValueTask<T> WithFallbackAsync(ValueTask<T> core, Fallback<T> fallback, CallOutcome outcome, CancellationToken cancellationToken)
     {
         T result;
         try
@@ -234,17 +234,17 @@ public sealed class ReliabilityPipeline<T>
                 throw;
             }
 
-            return await this.FallBackAsync(fallback, new FallbackArgs<T>(ex, default, cancellationToken)).ConfigureAwait(this.continueOnCapturedContext);
+            return await this.FallBackAsync(fallback, new FallbackEventArgs<T>(ex, default, cancellationToken)).ConfigureAwait(this.continueOnCapturedContext);
         }
 
-        if (fallback.ShouldFallbackResult is not { } shouldFallbackResult || !ShouldFallBack(shouldFallbackResult, result))
+        if (fallback.AppliesToResult is not { } appliesToResult || !ShouldFallBack(appliesToResult, result))
         {
             return result;
         }
 
         // OnFallback sees the rejected result before the pipeline releases it, as OnRetry sees a rejected result before a
         // retry. The action runs after the release, so the caller never gets a result that is still open.
-        FallbackArgs<T> args = new(null, result, cancellationToken);
+        FallbackEventArgs<T> args = new(null, result, cancellationToken);
         if (fallback.OnFallback is { } onFallback)
         {
             try
@@ -263,7 +263,7 @@ public sealed class ReliabilityPipeline<T>
         return await fallback.Action(args).ConfigureAwait(this.continueOnCapturedContext);
     }
 
-    private async ValueTask<T> FallBackAsync(FallbackOptions<T> fallback, FallbackArgs<T> args)
+    private async ValueTask<T> FallBackAsync(Fallback<T> fallback, FallbackEventArgs<T> args)
     {
         if (fallback.OnFallback is { } onFallback)
         {

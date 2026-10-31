@@ -1,4 +1,4 @@
-// <copyright file="HedgingEventArgs.cs" company="Endjin Limited">
+// <copyright file="HedgedAttemptEventArgs.cs" company="Endjin Limited">
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
@@ -11,7 +11,7 @@ using System;
 /// </summary>
 /// <param name="AttemptNumber">The number of the attempt that is about to start. The first hedged attempt is 2.</param>
 /// <param name="LastException">
-/// The exception that caused the attempt, or <see langword="null"/> when the delay expired or when a result was a
+/// The exception that caused the attempt, or <see langword="null"/> when the stagger expired or when a result was a
 /// failure.
 /// </param>
-public readonly record struct HedgingEventArgs(int AttemptNumber, Exception? LastException);
+public readonly record struct HedgedAttemptEventArgs(int AttemptNumber, Exception? LastException);

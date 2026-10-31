@@ -11,7 +11,7 @@ using System;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Create one with <see cref="RetryPolicies.Handle{TException}(Func{TException, bool}?)"/>, and add more types with
+/// Create one with <see cref="RetryPolicies.For{TException}(Func{TException, bool}?)"/>, and add more types with
 /// <see cref="Or{TException}(Func{TException, bool}?)"/>. An exception matches a type when it is an instance of that
 /// type or of a type that derives from it.
 /// </para>

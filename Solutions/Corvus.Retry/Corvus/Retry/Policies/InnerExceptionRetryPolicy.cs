@@ -10,7 +10,7 @@ using System.Collections.ObjectModel;
 /// <summary>
 /// A <see cref="IRetryPolicy"/> that retries when the exception, or an exception inside it, matches.
 /// </summary>
-/// <remarks>Created by <see cref="RetryPolicies.HandleInner{TException}(Func{TException, bool}?)"/>.</remarks>
+/// <remarks>Created by <see cref="RetryPolicies.ForInner{TException}(Func{TException, bool}?)"/>.</remarks>
 internal sealed class InnerExceptionRetryPolicy : IRetryPolicy
 {
     private readonly Func<Exception, bool> match;
