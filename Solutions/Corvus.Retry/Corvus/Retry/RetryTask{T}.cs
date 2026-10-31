@@ -2,31 +2,51 @@
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
-namespace Corvus.Retry
+namespace Corvus.Retry;
+
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using Corvus.Retry.Policies;
+
+/// <summary>
+/// Provides a Retriable Task factory analogous to <see cref="Task{T}.Factory"/>.
+/// </summary>
+/// <typeparam name="T">The return type of the task.</typeparam>
+/// <remarks>
+/// <para>
+/// There are four ways to retry an operation in this library.
+/// <list type="number">
+/// <item><see cref="Retriable"/> puts retries around one call to a synchronous or an asynchronous operation.</item>
+/// <item><see cref="RetryTask"/>, <see cref="RetryTask{T}"/> and a configured <see cref="RetryTaskFactory"/> or <see cref="RetryTaskFactory{T}"/> run an asynchronous operation with <c>Run</c>, or start a synchronous function as a task with <c>StartNew</c>. A factory adds timeouts, result retries, a circuit breaker and a fallback.</item>
+/// <item><see cref="HedgedTask"/>, <see cref="HedgedTask{T}"/>, <see cref="HedgedTaskFactory"/> and <see cref="HedgedTaskFactory{T}"/> start more attempts in parallel when an attempt is slow or fails.</item>
+/// <item><see cref="ReliableTaskRunner"/> runs a long-running asynchronous operation, and starts it again when it fails. An <see cref="IRetryPolicy"/> controls the restarts.</item>
+/// </list>
+/// </para>
+/// </remarks>
+public static class RetryTask<T>
 {
-    using System.Threading.Tasks;
-    using Corvus.Retry.Async;
-    using Corvus.Retry.Policies;
+    /// <summary>
+    /// Gets the Factory used to create retry tasks.
+    /// </summary>
+    /// <remarks>The factory has the default settings of <see cref="RetryTaskFactory{T}()"/>.</remarks>
+    public static RetryTaskFactory<T> Factory { get; } = new RetryTaskFactory<T>();
 
     /// <summary>
-    /// Provides a Retriable Task factory analagous to <see cref="Task{T}.Factory"/>.
+    /// Runs an operation with <see cref="Factory"/>, and retries it when it throws an exception.
     /// </summary>
-    /// <typeparam name="T">The return type of the task.</typeparam>
+    /// <param name="operation">The operation. It receives the caller's token.</param>
+    /// <param name="cancellationToken">The caller's token.</param>
+    /// <returns>The result of the first attempt that succeeds.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="operation"/> is <see langword="null"/>.</exception>
+    /// <exception cref="NotSupportedException"><typeparamref name="T"/> is a task type.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     /// <remarks>
-    /// <para>
-    /// There are three different ways of retrying tasks in this library.
-    /// <list type="number">
-    /// <item><see cref="RetryTask"/> and <see cref="RetryTask{T}"/> - starting a task to execute a function asynchronously, with retry</item>
-    /// <item><see cref="Retriable"/> - wrapping a synchronous or asynchronous operation with retry semantics</item>
-    /// <item><see cref="ReliableTaskRunner"/> -wrapping a long-running asynchronous operation in a host that ensures it continues to run even after failure. You can use <see cref="IRetryPolicy"/> to control when the task restarts.</item>
-    /// </list>
-    /// </para>
+    /// See <see cref="RetryTaskFactory{T}.Run(Func{CancellationToken, Task{T}}, CancellationToken)"/>. The first attempt
+    /// runs on the caller's thread until its first <see langword="await"/>.
     /// </remarks>
-    public static class RetryTask<T>
+    public static Task<T> Run(Func<CancellationToken, Task<T>> operation, CancellationToken cancellationToken = default)
     {
-        /// <summary>
-        /// Gets the Factory used to create retry tasks.
-        /// </summary>
-        public static RetryTaskFactory<T> Factory { get; } = new RetryTaskFactory<T>();
+        return Factory.Run(operation, cancellationToken);
     }
 }

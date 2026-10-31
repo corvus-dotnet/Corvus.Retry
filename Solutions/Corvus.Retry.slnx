@@ -19,6 +19,7 @@
     <File Path="stylecop.json" />
   </Folder>
   <Project Path="Corvus.Retry.Benchmarks/Corvus.Retry.Benchmarks.csproj" />
+  <Project Path="Corvus.Retry.Extensions.Http/Corvus.Retry.Extensions.Http.csproj" />
   <Project Path="Corvus.Retry.Tests/Corvus.Retry.Tests.csproj" />
   <Project Path="Corvus.Retry/Corvus.Retry.csproj" />
 </Solution>

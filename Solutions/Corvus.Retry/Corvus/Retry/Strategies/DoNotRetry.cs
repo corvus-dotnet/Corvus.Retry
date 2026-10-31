@@ -2,30 +2,19 @@
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
-namespace Corvus.Retry.Strategies
+namespace Corvus.Retry.Strategies;
+
+using System;
+
+/// <summary>
+/// Provides a <see cref="IRetryStrategy"/> which will always stop retrying immediately.
+/// </summary>
+public class DoNotRetry : IRetryStrategy
 {
-    using System;
-
-    /// <summary>
-    /// Provides a <see cref="IRetryStrategy"/> which will always stop retrying immediately.
-    /// </summary>
-    public class DoNotRetry : RetryStrategy
+    /// <inheritdoc/>
+    /// <remarks>This always returns <see langword="null"/>.</remarks>
+    public TimeSpan? GetRetryDelay(in RetryAttempt attempt)
     {
-        /// <inheritdoc/>
-        public override bool CanRetry
-        {
-            get { return false; }
-        }
-
-        /// <inheritdoc/>
-        public override TimeSpan PrepareToRetry(Exception lastException)
-        {
-            if (lastException is null)
-            {
-                throw new ArgumentNullException(nameof(lastException));
-            }
-
-            return TimeSpan.Zero;
-        }
+        return null;
     }
 }

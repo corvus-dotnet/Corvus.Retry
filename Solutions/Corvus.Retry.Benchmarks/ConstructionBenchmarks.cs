@@ -2,80 +2,241 @@
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
-namespace Corvus.Retry.Benchmarks
+namespace Corvus.Retry.Benchmarks;
+
+using System;
+using System.Threading.Tasks;
+using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Configs;
+using Corvus.Retry.Policies;
+using Corvus.Retry.Strategies;
+
+/// <summary>
+/// The cost of every public constructor. Strategies hold no state for a call, so a caller can create one and share
+/// it; a caller that creates a new strategy for each operation pays this cost on every call.
+/// </summary>
+[MemoryDiagnoser]
+[CategoriesColumn]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+public class ConstructionBenchmarks
 {
-    using System;
-    using BenchmarkDotNet.Attributes;
-    using BenchmarkDotNet.Configs;
-    using Corvus.Retry.Policies;
-    using Corvus.Retry.Strategies;
+    private static readonly InvalidOperationException Failure = new("Transient failure");
 
-    /// <summary>
-    /// The cost of every public constructor. Callers typically create a new strategy for each operation they retry,
-    /// so strategy construction is part of the cost of every retry.
-    /// </summary>
-    [MemoryDiagnoser]
-    [CategoriesColumn]
-    [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
-    public class ConstructionBenchmarks
-    {
-        private static readonly InvalidOperationException Failure = new("Transient failure");
+    // Shared arguments, so that the benchmarks measure only the construction, not the creation of their arguments.
+    private static readonly IRetryStrategy SharedStrategy = new Count(10);
+    private static readonly IRetryPolicy SharedPolicy = new AnyExceptionPolicy();
+    private static readonly Func<RetryAttempt, TimeSpan?> GetRetryDelay = static attempt => attempt.AttemptNumber < 10 ? TimeSpan.Zero : null;
+    private static readonly Func<Exception, bool> IsTransient = static ex => ex is TimeoutException;
+    private static readonly Func<TimeoutException, bool> IsTimeoutTransient = static ex => ex.Message.Length > 0;
+    private static readonly Func<FallbackEventArgs<int>, ValueTask<int>> FallbackAction = static _ => new ValueTask<int>(0);
+    private static readonly Func<int, bool> CanRetryResult = static r => r < 0;
+    private static readonly Fallback<int> SharedFallback = new(FallbackAction);
+    private static readonly RetryTaskFactory<int> SharedFactoryOfT = new(SharedStrategy, SharedPolicy) { CanRetryResult = CanRetryResult };
 
-        [Benchmark(Baseline = true)]
-        [BenchmarkCategory("Strategies")]
-        public IRetryStrategy Count_Default() => new Count();
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Strategies")]
+    public IRetryStrategy Count_Default() => new Count();
 
-        [Benchmark]
-        [BenchmarkCategory("Strategies")]
-        public IRetryStrategy Count_MaxTries() => new Count(10);
+    [Benchmark]
+    [BenchmarkCategory("Strategies")]
+    public IRetryStrategy Count_MaxTries() => new Count(10);
 
-        [Benchmark]
-        [BenchmarkCategory("Strategies")]
-        public IRetryStrategy DoNotRetry() => new DoNotRetry();
+    [Benchmark]
+    [BenchmarkCategory("Strategies")]
+    public IRetryStrategy DoNotRetry() => new DoNotRetry();
 
-        [Benchmark]
-        [BenchmarkCategory("Strategies")]
-        public IRetryStrategy Linear() => new Linear(TimeSpan.FromSeconds(1), 10);
+    [Benchmark]
+    [BenchmarkCategory("Strategies")]
+    public IRetryStrategy Linear() => new Linear(TimeSpan.FromSeconds(1), 10);
 
-        [Benchmark]
-        [BenchmarkCategory("Strategies")]
-        public IRetryStrategy Incremental_Default() => new Incremental();
+    [Benchmark]
+    [BenchmarkCategory("Strategies")]
+    public IRetryStrategy Incremental_Default() => new Incremental();
 
-        [Benchmark]
-        [BenchmarkCategory("Strategies")]
-        public IRetryStrategy Incremental_MaxTries_Delays() => new Incremental(10, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    [Benchmark]
+    [BenchmarkCategory("Strategies")]
+    public IRetryStrategy Incremental_MaxTries_Delays() => new Incremental(10, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
 
-        [Benchmark]
-        [BenchmarkCategory("Strategies")]
-        public IRetryStrategy Backoff_Default() => new Backoff();
+    [Benchmark]
+    [BenchmarkCategory("Strategies")]
+    public IRetryStrategy Backoff_Default() => new Backoff();
 
-        [Benchmark]
-        [BenchmarkCategory("Strategies")]
-        public IRetryStrategy Backoff_MaxTries_Delta() => new Backoff(10, TimeSpan.FromSeconds(1));
+    [Benchmark]
+    [BenchmarkCategory("Strategies")]
+    public IRetryStrategy Backoff_MaxTries_Delta() => new Backoff(10, TimeSpan.FromSeconds(1));
 
-        [Benchmark(Baseline = true)]
-        [BenchmarkCategory("Policies")]
-        public IRetryPolicy AnyExceptionPolicy() => new AnyExceptionPolicy();
+    [Benchmark]
+    [BenchmarkCategory("Strategies")]
+    public IRetryStrategy Linear_MaxDelay_Jitter() => new Linear(TimeSpan.FromSeconds(1), 10, TimeSpan.FromSeconds(5), useJitter: true);
 
-        [Benchmark]
-        [BenchmarkCategory("Policies")]
-        public IRetryPolicy DoNotRetryPolicy() => new DoNotRetryPolicy();
+    [Benchmark]
+    [BenchmarkCategory("Strategies")]
+    public IRetryStrategy Incremental_MaxDelay_Jitter() => new Incremental(10, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5), useJitter: true);
 
-        [Benchmark]
-        [BenchmarkCategory("Policies")]
-        public IRetryPolicy AggregatePolicy_WithTwoPolicies() =>
-            new AggregatePolicy { Policies = { new AnyExceptionPolicy(), new AnyExceptionPolicy() } };
+    [Benchmark]
+    [BenchmarkCategory("Strategies")]
+    public IRetryStrategy Exponential() => new Exponential(10, TimeSpan.FromSeconds(1));
 
-        [Benchmark(Baseline = true)]
-        [BenchmarkCategory("Other")]
-        public RetryEventArgs RetryEventArgs() => new(Failure, TimeSpan.FromSeconds(1));
+    [Benchmark]
+    [BenchmarkCategory("Strategies")]
+    public IRetryStrategy Exponential_MaxDelay_Jitter() => new Exponential(10, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30), useJitter: true);
 
-        [Benchmark]
-        [BenchmarkCategory("Other")]
-        public RetryTaskFactory RetryTaskFactory() => new();
+    [Benchmark]
+    [BenchmarkCategory("Strategies")]
+    public IRetryStrategy RetryStrategies_Constant() => RetryStrategies.Constant(9, TimeSpan.FromSeconds(1));
 
-        [Benchmark]
-        [BenchmarkCategory("Other")]
-        public RetryTaskFactory<int> RetryTaskFactoryOfT() => new();
-    }
+    [Benchmark]
+    [BenchmarkCategory("Strategies")]
+    public IRetryStrategy RetryStrategies_Linear() => RetryStrategies.Linear(9, TimeSpan.FromSeconds(1));
+
+    [Benchmark]
+    [BenchmarkCategory("Strategies")]
+    public IRetryStrategy RetryStrategies_Exponential() => RetryStrategies.Exponential(9, TimeSpan.FromSeconds(1));
+
+    [Benchmark]
+    [BenchmarkCategory("Strategies")]
+    public IRetryStrategy RetryStrategies_FromDelegate() => RetryStrategies.FromDelegate(GetRetryDelay);
+
+    [Benchmark]
+    [BenchmarkCategory("Strategies")]
+    public IRetryStrategy RetryStrategies_RetryAfter() => RetryStrategies.RetryAfter(SharedStrategy);
+
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Policies")]
+    public IRetryPolicy AnyExceptionPolicy() => new AnyExceptionPolicy();
+
+    [Benchmark]
+    [BenchmarkCategory("Policies")]
+    public IRetryPolicy DoNotRetryPolicy() => new DoNotRetryPolicy();
+
+    [Benchmark]
+    [BenchmarkCategory("Policies")]
+    public IRetryPolicy AggregatePolicy_WithTwoPolicies() =>
+        new AggregatePolicy { Policies = { new AnyExceptionPolicy(), new AnyExceptionPolicy() } };
+
+    [Benchmark]
+    [BenchmarkCategory("Policies")]
+    public IRetryPolicy RetryPolicies_FromPredicate() => RetryPolicies.FromPredicate(IsTransient);
+
+    [Benchmark]
+    [BenchmarkCategory("Policies")]
+    public IRetryPolicy RetryPolicies_For() => RetryPolicies.For<TimeoutException>();
+
+    [Benchmark]
+    [BenchmarkCategory("Policies")]
+    public IRetryPolicy RetryPolicies_For_WithPredicate() => RetryPolicies.For(IsTimeoutTransient);
+
+    [Benchmark]
+    [BenchmarkCategory("Policies")]
+    public IRetryPolicy RetryPolicies_For_Or() => RetryPolicies.For<TimeoutException>().Or<InvalidOperationException>();
+
+    [Benchmark]
+    [BenchmarkCategory("Policies")]
+    public IRetryPolicy RetryPolicies_ForInner() => RetryPolicies.ForInner<TimeoutException>();
+
+    [Benchmark]
+    [BenchmarkCategory("Policies")]
+    public IRetryPolicy RetryPolicies_Not() => RetryPolicies.Not(SharedPolicy);
+
+    [Benchmark]
+    [BenchmarkCategory("Policies")]
+    public IRetryPolicy RetryPolicies_Any_Three() => RetryPolicies.Any(SharedPolicy, SharedPolicy, SharedPolicy);
+
+    [Benchmark]
+    [BenchmarkCategory("Policies")]
+    public IRetryPolicy RetryPolicies_All_Three() => RetryPolicies.All(SharedPolicy, SharedPolicy, SharedPolicy);
+
+    [Benchmark]
+    [BenchmarkCategory("Policies")]
+    public IRetryPolicy Extension_Or() => SharedPolicy.Or(SharedPolicy);
+
+    [Benchmark]
+    [BenchmarkCategory("Policies")]
+    public IRetryPolicy Extension_And() => SharedPolicy.And(SharedPolicy);
+
+    [Benchmark]
+    [BenchmarkCategory("Policies")]
+    public IRetryPolicy Extension_Not() => SharedPolicy.Not();
+
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Other")]
+    public RetryEventArgs RetryEventArgs() => new(Failure, null, TimeSpan.FromSeconds(1), 1);
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public RetryTimeoutException RetryTimeoutException() => new(TimeSpan.FromSeconds(1));
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public RetryTaskFactory RetryTaskFactory() => new();
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public RetryTaskFactory<int> RetryTaskFactoryOfT() => new();
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public RetryTaskFactory RetryTaskFactory_AttemptTimeout() => new(SharedStrategy, SharedPolicy) { AttemptTimeout = TimeSpan.FromSeconds(5) };
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public RetryTaskFactory<int> RetryTaskFactoryOfT_CanRetryResult() => new(SharedStrategy, SharedPolicy) { CanRetryResult = CanRetryResult };
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public RetryTaskFactory<int> RetryTaskFactoryOfT_CopyWithFallback() => new(SharedFactoryOfT) { Fallback = SharedFallback };
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public HedgedTaskFactory<int> HedgedTaskFactoryOfT_OperationForAttempt() => new(extraAttempts: 2) { OperationForAttempt = static _ => null };
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public CircuitBreaker CircuitBreaker() => new(failureRate: 0.5, minimumCalls: 10);
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public CircuitRejectedException CircuitRejectedException() => new("The circuit is open.", TimeSpan.FromSeconds(1));
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public CircuitIsolatedException CircuitIsolatedException() => new();
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public RetryAttempt RetryAttempt() => new(1, Failure, null, TimeSpan.FromSeconds(1));
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public CircuitStateChange CircuitStateChange() => new(CircuitState.Closed, CircuitState.Open, Failure);
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public HedgedAttemptEventArgs HedgedAttemptEventArgs() => new(2, Failure);
+
+    [Benchmark]
+    [BenchmarkCategory("Other")]
+    public FallbackEventArgs<int> FallbackEventArgsOfT() => new(Failure, 0, default);
+
+    // The settings objects of 2.x and the earlier 3.0 builds are now the constructors of the factories, the fallback
+    // and the circuit breaker.
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Settings")]
+    public RetryTaskFactory RetryTaskFactory_StrategyPolicy() => new(SharedStrategy, SharedPolicy);
+
+    [Benchmark]
+    [BenchmarkCategory("Settings")]
+    public RetryTaskFactory<int> RetryTaskFactoryOfT_StrategyPolicy() => new(SharedStrategy, SharedPolicy);
+
+    [Benchmark]
+    [BenchmarkCategory("Settings")]
+    public HedgedTaskFactory HedgedTaskFactory() => new(extraAttempts: 2);
+
+    [Benchmark]
+    [BenchmarkCategory("Settings")]
+    public Fallback<int> FallbackOfT() => new(FallbackAction);
+
+    [Benchmark]
+    [BenchmarkCategory("Settings")]
+    public CircuitBreaker CircuitBreaker_Defaults() => new();
 }

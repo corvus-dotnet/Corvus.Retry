@@ -1,13 +1,18 @@
 # Corvus.Retry
 
-Retry support for synchronous and asynchronous operations, and a self-restarting host for long-running tasks, with
-pluggable retry policies and strategies. It targets `netstandard2.0` and `net10.0`.
+This library retries synchronous and asynchronous operations that fail. It also restarts long-running tasks that fail.
+A policy (`IRetryPolicy`) decides whether an exception can cause a retry. A strategy (`IRetryStrategy`) decides when:
+the number of attempts and the delay before each retry.
 
-Corvus.Retry was written before [Polly](https://github.com/App-vNext/Polly). For new code, we suggest you look at Polly.
+This package targets `net10.0`. If your project targets `netstandard2.0` or a different framework, use version 2.x.
+
+> **Upgrading from 2.x?** Version 3.0 is not compatible with 2.x. Read the
+> [migration guide from 2.x to 3.0](https://github.com/corvus-dotnet/Corvus.Retry/blob/main/Documentation/Migrating-from-2.x-to-3.0.md)
+> before you upgrade. Without its steps, your project can fail to compile, or your retries can operate differently.
 
 ## Usage
 
-`Retriable` wraps a synchronous or asynchronous operation, and runs it again if it throws:
+`Retriable` puts retries around one call:
 
 ```csharp
 using Corvus.Retry;
@@ -15,39 +20,55 @@ using Corvus.Retry.Policies;
 using Corvus.Retry.Strategies;
 
 SomeResult result = Retriable.Retry(() => GetSomething());
-await Retriable.RetryAsync(() => DoSomethingAsync());
-
-// Up to 5 tries, 1 second apart. Pass your own IRetryPolicy to retry only some exceptions.
-SomeResult result2 = Retriable.Retry(
-    () => GetSomething(),
-    CancellationToken.None,
-    new Linear(TimeSpan.FromSeconds(1), 5),
-    new AnyExceptionPolicy());
+await Retriable.RetryAsync(ct => DoSomethingAsync(ct), cancellationToken);
 ```
 
-`RetryTask.Factory` and `RetryTask<T>.Factory` work like `Task.Factory`, with retry:
+`RetryTask.Run` runs an asynchronous operation with the default settings (5 attempts, no delay):
 
 ```csharp
-Task<SomeResult> task = RetryTask<SomeResult>.Factory.StartNew(() => GetSomething(), new Count(5), new AnyExceptionPolicy());
+string body = await RetryTask.Run(ct => httpClient.GetStringAsync(uri, ct), cancellationToken);
 ```
 
-`ReliableTaskRunner` keeps a long-running operation going, restarting it after a failure, until you stop it:
+A configured `RetryTaskFactory` keeps the settings for many calls, as `new TaskFactory(...)` does. Make one and keep it
+in a field. It adds timeouts, result retries, a fallback and a circuit breaker:
 
 ```csharp
-ReliableTaskRunner runner = ReliableTaskRunner.Run(cancellationToken => ProcessMessagesAsync(cancellationToken));
-await runner.StopAsync();
+RetryTaskFactory<HttpResponseMessage> factory = new(
+    RetryStrategies.RetryAfter(RetryStrategies.Exponential(retries: 3, baseDelay: TimeSpan.FromMilliseconds(200))),
+    RetryPolicies.TransientHttp)
+{
+    CanRetryResult = RetryPolicies.IsTransientHttpResponse,
+    AttemptTimeout = TimeSpan.FromSeconds(5),
+    TotalTimeout = TimeSpan.FromSeconds(30),
+};
+
+using HttpResponseMessage response = await factory.Run(ct => httpClient.GetAsync(uri, ct), cancellationToken);
 ```
 
-- **Policies** (`IRetryPolicy`) decide whether a failure is retried: `AnyExceptionPolicy`, `DoNotRetryPolicy`,
-  `AggregatePolicy`, or your own.
-- **Strategies** (`IRetryStrategy`) decide how many tries are made and the delay between them: `Count`, `DoNotRetry`,
-  `Linear`, `Incremental` and `Backoff`, or your own.
+Use `Run` for a `Task`, `RunValueTask` for a `ValueTask`, and `StartNew` for a synchronous function, as
+`Task.Factory.StartNew` takes.
+
+The package also has:
+
+- `HedgedTaskFactory`, which starts more attempts in parallel when an attempt is slow or fails.
+- `CircuitBreaker`, which stops calls to a service that fails frequently.
+- `Fallback<T>`, which gives a value when the attempts fail.
+- `RetryHandler`, which applies a factory to each request of an `HttpClient`. For `IHttpClientFactory`, the package
+  `Corvus.Retry.Extensions.Http` has `AddRetryHandler`.
+- `ReliableTaskRunner`, which runs a long-running operation until you stop it, and starts it again if it fails.
+- `RetryStrategies` (`Constant`, `Linear`, `Exponential` with jitter, `FromDelegate`, `RetryAfter`) and `RetryPolicies`
+  (`For<T>`, `ForInner<T>`, `TransientHttp`, `IsTransientHttpResponse`, and the `Or`, `And` and `Not` combinators).
+- `TimeProvider` for every delay and timeout, thus tests can use a `FakeTimeProvider`.
+
+The repository has sixteen runnable demos in
+[`Examples/`](https://github.com/corvus-dotnet/Corvus.Retry/tree/main/Examples), one for each feature.
 
 ## More information
 
 - [Documentation and samples](https://github.com/corvus-dotnet/Corvus.Retry#readme)
-- [Changelog](https://github.com/corvus-dotnet/Corvus.Retry/blob/main/CHANGELOG.md), including the behaviour changes in
-  2.0
+- [Changelog](https://github.com/corvus-dotnet/Corvus.Retry/blob/main/CHANGELOG.md)
+- [Migration guide from 2.x to 3.0](https://github.com/corvus-dotnet/Corvus.Retry/blob/main/Documentation/Migrating-from-2.x-to-3.0.md)
+- [Migration guide from Polly](https://github.com/corvus-dotnet/Corvus.Retry/blob/main/Documentation/Migrating-from-Polly.md)
 - [Issues](https://github.com/corvus-dotnet/Corvus.Retry/issues)
 
-Corvus.Retry is sponsored by [endjin](https://endjin.com) and available under the Apache 2.0 license.
+Corvus.Retry is sponsored by [endjin](https://endjin.com) and available under the Apache 2.0 licence.

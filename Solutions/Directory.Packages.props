@@ -1,6 +1,7 @@
 <Project>
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
 
   <ItemGroup Label="Endjin">
@@ -12,8 +13,18 @@
     <PackageVersion Include="Roslynator.Analyzers" Version="5.0.1" />
   </ItemGroup>
 
+  <ItemGroup Label="Corvus.Retry.Extensions.Http">
+    <!-- The lowest 10.0 version, so that the package does not make its users upgrade. -->
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.0" />
+  </ItemGroup>
+
   <ItemGroup Label="Benchmarks">
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+  </ItemGroup>
+
+  <ItemGroup Label="Testing">
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.11.0" />
   </ItemGroup>
 
   <!-- Testing: MSTest.Sdk (pinned in global.json "msbuild-sdks") injects the PackageVersion items for MSTest,

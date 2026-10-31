@@ -2,38 +2,29 @@
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
-namespace Corvus.Retry
+namespace Corvus.Retry;
+
+using System;
+
+/// <summary>
+/// The data for a retry, which an <c>onRetry</c> callback receives.
+/// </summary>
+/// <param name="LastException">
+/// The exception that the attempt threw, or <see langword="null"/> when a result caused the retry.
+/// </param>
+/// <param name="Result">
+/// The result that caused the retry, or <see langword="null"/> when an exception caused the retry.
+/// </param>
+/// <param name="DelayBeforeRetry">The delay before the next attempt.</param>
+/// <param name="AttemptNumber">The number of the attempt that failed. The first attempt is 1.</param>
+/// <remarks>
+/// This describes an attempt that failed, and the retry that will follow it. It is a value type, so a retry does not
+/// allocate it.
+/// </remarks>
+public readonly record struct RetryEventArgs(Exception? LastException, object? Result, TimeSpan DelayBeforeRetry, int AttemptNumber)
 {
-    using System;
-    using Corvus.Retry.Strategies;
-
     /// <summary>
-    /// Event data for a retry event.
+    /// Gets the number of the attempt that will run after the delay.
     /// </summary>
-    /// <remarks>
-    /// This is used by the <see cref="IRetryStrategy.Retrying"/> event, and raised by the <see cref="Retriable"/> mechanism.
-    /// </remarks>
-    public class RetryEventArgs : EventArgs
-    {
-        /// <summary>
-        /// Initializes a new instance of the <see cref="RetryEventArgs"/> class.
-        /// </summary>
-        /// <param name="lastException">The last exception that occurred.</param>
-        /// <param name="delayBeforeRetry">The delay before the next retrying.</param>
-        public RetryEventArgs(Exception lastException, TimeSpan delayBeforeRetry)
-        {
-            this.LastException = lastException ?? throw new ArgumentNullException(nameof(lastException));
-            this.DelayBeforeRetry = delayBeforeRetry;
-        }
-
-        /// <summary>
-        /// Gets the delay before the next retry.
-        /// </summary>
-        public TimeSpan DelayBeforeRetry { get; }
-
-        /// <summary>
-        /// Gets the last exception that occurred.
-        /// </summary>
-        public Exception LastException { get; }
-    }
+    public int NextAttemptNumber => this.AttemptNumber + 1;
 }
