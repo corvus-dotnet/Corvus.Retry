@@ -6,6 +6,10 @@ the number of attempts and the delay before each retry.
 
 This package targets `net10.0`. If your project targets `netstandard2.0` or a different framework, use version 2.x.
 
+> **Upgrading from 2.x?** Version 3.0 is not compatible with 2.x. Read the
+> [migration guide from 2.x to 3.0](https://github.com/corvus-dotnet/Corvus.Retry/blob/main/Documentation/Migrating-from-2.x-to-3.0.md)
+> before you upgrade. Without its steps, your project can fail to compile, or your retries can operate differently.
+
 ## Usage
 
 `Retriable` puts retries around one call:
@@ -48,9 +52,16 @@ The package also has:
 
 - `HedgedTaskFactory`, which starts more attempts in parallel when an attempt is slow or fails.
 - `CircuitBreaker`, which stops calls to a service that fails frequently.
+- `Fallback<T>`, which gives a value when the attempts fail.
 - `RetryHandler`, which applies a factory to each request of an `HttpClient`. For `IHttpClientFactory`, the package
   `Corvus.Retry.Extensions.Http` has `AddRetryHandler`.
 - `ReliableTaskRunner`, which runs a long-running operation until you stop it, and starts it again if it fails.
+- `RetryStrategies` (`Constant`, `Linear`, `Exponential` with jitter, `FromDelegate`, `RetryAfter`) and `RetryPolicies`
+  (`For<T>`, `ForInner<T>`, `TransientHttp`, `IsTransientHttpResponse`, and the `Or`, `And` and `Not` combinators).
+- `TimeProvider` for every delay and timeout, thus tests can use a `FakeTimeProvider`.
+
+The repository has sixteen runnable demos in
+[`Examples/`](https://github.com/corvus-dotnet/Corvus.Retry/tree/main/Examples), one for each feature.
 
 ## More information
 

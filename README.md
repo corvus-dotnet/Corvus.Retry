@@ -458,6 +458,26 @@ string body = await hedged.Run(ct => httpClient.GetStringAsync(uri, ct), cancell
 | `Fallback` | `null` | The `Fallback<T>`. See [Fallback](#fallback). |
 | `OperationForAttempt` | `null` | A function that gives a different operation for each attempt. |
 
+The factory awaits `OnHedgedAttempt` before it starts each attempt after the first. The callback receives a `HedgedAttemptEventArgs`:
+
+- `AttemptNumber` is the number of the attempt that is about to start. The first hedged attempt is 2.
+- `LastException` is the exception of the attempt that failed and caused this attempt. It is `null` when the stagger expired, or when a result that `ResultIsFailure` rejected caused the attempt.
+
+```csharp
+HedgedTaskFactory hedged = new(extraAttempts: 2, stagger: TimeSpan.FromMilliseconds(300))
+{
+    OnHedgedAttempt = args =>
+    {
+        Console.WriteLine(args.LastException is null
+            ? $"Attempt {args.AttemptNumber} starts because the stagger expired."
+            : $"Attempt {args.AttemptNumber} starts because attempt {args.AttemptNumber - 1} failed with {args.LastException.GetType().Name}.");
+        return ValueTask.CompletedTask;
+    },
+};
+```
+
+An exception from the callback stops the call.
+
 A hedged factory differs from a `RetryTaskFactory` in these ways:
 
 - It has no strategy, no `OnRetry` and no retry policy. Its `Policy` decides which exceptions are failures.
