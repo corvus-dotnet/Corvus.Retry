@@ -22,8 +22,12 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 /// <summary>
 /// An asynchronous lambda passed to <see cref="Retriable.Retry{T}(Func{T})"/> or to
 /// <see cref="RetryTaskFactory.StartNew(Action)"/> is a compile error, and synchronous lambdas bind as before.
-/// An operation that returns a task inside its task, passed to <c>RetryAsync</c> or
-/// <see cref="ReliabilityPipeline.ExecuteAsync{T}(Func{System.Threading.CancellationToken, System.Threading.Tasks.ValueTask{T}}, System.Threading.CancellationToken)"/>,
+/// An operation that returns a task inside its task, passed to <c>RetryAsync</c>, to
+/// <see cref="RetryTaskFactory.Run{T}(Func{System.Threading.CancellationToken, System.Threading.Tasks.Task{T}}, System.Threading.CancellationToken)"/>,
+/// <see cref="RetryTaskFactory.RunValueTask{T}(Func{System.Threading.CancellationToken, System.Threading.Tasks.ValueTask{T}}, System.Threading.CancellationToken)"/>,
+/// <see cref="RetryTask.Run{T}(Func{System.Threading.CancellationToken, System.Threading.Tasks.Task{T}}, System.Threading.CancellationToken)"/>,
+/// <see cref="HedgedTaskFactory.Run{T}(Func{System.Threading.CancellationToken, System.Threading.Tasks.Task{T}}, System.Threading.CancellationToken)"/>
+/// or <see cref="HedgedTask.Run{T}(Func{System.Threading.CancellationToken, System.Threading.Tasks.Task{T}}, System.Threading.CancellationToken)"/>,
 /// is also a compile error.
 /// </summary>
 /// <remarks>
@@ -169,12 +173,29 @@ public class AsyncLambdaBindingTests
 
         Diagnostic error = Assert.ContainsSingle(errors);
         Assert.AreEqual(ObsoleteAsError, error.Id);
-        Assert.Contains("Use Retriable.RetryAsync", error.GetMessage());
+
+        // The message names the methods that do retry an asynchronous action: Run or RunValueTask, and RetryAsync.
+        Assert.Contains("Use Run", error.GetMessage());
+        Assert.Contains("or Retriable.RetryAsync.", error.GetMessage());
     }
 
     [TestMethod]
-    [DataRow("pipeline.ExecuteAsync(async ct => Task.CompletedTask);", "ExecuteAsync received an operation that returns a task inside its ValueTask.")]
-    [DataRow("pipeline.ExecuteAsync(async ct => Task.FromResult(1), CancellationToken.None);", "ExecuteAsync received an operation that returns a task inside its ValueTask.")]
+    [DataRow("factory.RunValueTask(async ct => Task.CompletedTask);", "RunValueTask received an operation that returns a task inside its ValueTask.")]
+    [DataRow("factory.RunValueTask(async ct => Task.FromResult(1), CancellationToken.None);", "RunValueTask received an operation that returns a task inside its ValueTask.")]
+    [DataRow("factory.RunValueTask(async ct => { await Task.Yield(); return Task.CompletedTask; });", "RunValueTask received an operation that returns a task inside its ValueTask.")]
+    [DataRow("factory.Run(async ct => Task.CompletedTask);", "Run received an operation that returns a task inside its task.")]
+    [DataRow("factory.Run(async ct => Task.FromResult(1), CancellationToken.None);", "Run received an operation that returns a task inside its task.")]
+    [DataRow("factory.Run(async ct => { await Task.Yield(); return Task.CompletedTask; });", "Run received an operation that returns a task inside its task.")]
+    [DataRow("factory.Run(ct => Task.FromResult(Task.CompletedTask));", "Run received an operation that returns a task inside its task.")]
+    [DataRow("RetryTask.Run(async ct => Task.CompletedTask);", "Run received an operation that returns a task inside its task.")]
+    [DataRow("RetryTask.Run(async ct => Task.FromResult(1), CancellationToken.None);", "Run received an operation that returns a task inside its task.")]
+    [DataRow("RetryTask.Run(ct => Task.FromResult(Task.CompletedTask));", "Run received an operation that returns a task inside its task.")]
+    [DataRow("hedged.Run(async ct => Task.CompletedTask);", "Run received an operation that returns a task inside its task.")]
+    [DataRow("hedged.Run(async ct => Task.FromResult(1), CancellationToken.None);", "Run received an operation that returns a task inside its task.")]
+    [DataRow("hedged.Run(ct => Task.FromResult(Task.CompletedTask));", "Run received an operation that returns a task inside its task.")]
+    [DataRow("HedgedTask.Run(async ct => Task.CompletedTask);", "Run received an operation that returns a task inside its task.")]
+    [DataRow("HedgedTask.Run(async ct => Task.FromResult(1), CancellationToken.None);", "Run received an operation that returns a task inside its task.")]
+    [DataRow("HedgedTask.Run(ct => Task.FromResult(Task.CompletedTask));", "Run received an operation that returns a task inside its task.")]
     [DataRow("Retriable.RetryAsync(async () => Task.FromResult(1));", "RetryAsync received an operation that returns a task inside its task.")]
     [DataRow("Retriable.RetryAsync(async () => Task.CompletedTask, true);", "RetryAsync received an operation that returns a task inside its task.")]
     [DataRow("Retriable.RetryAsync(async () => Task.CompletedTask, CancellationToken.None, new Count(3), AnyExceptionPolicy.Default);", "RetryAsync received an operation that returns a task inside its task.")]
@@ -212,9 +233,29 @@ public class AsyncLambdaBindingTests
     [DataRow("Retriable.RetryAsync(async ct => await Task.Yield(), CancellationToken.None);", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task>")]
     [DataRow("Retriable.RetryAsync(async ct => await Task.Yield(), CancellationToken.None, new Count(3), AnyExceptionPolicy.Default);", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task>")]
     [DataRow("Retriable.RetryAsync(async ct => await Task.Yield(), CancellationToken.None, new Count(3), AnyExceptionPolicy.Default, false, _ => ValueTask.CompletedTask);", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task>")]
-    [DataRow("pipeline.ExecuteAsync(ct => new ValueTask<int>(1));", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<T>>")]
-    [DataRow("pipeline.ExecuteAsync(async ct => { await Task.Yield(); return 1; });", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<T>>")]
-    [DataRow("pipeline.ExecuteAsync(ct => ValueTask.CompletedTask);", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>")]
+    [DataRow("factory.RunValueTask(ct => new ValueTask<int>(1));", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<T>>")]
+    [DataRow("factory.RunValueTask(async ct => { await Task.Yield(); return 1; });", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<T>>")]
+    [DataRow("factory.RunValueTask(ct => ValueTask.CompletedTask);", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>")]
+    [DataRow("factory.RunValueTask(async ct => await Task.Yield());", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>")]
+    [DataRow("factory.Run(ct => Task.FromResult(1));", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>>")]
+    [DataRow("factory.Run(async ct => { await Task.Yield(); return 1; });", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>>")]
+    [DataRow("factory.Run(async ct => { await Task.Yield(); return 1; }, CancellationToken.None);", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>>")]
+    [DataRow("factory.Run(ct => Task.CompletedTask);", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task>")]
+    [DataRow("factory.Run(async ct => await Task.Yield());", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task>")]
+    [DataRow("factory.Run(async ct => await Task.Yield(), CancellationToken.None);", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task>")]
+    [DataRow("factoryOfT.Run(async ct => { await Task.Yield(); return 1; });", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>>")]
+    [DataRow("factoryOfT.Run(ct => Task.FromResult(1), CancellationToken.None);", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>>")]
+    [DataRow("factoryOfT.RunValueTask(async ct => { await Task.Yield(); return 1; });", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<T>>")]
+    [DataRow("RetryTask.Run(async ct => await Task.Yield());", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task>")]
+    [DataRow("RetryTask.Run(async ct => { await Task.Yield(); return 1; });", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>>")]
+    [DataRow("RetryTask<int>.Run(async ct => { await Task.Yield(); return 1; });", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>>")]
+    [DataRow("hedged.Run(async ct => await Task.Yield());", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task>")]
+    [DataRow("hedged.Run(async ct => { await Task.Yield(); return 1; });", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>>")]
+    [DataRow("hedged.Run(ct => Task.FromResult(1), CancellationToken.None);", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>>")]
+    [DataRow("hedgedOfT.Run(async ct => { await Task.Yield(); return 1; });", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>>")]
+    [DataRow("HedgedTask.Run(async ct => await Task.Yield());", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task>")]
+    [DataRow("HedgedTask.Run(async ct => { await Task.Yield(); return 1; });", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>>")]
+    [DataRow("HedgedTask<int>.Run(async ct => { await Task.Yield(); return 1; });", "System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>>")]
     [DataRow("RetryTask.Factory.StartNew(() => { });", "System.Action")]
     [DataRow("RetryTask.Factory.StartNew(() => { throw new InvalidOperationException(); }, new Count(5), AnyExceptionPolicy.Default);", "System.Action")]
     [DataRow("RetryTask.Factory.StartNew(state => { }, 42);", "System.Action<object?>")]
@@ -311,7 +352,10 @@ public class AsyncLambdaBindingTests
             {
                 public static void Call()
                 {
-                    ReliabilityPipeline pipeline = null!;
+                    RetryTaskFactory factory = null!;
+                    RetryTaskFactory<int> factoryOfT = null!;
+                    HedgedTaskFactory hedged = null!;
+                    HedgedTaskFactory<int> hedgedOfT = null!;
                     {{call}}
                 }
             }
