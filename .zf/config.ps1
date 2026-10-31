@@ -66,8 +66,8 @@ $GitHubReleaseArtefacts = @(
 # Tests run on Microsoft.Testing.Platform (enabled by the "test.runner" setting in global.json).
 # ZeroFailed.Build.DotNet detects this automatically and switches to the MTP 'dotnet test' arguments
 # ('--solution', '--report-trx', '--diagnostic'), while still collecting coverage via 'dotnet-coverage collect'.
-# No MTP-specific configuration is needed here; the '--report-trx' option requires the test project to
-# reference the TRX report extension, which the MSTest.Sdk 'Default' TestingExtensionsProfile provides.
+# No MTP-specific configuration is needed here. The '--report-trx' option needs the TRX report extension. The
+# test project sets TestingExtensionsProfile=None and EnableMicrosoftTestingExtensionsTrxReport=true to add it.
 
 
 # Customise the build process

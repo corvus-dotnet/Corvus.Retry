@@ -2,31 +2,30 @@
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
-namespace Corvus.Retry.Policies
+namespace Corvus.Retry.Policies;
+
+using System;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+/// <summary>
+/// Ensures that <see cref="DoNotRetryPolicy"/> never attempts retries.
+/// </summary>
+[TestClass]
+public class DoNotRetryPolicyTests
 {
-    using System;
-    using Microsoft.VisualStudio.TestTools.UnitTesting;
-
-    /// <summary>
-    /// Ensures that <see cref="DoNotRetryPolicy"/> never attempts retries.
-    /// </summary>
-    [TestClass]
-    public class DoNotRetryPolicyTests
+    [TestMethod]
+    public void CanRetryReturnsFalse()
     {
-        [TestMethod]
-        public void CanRetryReturnsFalse()
-        {
-            var policy = new DoNotRetryPolicy();
+        var policy = new DoNotRetryPolicy();
 
-            Assert.IsFalse(policy.CanRetry(new InvalidOperationException()));
-        }
+        Assert.IsFalse(policy.CanRetry(new InvalidOperationException()));
+    }
 
-        [TestMethod]
-        public void ValidateArguments()
-        {
-            var policy = new DoNotRetryPolicy();
+    [TestMethod]
+    public void ValidateArguments()
+    {
+        var policy = new DoNotRetryPolicy();
 
-            Assert.ThrowsExactly<ArgumentNullException>(() => policy.CanRetry(null!));
-        }
+        Assert.AreEqual("exception", Assert.ThrowsExactly<ArgumentNullException>(() => policy.CanRetry(null!)).ParamName);
     }
 }

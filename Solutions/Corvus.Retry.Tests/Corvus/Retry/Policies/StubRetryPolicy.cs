@@ -2,22 +2,21 @@
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
-namespace Corvus.Retry.Policies
+namespace Corvus.Retry.Policies;
+
+using System;
+
+/// <summary>
+/// A test double for <see cref="IRetryPolicy"/> that always returns a fixed answer.
+/// </summary>
+internal sealed class StubRetryPolicy : IRetryPolicy
 {
-    using System;
+    private readonly bool canRetry;
 
-    /// <summary>
-    /// A test double for <see cref="IRetryPolicy"/> that always returns a fixed answer.
-    /// </summary>
-    internal sealed class StubRetryPolicy : IRetryPolicy
+    public StubRetryPolicy(bool canRetry)
     {
-        private readonly bool canRetry;
-
-        public StubRetryPolicy(bool canRetry)
-        {
-            this.canRetry = canRetry;
-        }
-
-        public bool CanRetry(Exception exception) => this.canRetry;
+        this.canRetry = canRetry;
     }
+
+    public bool CanRetry(Exception exception) => this.canRetry;
 }

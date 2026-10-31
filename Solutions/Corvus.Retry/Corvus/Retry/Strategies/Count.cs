@@ -2,63 +2,42 @@
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
-namespace Corvus.Retry.Strategies
+namespace Corvus.Retry.Strategies;
+
+using System;
+
+/// <summary>
+/// Provides a <see cref="IRetryStrategy"/> which retries a specific number of times without delay.
+/// </summary>
+/// <remarks>This holds no state for a call, so one instance can be shared.</remarks>
+public class Count : IRetryStrategy
 {
-    using System;
+    private readonly int maxTries;
 
     /// <summary>
-    /// Provides a <see cref="IRetryStrategy"/> which retries a specific number of times without delay.
+    /// Initialises a new instance of the <see cref="Count"/> class.
     /// </summary>
-    public class Count : RetryStrategy
+    /// <remarks>This tries the operation up to 5 times.</remarks>
+    public Count()
+        : this(5)
     {
-        private readonly int maxTries;
-        private int tryCount;
+    }
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="Count"/> class.
-        /// </summary>
-        /// <remarks>The will retry up to 5 times.</remarks>
-        public Count()
-            : this(5)
-        {
-        }
+    /// <summary>
+    /// Initialises a new instance of the <see cref="Count"/> class.
+    /// </summary>
+    /// <param name="maxTries">The maximum number of times the method will be tried.</param>
+    public Count(int maxTries)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxTries);
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="Count"/> class.
-        /// </summary>
-        /// <param name="maxTries">The maximum number of times the method will be tried.</param>
-        public Count(int maxTries)
-        {
-            if (maxTries <= 0)
-            {
-                throw new ArgumentException("Max tries must be > 0", nameof(maxTries));
-            }
+        this.maxTries = maxTries;
+    }
 
-            this.maxTries = maxTries;
-        }
-
-        /// <inheritdoc/>
-        public override bool CanRetry
-        {
-            get
-            {
-                return this.tryCount < this.maxTries;
-            }
-        }
-
-        /// <inheritdoc/>
-        public override TimeSpan PrepareToRetry(Exception lastException)
-        {
-            if (lastException is null)
-            {
-                throw new ArgumentNullException(nameof(lastException));
-            }
-
-            this.AddException(lastException);
-
-            this.tryCount++;
-
-            return TimeSpan.Zero;
-        }
+    /// <inheritdoc/>
+    /// <remarks>This returns <see cref="TimeSpan.Zero"/> until the operation has been tried the maximum number of times.</remarks>
+    public TimeSpan? GetRetryDelay(in RetryAttempt attempt)
+    {
+        return attempt.AttemptNumber < this.maxTries ? TimeSpan.Zero : null;
     }
 }

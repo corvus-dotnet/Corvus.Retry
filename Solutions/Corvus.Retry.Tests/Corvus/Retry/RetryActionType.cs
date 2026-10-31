@@ -2,15 +2,16 @@
 // Copyright (c) Endjin Limited. All rights reserved.
 // </copyright>
 
-namespace Corvus.Retry
+namespace Corvus.Retry;
+
+public enum RetryActionType
 {
-    public enum RetryActionType
-    {
-        Action,
-        Function,
-        AsyncAction,
-        AsyncActionSpecifyingContinueContext,
-        AsyncFunction,
-        AsyncFunctionSpecifyingContinueContext,
-    }
+    Action,
+    Function,
+    AsyncAction,
+    AsyncActionSpecifyingContinueContext,
+    AsyncFunction,
+    AsyncFunctionSpecifyingContinueContext,
+    AsyncActionWithToken,
+    AsyncFunctionWithToken,
 }

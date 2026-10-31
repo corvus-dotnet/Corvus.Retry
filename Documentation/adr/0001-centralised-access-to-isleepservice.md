@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Superseded by [ADR 0002](0002-use-timeprovider-for-delays-and-timeouts.md)
 
 ## Context
 

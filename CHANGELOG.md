@@ -7,7 +7,223 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-These changes are planned for 2.0.0.
+## [3.0.0]
+
+Version 3.0 is not compatible with version 2.x. Read the
+[migration guide from 2.x to 3.0](Documentation/Migrating-from-2.x-to-3.0.md) before you do the upgrade. If you do
+not do the steps in the guide, your project can fail to compile, or your retries can operate differently.
+
+### Added
+
+- `ReliabilityPipeline` holds all the retry settings in one immutable object. Many threads can use one pipeline at the same
+  time. Its `ExecuteAsync` methods give a cancellation token to the operation, and use `ValueTask`.
+- `ReliabilityPipelineOptions` is an immutable record with the settings of a pipeline. The constructor of the pipeline
+  examines the options. The `ParamName` of each exception is the name of the incorrect property. The non-generic
+  `ReliabilityPipeline` throws an `ArgumentException` for a `ReliabilityPipelineOptions<T>` that sets
+  `ShouldRetryResult`, `Fallback` or `HedgingActionGenerator`. Only `ReliabilityPipeline<T>` can use these settings.
+- `ReliabilityPipeline<T>` and `ReliabilityPipelineOptions<T>` can retry a result. If `ShouldRetryResult` returns `true`, the
+  pipeline uses the result as a failure. The pipeline disposes a result that it does not return, if the result implements
+  `IDisposable`. It also does this when the call stops with an exception, for example a cancellation, a total timeout,
+  or an exception from a callback.
+- `AttemptTimeout` limits the time of each attempt. `TotalTimeout` limits the time of all the attempts and all the
+  delays.
+- `RetryTimeoutException` derives from `TimeoutException`. A pipeline throws it when a timeout expires. Its `Timeout`
+  property gives the time limit. When the total timeout expires between attempts, the inner exception is the exception of the
+  last attempt. With hedging, the inner exception is the exception of the last attempt that failed, or `null` if the
+  last outcome was a rejected result or no attempt has failed.
+- `ReliabilityPipelineOptions<T>.Fallback` gives a value when the pipeline fails. `FallbackOptions<T>` and
+  `FallbackArgs<T>` hold its settings and its data. The fallback applies only to the outcome of the attempts. An exception from
+  `ShouldRetryResult`, `OnRetry`, the strategy, a policy, `OnStateChanged`, `OnHedging` or `HedgingActionGenerator`
+  stops the call. The fallback does not give a value for it. For a result that `ShouldFallbackResult` rejects, the
+  pipeline calls `OnFallback` with the result, then disposes the result if it implements `IDisposable`, and then calls
+  `Action`, as the retry part disposes a rejected result after `OnRetry`. If `OnFallback` or `ShouldFallbackResult`
+  throws, the pipeline disposes the result and the caller gets that exception.
+- `CircuitBreaker` stops calls to a service that fails frequently. Many pipelines can share one breaker.
+  `CircuitBreakerOptions`, `CircuitState`, `CircuitStateChange`, `BrokenCircuitException` and
+  `IsolatedCircuitException` are new. `Isolate()` and `Close()` control the circuit manually.
+- The circuit breaker always counts an attempt timeout as a failure. It does not ask its `Policy` about a
+  `RetryTimeoutException`. If the `Policy` of the breaker throws an exception, the call throws that exception, and the
+  breaker does not count the call. A test call that ends in this way does not keep the circuit half-open. A test call
+  that started before `Isolate()`, `Close()` or a subsequent break does not change the state of the circuit, and a
+  test call that ends after `Close()` is not counted in the new sampling window.
+- `Isolate()` and `Close()` run `OnStateChanged` with no `SynchronizationContext`, and with `TaskScheduler.Default` as
+  the current scheduler. Thus, a callback that awaits does not cause a deadlock on a UI thread, or on a scheduler that
+  runs one task at a time.
+- `ReliabilityPipelineOptions.Hedging` starts more attempts in parallel when an attempt is slow or fails.
+  `HedgingOptions`, `HedgingEventArgs` and `ReliabilityPipelineOptions<T>.HedgingActionGenerator` are new.
+- Hedging runs attempt 1 on the thread of the caller. Attempts 2 and higher start on the thread pool. Thus, an attempt
+  that blocks before its first `await` does not delay the next attempt. Hedging does not start an attempt after it
+  received an outcome that wins. With a delay of zero, only an attempt 1 that wins synchronously stops all the other
+  attempts. `OnHedging` can run for an attempt that then does not start, because an outcome won during the callback.
+  With a delay of zero, if attempt 1 fails synchronously, `OnHedging` for attempt 2 receives that failure in
+  `LastException`. A cancellation by the caller surfaces as an `OperationCanceledException` whose
+  `CancellationToken` is the caller's token. With a circuit breaker, a hedged call that the caller cancels, or that
+  `OnHedging` or a refused exception stops, releases the half-open test call before `ExecuteAsync` throws, thus a
+  caller who retries at once makes the next test call. When the total timeout stops a hedged call, each attempt still
+  in flight counts as a failed call before the call throws.
+- The `Exponential` strategy doubles the delay before each retry. With jitter, it uses decorrelated jitter. A maximum
+  delay shorter than the base delay makes every delay the maximum.
+- `Linear` and `Incremental` have new constructor overloads with the parameters `maxDelay` and `useJitter`.
+- `RetryAttempt` gives the data about an attempt that failed to a strategy. `AttemptNumber` starts at 1. An attempt
+  number less than 1 gives an `ArgumentOutOfRangeException`, from the constructor and from a `with` expression.
+- The static class `RetryStrategies` makes strategies that count retries, not attempts: `Constant`, `Linear`,
+  `Exponential`, `FromDelegate` and `RetryAfter`. `RetryStrategies.Default` is the shared default strategy of
+  `Retriable`.
+- `RetryStrategies.RetryAfter` uses the `Retry-After` header of an `HttpResponseMessage` result, or
+  `BrokenCircuitException.RetryAfter`, for the delay. A header wins over a circuit rejection. The maximum delay of the
+  inner strategy does not limit a header or rejection delay; only the timer limit does. A header that the framework
+  cannot parse, including a negative number of seconds or one larger than `int.MaxValue`, has no value, so the delay
+  of the inner strategy applies. A date in the past gives a zero delay. The strategy does not examine the status
+  code, thus a `Retry-After` on a response that `ShouldRetryResult` rejects is used.
+- The static class `RetryPolicies` makes immutable policies: `FromPredicate`, `Handle<T>`, `HandleInner<T>`, `Not`,
+  `Any` and `All`. `Handle<T>` returns an `ExceptionTypeRetryPolicy`, which has the method `Or<T>`.
+- `RetryPolicies.TransientHttp` retries transient HTTP failures. `RetryPolicies.IsTransientHttpResponse` finds a
+  transient HTTP status in a result. A status of 500 or more is transient, including 501, 505 and codes above 599.
+- The C# 14 extension members `Or`, `And` and `Not` combine policies. `RetryPolicyExtensions` is now public.
+- `AnyExceptionPolicy.Default` is a public shared instance.
+- `Retriable` has overloads for `Func<CancellationToken, Task<T>>` and `Func<CancellationToken, Task>`. The token
+  goes to the operation.
+- The `Retriable` overloads that have all the parameters have an optional `onRetry` callback. The callback receives
+  the attempt numbers. The synchronous `Retry` overloads run the callback with no `SynchronizationContext`, and with
+  `TaskScheduler.Default` as the current scheduler. If the callback awaits, it continues on the thread pool.
+- `RetryEventArgs` has the properties `Result`, `AttemptNumber` and `NextAttemptNumber`.
+- `ReliableTaskRunner` implements `IAsyncDisposable`. Use `await using` to stop the runner at the end of a scope.
+- `ReliableTaskRunner.Run(runFunction, IRetryStrategy restartStrategy, IRetryPolicy retryPolicy)` waits before each
+  restart. After a run fails, the strategy receives the number of failed runs since the call to `Run` (from 1), and
+  the exception of the run. If the strategy returns `null`, the runner does not restart. If not, the policy decides.
+  If the policy accepts the failure, the runner waits for the delay of the strategy, and then restarts.
+  `StopAsync` and `DisposeAsync` stop a restart delay, and no restart occurs. A strategy with a limit stops the runner
+  after that number of failed runs. If the strategy throws an exception, the runner stops, and the task from
+  `StopAsync` faults with that exception.
+- The benchmarks report the number of exceptions for each operation.
+- The benchmarks measure the pipeline, the fallback, the circuit breaker, hedging, the new strategies and the new
+  policies. `DelayBenchmarks` replaces `SleepBenchmarks`.
+- The `Examples` folder has fifteen demos, each a single-file .NET 10 app that renders what the library did
+  with Spectre.Console, and an interactive launcher (`dotnet run Examples/menu.cs`). They replace the three
+  samples in `Documentation/Examples`, and need no network access. See `Examples/README.md`.
+- ADR 0002 records the decision to use `TimeProvider`. It replaces ADR 0001.
+- The package sets `IsAotCompatible`, thus the build gives a warning for code that native AOT cannot use.
+
+### Changed
+
+- The package targets `net10.0` only. On a different framework, use version 2.x.
+- The description and the tags of the package include the new functions. The release notes of the package link to the
+  migration guide.
+- `IRetryStrategy` has one method, `GetRetryDelay(in RetryAttempt)`. A strategy has no state for a call. Thus, many
+  calls can use one strategy at the same time. A strategy that a call used before now gives all its tries to the next
+  call.
+- `RetryEventArgs` has a new constructor with an attempt number. `LastException` can be `null`, when a result caused
+  the retry.
+- `RetryEventArgs` is a `readonly record struct`, not a class. It does not derive from `EventArgs`. A retry does not
+  allocate it. Two instances with the same values are equal. The names of the constructor parameters start with a
+  capital letter, for example `LastException`.
+- `RetryTaskFactory` and `RetryTaskFactory<T>` are sealed.
+- The `Retriable` overloads that have a token examine the token before each attempt, also before the first attempt.
+  CAUTION: A cancelled token now gives an `OperationCanceledException`. Before, `Retriable` called the operation one
+  time, or rethrew the exception of the operation. If your code catches that exception, also catch
+  `OperationCanceledException`.
+- A cancellation token stops a `Retriable` delay immediately. Before, the delay continued until its end.
+- `Retriable` and the pipelines do not give an `OperationCanceledException` that the token of the caller caused to
+  the strategy or the policy. The exception that the caller sees carries the caller's token, also when the token stops
+  a delay or an attempt of a pipeline that has an `AttemptTimeout` or a `TotalTimeout`, where the operation's own
+  exception carries the token of the attempt.
+- `Retriable`, the pipelines, hedging, the circuit breaker and the fallback ask the policy about the exceptions inside
+  an `AggregateException`, depth first, as `RetryTask` and `ReliableTaskRunner` do. The policy must accept all of them.
+  An `AggregateException` with no inner exceptions is passed to the policy itself. The strategy, `OnRetry`,
+  `OnHedging`, `CircuitStateChange.LastException` and `FallbackArgs<T>.Exception` receive the exception as thrown.
+- The synchronous `Retriable.Retry` overloads with a token that can be cancelled wait on a timer, not on
+  `Thread.Sleep`. The other synchronous overloads also use a timer for a delay longer than `int.MaxValue` milliseconds
+  (approximately 24.9 days), because `Thread.Sleep` cannot do this delay.
+- A retry of `RetryTask` does not block a thread. A delay task and continuations start each retry on the scheduler of
+  the caller.
+- If a scheduler refuses to queue a `RetryTask` retry, the refusal is a failure of that try. The strategy and the
+  policy decide about it. Before, the task faulted immediately. If the scheduler refuses the first try, `StartNew`
+  throws the `TaskSchedulerException`.
+- `RetryTask` keeps a maximum of 100 failures: the first 99 failures and the last failure. Before, it kept all the
+  failures, and a strategy with no limit used more memory after each failure.
+- The task that `RetryTask` returns obeys `TaskCreationOptions.RunContinuationsAsynchronously`.
+- `RetryTask<T>.Factory.StartNew` throws a `NotSupportedException` when `T` is `Task`, `Task<TResult>`, `ValueTask` or
+  `ValueTask<TResult>`. It throws before it calls the function. Before, the task completed when the function returned
+  its task, thus `RetryTask` did not retry a failure of the operation. Use `Retriable.RetryAsync`. When `T` is
+  `object` or an interface, `StartNew` examines the result of each successful try. If the function returned a `Task`
+  or a `ValueTask`, the task faults with `NotSupportedException`, and the function is not retried. The overloads that
+  take a scheduler throw `ArgumentNullException` for a `null` scheduler before any other check.
+- When an operation gives a `null` task to `Retriable.RetryAsync`, the attempt fails with an
+  `InvalidOperationException`. Before, it failed with a `NullReferenceException`. The strategy and the policy decide
+  if `RetryAsync` retries it.
+- `Backoff.MinBackoff` and `Backoff.MaxBackoff` have `init` accessors. Set them with an object initialiser. A negative
+  value, including `Timeout.InfiniteTimeSpan`, gives an `ArgumentOutOfRangeException`. If `MinBackoff` is greater than
+  `MaxBackoff`, `GetRetryDelay` throws an `ArgumentException`; before, the minimum was ignored. The pair is examined at
+  the call, because an object initialiser can set the bounds in either order.
+- The `Incremental` constructor parameter `intialDelay` is now `initialDelay`.
+- An incorrect `maxTries` gives an `ArgumentOutOfRangeException`, not an `ArgumentException`. A negative delay
+  parameter of a strategy also gives an `ArgumentOutOfRangeException`.
+- Each strategy limits its delays to 0xFFFFFFFE ms (approximately 49.7 days). `Backoff` and `Incremental` do not
+  overflow.
+- The four `Retriable` overloads that have all the parameters have a new optional `onRetry` parameter. Your source
+  code compiles without a change, but you must compile it again against this version.
+- `ReliableTaskRunner.StopAsync` cancels with `CancelAsync`. The callbacks of the token run on a thread-pool thread.
+  If a callback throws, `StopAsync` still waits for the last run to end. Its task then faults with the exceptions of
+  the callbacks, followed by the exceptions of the run if the run failed. The callback exceptions are not wrapped in
+  a further `AggregateException`. `DisposeAsync` also waits for the run, and completes successfully. Before,
+  `StopAsync` threw the exception immediately.
+- `ReliableTaskRunner.StopAsync` returns a new task that ends as the last run ended. If the run faulted with many
+  exceptions, the task faults with all of them.
+- If the policy of `ReliableTaskRunner` throws an exception, the runner stops, and the task from `StopAsync` faults
+  with that exception. Before, the runner stopped and the exception was lost.
+- `ReliableTaskRunner` starts each restart on the thread pool (`TaskScheduler.Default`). Before, it used the scheduler
+  of the caller of `Run`. If that scheduler completed, the runner did not restart after a failure.
+- If the run function of `ReliableTaskRunner` returns a `null` task, `Run` throws an `InvalidOperationException`. On
+  a restart, a `null` task is a run that failed with an `InvalidOperationException`, and the policy decides. Before, a
+  `null` task gave a `NullReferenceException`, or a cancelled run that restarted continuously.
+- `ReliableTaskRunner.StopAsync` and `DisposeAsync` wait until a restart decision that is in progress ends. Then they
+  use the outcome of the last run.
+- CAUTION: `ReliableTaskRunner.Run(runFunction)` and `Run(runFunction, retryPolicy)` restart the operation immediately
+  after each failure, with no limit, as in 2.x. If the operation fails immediately at each start, the runner restarts
+  it continuously and uses much processor time. To wait between restarts, use the overload with a restart strategy.
+- `Retriable` and `RetryTask` use `TimeProvider.System` for their delays.
+- An asynchronous operation that you give to `Retriable.Retry` or `RetryTaskFactory.StartNew` is now a compile error
+  (CS0619). Before, `Retry(async () => ...)` did not retry a failure after the first `await`. Also,
+  `StartNew(async () => ...)` ran the lambda as `async void`, and an exception from it could stop the process. Use
+  `Retriable.RetryAsync`. New `[Obsolete]` overloads that are hidden from IntelliSense cause the error. An operation
+  that returns a `ValueTask` or a `ValueTask<TResult>` also causes the error. Use `ReliabilityPipeline.ExecuteAsync`
+  for a `ValueTask`.
+- An `async` lambda that returns a task without `await`, for example `RetryAsync(async () => GetAsync())`, is now a
+  compile error (CS0619) for `Retriable.RetryAsync` and the non-generic `ReliabilityPipeline.ExecuteAsync`. Before,
+  the call completed when the lambda returned the inner task, and did not retry a failure of that task. Put `await` in
+  the lambda. The error also occurs for a function that returns a task of a task, for example
+  `() => Task.FromResult(someTask)`.
+- The 2.x benchmark methods `Retry_WithDelay_Sleep` and `RetryAsync_WithDelay_SleepAsync` are now
+  `Retry_WithDelay_ThreadSleep` and `RetryAsync_WithDelay_TaskDelay` in `DelayBenchmarks`.
+- `Retriable` allocates less memory than 2.x. With two failures, `Retry` allocates 520 B (2.x: 688 B). `RetryAsync`
+  allocates 1,776 B (2.x: 1,944 B).
+- A strategy allocates no memory for a call. For 9 retries, `Count` takes approximately 11 ns. 2.x took approximately
+  95 ns and 368 B, because each call needed a new strategy.
+- An asynchronous `Retriable` call that completes immediately takes approximately 3 ns to 22 ns more than in 2.x. The
+  cause is the retry loop, which now also examines the token, the timeouts and the callbacks.
+- The build pins transitive package versions centrally (`CentralPackageTransitivePinningEnabled`).
+- The workflows use `actions/github-script` 8.0.0, `actions/checkout` 7.0.1 and `actions/setup-dotnet` 6.0.0, which
+  run on Node.js 24. `tibdex/github-app-token` stays at 1.9, which runs on Node.js 20.
+
+### Fixed
+
+- `Backoff` keeps its jitter within ±20% of `DeltaBackoff` at every scale. Before, a delta under about 5 ms gave a
+  constant value (1 ms always gave 0), and a delta above about 20.7 days gave a constant value below the band. Delays
+  are no longer rounded down to whole milliseconds.
+
+### Removed
+
+- This release removes the `netstandard2.0` target. Version 2.x also targets `netstandard2.0`.
+- This release removes `ISleepService` and `SleepService`. The library uses `TimeProvider`.
+- This release removes the `RetryStrategy` base class. Implement `IRetryStrategy` directly.
+- This release removes the members `CanRetry`, `PrepareToRetry`, `Exception` and `OnRetrying`, and the `Retrying`
+  event, from `IRetryStrategy`. Use `GetRetryDelay`, and the `onRetry` callback of `Retriable` or the `OnRetry` option
+  of the pipeline.
+- `RetryTask` has no retry callback, because the `Retrying` event is removed.
+- This release removes the `RetryEventArgs(Exception, TimeSpan)` constructor.
+- This release removes the `RetryStrategyBenchmarks` and `SleepBenchmarks` benchmark classes.
+
+## [2.0.0] - 2026-10-31
 
 ### Added
 
@@ -155,7 +371,9 @@ These changes are planned for 2.0.0.
 
 - First release: `Retriable`, `RetryTask`, `ReliableTaskRunner`, retry strategies and retry policies.
 
-[Unreleased]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.7...HEAD
+[Unreleased]: https://github.com/corvus-dotnet/Corvus.Retry/compare/3.0.0...HEAD
+[3.0.0]: https://github.com/corvus-dotnet/Corvus.Retry/compare/2.0.0...3.0.0
+[2.0.0]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.7...2.0.0
 [1.0.7]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.6...1.0.7
 [1.0.6]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.5...1.0.6
 [1.0.5]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.4...1.0.5
