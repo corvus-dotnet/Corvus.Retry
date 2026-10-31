@@ -57,16 +57,16 @@ var serverErrors = RetryPolicies.FromPredicate(ex => ex is HttpRequestException 
 [
     ("AnyExceptionPolicy.Default", AnyExceptionPolicy.Default),
     ("new DoNotRetryPolicy()", new DoNotRetryPolicy()),
-    ("Handle<HttpRequestException>", RetryPolicies.Handle<HttpRequestException>()),
-    ("  .Or<TimeoutException>()", RetryPolicies.Handle<HttpRequestException>().Or<TimeoutException>()),
-    ("HandleInner<SocketException>", RetryPolicies.HandleInner<SocketException>()),
+    ("For<HttpRequestException>", RetryPolicies.For<HttpRequestException>()),
+    ("  .Or<TimeoutException>()", RetryPolicies.For<HttpRequestException>().Or<TimeoutException>()),
+    ("ForInner<SocketException>", RetryPolicies.ForInner<SocketException>()),
     ("FromPredicate(5xx)", serverErrors),
 
-    // TransientHttp accepts a RetryTimeoutException (an attempt timeout of the pipeline), but not a TaskCanceledException
+    // TransientHttp accepts a RetryTimeoutException (an attempt timeout of a factory), but not a TaskCanceledException
     // or a plain TimeoutException, which can come from anywhere.
     ("TransientHttp", RetryPolicies.TransientHttp),
     ("Not(TransientHttp)", RetryPolicies.Not(RetryPolicies.TransientHttp)),
-    ("Any(TransientHttp, Socket)", RetryPolicies.Any(RetryPolicies.TransientHttp, RetryPolicies.HandleInner<SocketException>())),
+    ("Any(TransientHttp, Socket)", RetryPolicies.Any(RetryPolicies.TransientHttp, RetryPolicies.ForInner<SocketException>())),
 
     // Retry transient HTTP faults, except rate limiting, which this caller prefers to report at once.
     ("All(TransientHttp, Not 429)", RetryPolicies.All(RetryPolicies.TransientHttp, new TooManyRequestsPolicy().Not())),

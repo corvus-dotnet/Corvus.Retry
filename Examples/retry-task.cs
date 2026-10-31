@@ -28,7 +28,11 @@ AnsiConsole.WriteLine();
 
 // Constant: the same 150 ms before each retry, at most 5 retries (6 attempts), so every operation here recovers.
 var strategy = RetryStrategies.Constant(retries: 5, delay: TimeSpan.FromMilliseconds(150));
-var policy = RetryPolicies.Handle<TransientException>();
+var policy = RetryPolicies.For<TransientException>();
+
+// A configured factory holds the strategy and the policy, as new TaskFactory(...) holds its options. Keep it in a
+// field. The StartNew overloads without a strategy or a policy use the factory's.
+var reports = new RetryTaskFactory<string>(strategy, policy);
 
 int[] failures = [0, 3, 1, 4, 2, 0, 3, 1];
 var clients = failures.Select((f, i) => new FlakyClient($"report {i + 1}", f)).ToArray();
@@ -45,14 +49,15 @@ await AnsiConsole.Progress()
             var bar = ctx.AddTask(client.Name, maxValue: 6);
             client.OnAttempt = succeeded => bar.Value = succeeded ? 6 : bar.Value + 1;
 
-            // RetryTask<T>.Factory.StartNew has the same shape as Task<T>.Factory.StartNew, plus a strategy and a policy.
-            // An async lambda here is a compile error (CS0619): the factory could retry only the start of the task,
-            // not its failure. For an asynchronous operation, use Retriable.RetryAsync instead.
+            // StartNew has the same shape as Task<T>.Factory.StartNew. An async lambda here is a compile error (CS0619):
+            // the factory could retry only the start of the task, not its failure. For an asynchronous operation, use
+            // Run instead, for example reports.Run(ct => client.BuildAsync(ct)).
             started.Add(client.Name == "report 8"
 
-                // The non-generic factory runs an Action, as Task.Factory.StartNew does.
+                // The default non-generic factory runs an Action, as Task.Factory.StartNew does. This overload takes
+                // the strategy and the policy as arguments.
                 ? RetryTask.Factory.StartNew(() => { client.Build(); }, strategy, policy)
-                : RetryTask<string>.Factory.StartNew(client.Build, strategy, policy));
+                : reports.StartNew(client.Build));
         }
 
         await Task.WhenAll(started);
@@ -76,11 +81,11 @@ AnsiConsole.Write(new Rule("[orange1]When the retries run out[/]").LeftJustified
 // LongRunning: a hint to the scheduler that the operation blocks its thread for a long time, so it gets its own thread
 // instead of a thread-pool thread. The retries keep the option.
 var broken = new FlakyClient("report 9", failures: int.MaxValue);
-var doomed = RetryTask<string>.Factory.StartNew(broken.Build, TaskCreationOptions.LongRunning, strategy, policy);
+var doomed = reports.StartNew(broken.Build, TaskCreationOptions.LongRunning);
 
 // RetryTask keeps at most 100 failures: the first 99 and the last. 150 tries with no delay show the cap.
 var hopeless = new FlakyClient("report 10", failures: int.MaxValue, workMs: 0);
-var capped = RetryTask<string>.Factory.StartNew(hopeless.Build, new Count(150), policy);
+var capped = reports.StartNew(hopeless.Build, new Count(150));
 
 await AnsiConsole.Status().StartAsync("report 9 retries on its own thread…", async _ =>
 {
@@ -114,6 +119,23 @@ foreach (var (name, task, client) in new[] { ("report 9 (6 tries)", doomed, brok
 AnsiConsole.Write(faults);
 AnsiConsole.MarkupLine("[grey]  The cap keeps a long retry from holding thousands of exceptions.[/]");
 AnsiConsole.MarkupLine("[grey]  The last failure is always kept.[/]");
+AnsiConsole.WriteLine();
+
+// ---- Settings that only Run can use ----
+AnsiConsole.Write(new Rule("[orange1]StartNew refuses the settings that it cannot use[/]").LeftJustified());
+
+// StartNew keeps its own scheduler-based loop, which has no timeouts, callback, breaker, result check or fallback. A
+// factory with one of these settings makes every StartNew throw, so the setting is never ignored. The copy constructor
+// makes a changed copy of a factory.
+var withTimeout = new RetryTaskFactory<string>(reports) { AttemptTimeout = TimeSpan.FromSeconds(1) };
+try
+{
+    _ = withTimeout.StartNew(() => "never runs");
+}
+catch (InvalidOperationException ex)
+{
+    AnsiConsole.MarkupLineInterpolated($"  [red]InvalidOperationException[/]: {Markup.Escape(ex.Message)}");
+}
 
 // A report client with a synchronous API. It throws TransientException a set number of times, then succeeds.
 public sealed class FlakyClient(string name, int failures, int workMs = 120)

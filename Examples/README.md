@@ -30,17 +30,17 @@ footnote says so; otherwise the output is repeatable.
 | [`timeouts-and-cancellation.cs`](timeouts-and-cancellation.cs) | An attempt timeout turns a slow call into a retry, a total timeout caps the whole call, and a cancellation by the caller is never retried. |
 | [`result-retries.cs`](result-retries.cs) | Retry 503 and 429 responses that do not throw, wait as long as `Retry-After` asks, and dispose each rejected response. |
 | [`fallback.cs`](fallback.cs) | Return a cached price when the catalogue service is down, while bugs in your own request or callbacks still reach the caller. |
-| [`circuit-breaker.cs`](circuit-breaker.cs) | One breaker shared by two pipelines opens on failures from either, fails fast, tests recovery with one call, and supports manual isolation. |
-| [`hedging.cs`](hedging.cs) | A service with a long tail answers most calls in 100 ms but one in five in 1.5 s; hedging starts a second attempt after 200 ms and keeps the first answer, cutting p90 from 1.5 s to about 300 ms. |
-| [`composed-pipelines.cs`](composed-pipelines.cs) | A pipeline cannot hedge and retry at once, so an outer retry pipeline with a fallback wraps an inner hedging pipeline behind a circuit breaker, traced attempt by attempt. |
-| [`retry-task.cs`](retry-task.cs) | Eight flaky synchronous operations started at once with `RetryTask.Factory.StartNew` recover on the thread pool, and a task that gives up carries every failure, capped at 100. |
+| [`circuit-breaker.cs`](circuit-breaker.cs) | One breaker shared by two factories opens on failures from either, fails fast, tests recovery with one call, and supports manual isolation. |
+| [`hedging.cs`](hedging.cs) | A service with a long tail answers most calls in 100 ms but one in five in 1.5 s; a `HedgedTaskFactory` starts a second attempt after 200 ms and keeps the first answer, cutting p90 from 1.5 s to about 300 ms. `OperationForAttempt` sends the hedged attempt to a second region. |
+| [`composed-factories.cs`](composed-factories.cs) | One factory cannot hedge and retry at once, so an outer `RetryTaskFactory<T>` with a fallback wraps an inner `HedgedTaskFactory<T>` behind a circuit breaker, traced attempt by attempt. |
+| [`retry-task.cs`](retry-task.cs) | Eight flaky synchronous operations started at once with `StartNew` on a configured factory recover on the thread pool, a task that gives up carries every failure, capped at 100, and `StartNew` refuses a setting that only `Run` can use. |
 | [`message-queue-consumer.cs`](message-queue-consumer.cs) | Keep a queue consumer loop alive with `ReliableTaskRunner`: restart after a transient fault with a delay, stop on a poison message, and shut down cleanly. |
-| [`http-client-resilience.cs`](http-client-resilience.cs) | One pipeline around an `HttpClient` call that gets 503, a hang, 429 with `Retry-After` and 500 before 200; it retries, obeys the header, times out each attempt, and falls back to a cached answer when a circuit breaker opens. |
+| [`http-client-resilience.cs`](http-client-resilience.cs) | One configured factory around an `HttpClient` call that gets 503, a hang, 429 with `Retry-After` and 500 before 200; it retries, obeys the header, times out each attempt, and falls back to a cached answer when a circuit breaker opens. It wraps each call in `Run`; to put the factory inside the `HttpClient` instead, see `RetryHandler` in `http-handler.cs`. |
 | [`database-startup.cs`](database-startup.cs) | Wait for a database that is still starting by retrying a wrapped `SocketException` with backoff, and fail at once on a wrong password. |
 | [`testing-with-fake-time.cs`](testing-with-fake-time.cs) | Nine minutes of `Backoff` delays and a 30 s attempt timeout tested in milliseconds with a `FakeTimeProvider`, advancing the clock only after the library has created its timer. |
 
 A good order for a first read: the first four cover the building blocks (`Retriable`, strategies, policies,
-jitter); the next six add one `ReliabilityPipeline` feature each; the last five are complete scenarios.
+jitter); the next six add one feature of a configured `RetryTaskFactory` or `HedgedTaskFactory` each; the last five are complete scenarios.
 
 ## Running everything
 
@@ -64,7 +64,7 @@ dotnet run Examples/result-retries.cs
 dotnet run Examples/fallback.cs
 dotnet run Examples/circuit-breaker.cs
 dotnet run Examples/hedging.cs
-dotnet run Examples/composed-pipelines.cs
+dotnet run Examples/composed-factories.cs
 dotnet run Examples/retry-task.cs
 dotnet run Examples/message-queue-consumer.cs
 dotnet run Examples/http-client-resilience.cs

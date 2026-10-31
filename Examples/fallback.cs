@@ -1,7 +1,7 @@
 #:project ../Solutions/Corvus.Retry/Corvus.Retry.csproj
 #:package Spectre.Console@0.57.2
 
-// Shows ReliabilityPipelineOptions<T>.Fallback giving a product page a cached price when the catalogue service is
+// Shows RetryTaskFactory<T>.Fallback giving a product page a cached price when the catalogue service is
 // down. The fallback applies only to the outcome of the attempts: its own Policy can refuse an exception, and an
 // exception from a callback such as OnRetry bypasses it.
 //
@@ -21,89 +21,96 @@ AnsiConsole.WriteLine();
 
 AnsiConsole.Write(new Panel(
         "A product page asks the catalogue service for a price. A [white]10-minute-old cached price[/] is better than an " +
-        "error page, so after [white]3 attempts[/] the pipeline falls back to the cache. A bug in our own request, or in " +
+        "error page, so after [white]3 attempts[/] the factory falls back to the cache. A bug in our own request, or in " +
         "our own callbacks, must still surface.")
     .Header("[white]The problem[/]").Border(BoxBorder.Rounded).BorderColor(Color.Grey));
 AnsiConsole.WriteLine();
 
 var journal = new List<string>();
-var options = new ReliabilityPipelineOptions<HttpResponseMessage>
+
+// OnFallback runs before the factory disposes a rejected result, so it can still log the body.
+Func<FallbackEventArgs<HttpResponseMessage>, ValueTask> logFailure = async args =>
 {
-    Strategy = RetryStrategies.Constant(retries: 2, delay: TimeSpan.FromMilliseconds(100)),
+    if (args.Exception is { } ex)
+    {
+        journal.Add($"OnFallback logged '{ex.Message}'");
+    }
+    else if (args.Result is TrackedResponse response)
+    {
+        var disposed = response.IsDisposed;
+        var body = await response.Content.ReadAsStringAsync(args.CancellationToken);
+        journal.Add($"OnFallback read {body}, disposed: {YesNo(disposed)}");
+    }
+};
+
+// The action runs after that disposal: it receives the rejected result, already disposed. Do not read it here.
+Func<FallbackEventArgs<HttpResponseMessage>, ValueTask<HttpResponseMessage>> useCache = args =>
+{
+    if (args.Result is TrackedResponse response)
+    {
+        journal.Add($"Action got the 503, disposed: {YesNo(response.IsDisposed)}");
+    }
+
+    journal.Add("Action returned the cache");
+    return ValueTask.FromResult(Catalogue.Cached());
+};
+
+var factory = new RetryTaskFactory<HttpResponseMessage>(
+    RetryStrategies.Constant(retries: 2, delay: TimeSpan.FromMilliseconds(100)),
 
     // Retry transport failures and 5xx responses. An ArgumentException is a bug in our request: retrying cannot help.
-    Policy = RetryPolicies.Handle<HttpRequestException>(),
-    ShouldRetryResult = RetryPolicies.IsTransientHttpResponse,
+    RetryPolicies.For<HttpRequestException>())
+{
+    CanRetryResult = RetryPolicies.IsTransientHttpResponse,
 
-    Fallback = new FallbackOptions<HttpResponseMessage>
+    // The action is the constructor argument of Fallback<T>. The property and its type share the name Fallback, so a
+    // target-typed new keeps the line short.
+    Fallback = new(useCache)
     {
         // Only an outage earns the cached price. Any other exception propagates to the caller.
-        Policy = RetryPolicies.Handle<HttpRequestException>(),
-        ShouldFallbackResult = response => response.StatusCode == HttpStatusCode.ServiceUnavailable,
-
-        // OnFallback runs before the pipeline disposes a rejected result, so it can still log the body.
-        OnFallback = async args =>
-        {
-            if (args.Exception is { } ex)
-            {
-                journal.Add($"OnFallback logged '{ex.Message}'");
-            }
-            else if (args.Result is TrackedResponse response)
-            {
-                var disposed = response.IsDisposed;
-                var body = await response.Content.ReadAsStringAsync(args.CancellationToken);
-                journal.Add($"OnFallback read {body}, disposed: {YesNo(disposed)}");
-            }
-        },
-
-        // Action runs after that disposal: it receives the rejected result, already disposed. Do not read it here.
-        Action = args =>
-        {
-            if (args.Result is TrackedResponse response)
-            {
-                journal.Add($"Action got the 503, disposed: {YesNo(response.IsDisposed)}");
-            }
-
-            journal.Add("Action returned the cache");
-            return ValueTask.FromResult(Catalogue.Cached());
-        },
+        Policy = RetryPolicies.For<HttpRequestException>(),
+        AppliesToResult = response => response.StatusCode == HttpStatusCode.ServiceUnavailable,
+        OnFallback = logFailure,
     },
 };
 
-var pipeline = new ReliabilityPipeline<HttpResponseMessage>(options);
-
-// A record is immutable, so a 'with' expression makes the variant for scenario 4 without touching the original.
-// Its fallback accepts every exception, to show that the OnRetry exception bypasses the fallback all the same.
-var auditedPipeline = new ReliabilityPipeline<HttpResponseMessage>(options with
+// A factory is immutable, so the copy constructor makes the variant for scenario 4 without changing the original. Its
+// fallback accepts every exception, to show that the OnRetry exception bypasses the fallback all the same.
+var auditedFactory = new RetryTaskFactory<HttpResponseMessage>(factory)
 {
     OnRetry = _ => throw new InvalidOperationException("The audit log is full."),
-    Fallback = options.Fallback with { Policy = AnyExceptionPolicy.Default },
-});
+    Fallback = new(useCache)
+    {
+        Policy = AnyExceptionPolicy.Default,
+        AppliesToResult = response => response.StatusCode == HttpStatusCode.ServiceUnavailable,
+        OnFallback = logFailure,
+    },
+};
 
 var table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .AddColumn("Scenario").AddColumn("What happened").AddColumn("Returned");
 
 await AnsiConsole.Status().StartAsync("Asking the catalogue service…", async _ =>
 {
-    await Run("1. Outage", pipeline, Behaviour.Throw, "");
-    await Run("2. 503 result", pipeline, Behaviour.Unavailable, "");
-    await Run("3. Our bug", pipeline, Behaviour.BadRequest, "Fallback Policy refused it");
-    await Run("4. OnRetry throws", auditedPipeline, Behaviour.Throw, "Not an outcome of the attempts");
+    await Run("1. Outage", factory, Behaviour.Throw, "");
+    await Run("2. 503 result", factory, Behaviour.Unavailable, "");
+    await Run("3. Our bug", factory, Behaviour.BadRequest, "Fallback Policy refused it");
+    await Run("4. OnRetry throws", auditedFactory, Behaviour.Throw, "Not an outcome of the attempts");
 });
 
 AnsiConsole.Write(table);
 AnsiConsole.WriteLine();
-AnsiConsole.MarkupLine("[grey]  The fallback is the outermost part of the pipeline: it sees the outcome of the[/]");
+AnsiConsole.MarkupLine("[grey]  The fallback is the outermost part of a call: it sees the outcome of the[/]");
 AnsiConsole.MarkupLine("[grey]  attempts, and nothing else. Scenarios 3 and 4 reach the caller as exceptions.[/]");
 
-async Task Run(string scenario, ReliabilityPipeline<HttpResponseMessage> target, Behaviour behaviour, string whyNoFallback)
+async Task Run(string scenario, RetryTaskFactory<HttpResponseMessage> target, Behaviour behaviour, string whyNoFallback)
 {
     journal.Clear();
     var service = new Catalogue(behaviour);
     string value;
     try
     {
-        using var response = await target.ExecuteAsync(ct => service.GetPriceAsync(ct));
+        using var response = await target.Run(ct => service.GetPriceAsync(ct));
         value = $"[green]{Markup.Escape(await response.Content.ReadAsStringAsync())}[/]";
     }
     catch (Exception ex)
@@ -126,7 +133,7 @@ static string YesNo(bool value) => value ? "yes" : "no";
 
 enum Behaviour { Throw, Unavailable, BadRequest }
 
-// A response that remembers whether anyone disposed it, so the demo can show when the pipeline does.
+// A response that remembers whether anyone disposed it, so the demo can show when the factory does.
 sealed class TrackedResponse(HttpStatusCode status) : HttpResponseMessage(status)
 {
     public bool IsDisposed { get; private set; }
@@ -155,7 +162,7 @@ sealed class Catalogue(Behaviour behaviour)
 
     private string Counted() => this.Attempts == 1 ? "1 attempt" : $"{this.Attempts} attempts";
 
-    public async ValueTask<HttpResponseMessage> GetPriceAsync(CancellationToken cancellationToken)
+    public async Task<HttpResponseMessage> GetPriceAsync(CancellationToken cancellationToken)
     {
         this.Attempts++;
         await Task.Delay(50, cancellationToken);

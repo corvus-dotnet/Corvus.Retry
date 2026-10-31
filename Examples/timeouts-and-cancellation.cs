@@ -1,7 +1,7 @@
 #:project ../Solutions/Corvus.Retry/Corvus.Retry.csproj
 #:package Spectre.Console@0.57.2
 
-// Shows the two time limits of a ReliabilityPipeline and how they differ from the caller's own cancellation.
+// Shows the two time limits of a RetryTaskFactory and how they differ from the caller's own cancellation.
 // AttemptTimeout cuts one slow attempt short so that a retry can succeed; TotalTimeout caps the whole call, delays
 // included. Both cancel the token that the operation receives. A cancellation by the caller is never retried.
 //
@@ -31,19 +31,19 @@ AnsiConsole.WriteLine();
 {
     var service = new PricingService(latencies: [900, 150]);
     var asked = new List<string>();
-    var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+    var factory = new RetryTaskFactory
     {
         // 400 ms is well above the usual latency, so only the slow outlier is cut short.
         AttemptTimeout = TimeSpan.FromMilliseconds(400),
         Strategy = RetryStrategies.Constant(retries: 2, delay: TimeSpan.FromMilliseconds(100)),
 
         // A timed-out attempt fails with RetryTimeoutException. The policy must accept it, or there is no retry.
-        Policy = Recording(asked, RetryPolicies.Handle<RetryTimeoutException>().Or<HttpRequestException>()),
-    });
+        Policy = Recording(asked, RetryPolicies.For<RetryTimeoutException>().Or<HttpRequestException>()),
+    };
 
     var verdict = await RunAsync("Calling the pricing service", async () =>
     {
-        var price = await pipeline.ExecuteAsync(ct => service.GetPriceAsync(ct));
+        var price = await factory.Run(ct => service.GetPriceAsync(ct));
         return $"[green]Returned £{price:0.00}[/] after {service.Attempts.Count} attempts.";
     });
 
@@ -53,20 +53,20 @@ AnsiConsole.WriteLine();
 // ── 2. A total timeout stops a delay that would overrun it ───────────────────────────────────────────────────────
 {
     var service = new PricingService(latencies: [100, 100, 100], fail: true);
-    var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+    var factory = new RetryTaskFactory
     {
         // The total timeout covers the attempts and the delays. The exponential delays (200 ms, then 400 ms) would end
         // after 800 ms, so the limit expires during the second delay and no third attempt starts.
         TotalTimeout = TimeSpan.FromMilliseconds(600),
         Strategy = RetryStrategies.Exponential(retries: 3, baseDelay: TimeSpan.FromMilliseconds(200)),
-    });
+    };
 
     var clock = Stopwatch.StartNew();
     var verdict = await RunAsync("Calling the pricing service", async () =>
     {
         try
         {
-            await pipeline.ExecuteAsync(ct => service.GetPriceAsync(ct));
+            await factory.Run(ct => service.GetPriceAsync(ct));
             return "[red]Unexpected success[/]";
         }
         catch (RetryTimeoutException ex)
@@ -85,14 +85,14 @@ AnsiConsole.WriteLine();
 {
     var service = new PricingService(latencies: [900]);
     var asked = new List<string>();
-    var pipeline = new ReliabilityPipeline(new ReliabilityPipelineOptions
+    var factory = new RetryTaskFactory
     {
         AttemptTimeout = TimeSpan.FromMilliseconds(400),
         Strategy = RetryStrategies.Constant(retries: 2, delay: TimeSpan.FromMilliseconds(100)),
 
-        // This policy accepts every exception, yet it is never asked: the pipeline does not retry the caller's cancellation.
+        // This policy accepts every exception, yet it is never asked: the factory does not retry the caller's cancellation.
         Policy = Recording(asked, AnyExceptionPolicy.Default),
-    });
+    };
 
     // The user navigates away 250 ms into the first attempt, before the attempt timeout.
     using var caller = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
@@ -100,7 +100,7 @@ AnsiConsole.WriteLine();
     {
         try
         {
-            await pipeline.ExecuteAsync(ct => service.GetPriceAsync(ct), caller.Token);
+            await factory.Run(ct => service.GetPriceAsync(ct), caller.Token);
             return "[red]Unexpected success[/]";
         }
         catch (OperationCanceledException ex)
@@ -119,7 +119,7 @@ AnsiConsole.MarkupLine("[grey]  Timeouts are cooperative: the operation must hon
 static Task<string> RunAsync(string label, Func<Task<string>> call) =>
     AnsiConsole.Status().Spinner(Spinner.Known.Clock).StartAsync($"{label}…", _ => call());
 
-// Wraps a policy so that the demo can show which exceptions the pipeline asked it about.
+// Wraps a policy so that the demo can show which exceptions the factory asked it about.
 static IRetryPolicy Recording(List<string> asked, IRetryPolicy inner) =>
     RetryPolicies.FromPredicate(ex =>
     {
@@ -165,7 +165,7 @@ sealed class PricingService(int[] latencies, bool fail = false)
 
     public List<AttemptRecord> Attempts { get; } = [];
 
-    public async ValueTask<decimal> GetPriceAsync(CancellationToken cancellationToken)
+    public async Task<decimal> GetPriceAsync(CancellationToken cancellationToken)
     {
         this.clock ??= Stopwatch.StartNew();
         var number = this.Attempts.Count + 1;

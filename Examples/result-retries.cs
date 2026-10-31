@@ -1,8 +1,8 @@
 #:project ../Solutions/Corvus.Retry/Corvus.Retry.csproj
 #:package Spectre.Console@0.57.2
 
-// Shows ReliabilityPipeline<HttpResponseMessage> retrying responses, not exceptions. IsTransientHttpResponse rejects
-// a 503 and a 429, RetryAfter waits as long as the server asks, and the pipeline disposes each rejected response after
+// Shows RetryTaskFactory<HttpResponseMessage> retrying responses, not exceptions. IsTransientHttpResponse rejects
+// a 503 and a 429, RetryAfter waits as long as the server asks, and the factory disposes each rejected response after
 // OnRetry has seen it, so that a retry loop does not leak connections.
 //
 //   dotnet run Examples/result-retries.cs
@@ -35,22 +35,22 @@ var handler = new ScriptedHandler(
 using var client = new HttpClient(handler) { BaseAddress = new Uri("https://catalogue.example/") };
 
 var retries = new Dictionary<int, RetryObservation>();
-var pipeline = new ReliabilityPipeline<HttpResponseMessage>(new ReliabilityPipelineOptions<HttpResponseMessage>
-{
-    // IsTransientHttpResponse is true for 408, 429 and 5xx, so the pipeline treats those responses as failures.
-    ShouldRetryResult = RetryPolicies.IsTransientHttpResponse,
+var factory = new RetryTaskFactory<HttpResponseMessage>(
 
     // RetryAfter takes the delay from the Retry-After header when there is one, and from the inner strategy when
     // there is not. The 100 ms base keeps the demo short; the 429 overrides it with the full second the server asked for.
-    Strategy = RetryStrategies.RetryAfter(RetryStrategies.Exponential(retries: 4, baseDelay: TimeSpan.FromMilliseconds(100))),
+    RetryStrategies.RetryAfter(RetryStrategies.Exponential(retries: 4, baseDelay: TimeSpan.FromMilliseconds(100))),
 
     // Exceptions, such as a dropped connection, still go to the policy. This script has none.
-    Policy = RetryPolicies.TransientHttp,
+    RetryPolicies.TransientHttp)
+{
+    // IsTransientHttpResponse is true for 408, 429 and 5xx, so the factory treats those responses as failures.
+    CanRetryResult = RetryPolicies.IsTransientHttpResponse,
 
     OnRetry = args =>
     {
         // For a result-caused retry, Result holds the rejected response and LastException is null. The response is
-        // still alive here: the pipeline disposes it only after this callback, so you can log its body.
+        // still alive here: the factory disposes it only after this callback, so you can log its body.
         var response = (TrackedResponse)args.Result!;
         retries[args.AttemptNumber] = new(
             args.LastException is null ? "Result" : "LastException",
@@ -58,12 +58,12 @@ var pipeline = new ReliabilityPipeline<HttpResponseMessage>(new ReliabilityPipel
             response.IsDisposed);
         return ValueTask.CompletedTask;
     },
-});
+};
 
 var clock = Stopwatch.StartNew();
 var final = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync(
     "Calling GET /products/KT-100 (the 429 asks for a 1 s wait)…",
-    _ => pipeline.ExecuteAsync(ct => new ValueTask<HttpResponseMessage>(client.GetAsync("products/KT-100", ct))).AsTask());
+    _ => factory.Run(ct => client.GetAsync("products/KT-100", ct)));
 var total = clock.Elapsed;
 
 var table = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
@@ -76,7 +76,7 @@ foreach (var sent in handler.Sent)
     var status = ((int)sent.Response.StatusCode).ToString();
     if (retries.TryGetValue(sent.Attempt, out var retry))
     {
-        // "no → yes": alive while OnRetry ran, disposed by the pipeline before the next attempt.
+        // "no → yes": alive while OnRetry ran, disposed by the factory before the next attempt.
         table.AddRow(
             sent.Attempt.ToString(), $"{sent.At.TotalMilliseconds:F0} ms", $"[yellow]{status}[/]", retryAfter,
             retry.Kind, $"{retry.Delay.TotalMilliseconds:F0} ms",
@@ -108,7 +108,7 @@ using (final)
 AnsiConsole.WriteLine();
 AnsiConsole.MarkupLine("[grey]  Disposed reads 'while OnRetry ran → after the call'.[/]");
 AnsiConsole.MarkupLine("[grey]  OnRetry got each rejected response in Result, with LastException null.[/]");
-AnsiConsole.MarkupLine("[grey]  The pipeline never disposes the response it returns: that one is yours.[/]");
+AnsiConsole.MarkupLine("[grey]  The factory never disposes the response it returns: that one is yours.[/]");
 
 static string YesNo(bool value) => value ? "yes" : "no";
 
@@ -118,7 +118,7 @@ sealed record RetryObservation(string Kind, TimeSpan Delay, bool DisposedDuringO
 // One request as the server saw it, with the response it returned.
 sealed record SentRequest(int Attempt, TimeSpan At, TrackedResponse Response);
 
-// A response that remembers whether anyone disposed it, so the demo can show what the pipeline did.
+// A response that remembers whether anyone disposed it, so the demo can show what the factory did.
 sealed class TrackedResponse(HttpStatusCode status) : HttpResponseMessage(status)
 {
     public bool IsDisposed { get; private set; }

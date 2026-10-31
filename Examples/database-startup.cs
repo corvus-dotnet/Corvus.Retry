@@ -31,17 +31,17 @@ AnsiConsole.WriteLine();
 // jitter stops a fleet of containers that started together from all knocking at the same moment.
 var strategy = RetryStrategies.Exponential(retries: 8, baseDelay: TimeSpan.FromMilliseconds(100), maxDelay: TimeSpan.FromMilliseconds(800), useJitter: true);
 
-// The driver throws its own exception type for every error. The socket error is inside it, so Handle<SocketException>
-// never sees it; HandleInner looks through the InnerException chain.
-var policy = RetryPolicies.HandleInner<SocketException>();
+// The driver throws its own exception type for every error. The socket error is inside it, so For<SocketException>
+// never sees it; ForInner looks through the InnerException chain.
+var policy = RetryPolicies.ForInner<SocketException>();
 
 // 1. Which policy matches what the driver throws?
 var sample = StartingDatabase.Refused("db:5432");
 var policies = new Table().Border(TableBorder.Rounded).BorderColor(Color.Grey)
     .Title("[springgreen3]The driver throws InvalidOperationException, wrapping a SocketException[/]")
     .AddColumn("Policy").AddColumn("CanRetry").AddColumn("Why");
-policies.AddRow("Handle<SocketException>()", Verdict(RetryPolicies.Handle<SocketException>().CanRetry(sample)), "it examines only the outer exception");
-policies.AddRow("HandleInner<SocketException>()", Verdict(policy.CanRetry(sample)), "it also examines the InnerException chain");
+policies.AddRow("For<SocketException>()", Verdict(RetryPolicies.For<SocketException>().CanRetry(sample)), "it examines only the outer exception");
+policies.AddRow("ForInner<SocketException>()", Verdict(policy.CanRetry(sample)), "it also examines the InnerException chain");
 AnsiConsole.Write(policies);
 AnsiConsole.WriteLine();
 

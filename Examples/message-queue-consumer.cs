@@ -36,7 +36,7 @@ var consumer = new OrderConsumer(queue, clock);
 var restartStrategy = RetryStrategies.Exponential(retries: int.MaxValue, baseDelay: TimeSpan.FromMilliseconds(200), maxDelay: TimeSpan.FromSeconds(1));
 
 // Restart after anything except a poison message: reading that message again cannot succeed.
-var restartPolicy = RetryPolicies.Handle<PoisonMessageException>().Not();
+var restartPolicy = RetryPolicies.For<PoisonMessageException>().Not();
 
 AnsiConsole.Write(new Rule("[orange1]1. Run(runFunction, restartStrategy, retryPolicy)[/]").LeftJustified());
 await using (var runner = ReliableTaskRunner.Run(consumer.RunAsync, restartStrategy, restartPolicy))
