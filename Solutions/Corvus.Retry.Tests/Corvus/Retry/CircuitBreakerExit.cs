@@ -16,10 +16,10 @@ public enum CircuitBreakerExit
     /// <summary>The operation throws an exception that the policy of the breaker accepts.</summary>
     Failure,
 
-    /// <summary>The operation returns a result that <see cref="ReliabilityPipelineOptions{T}.ShouldRetryResult"/> rejects.</summary>
+    /// <summary>The operation returns a result that <see cref="RetryTaskFactory{T}.CanRetryResult"/> rejects.</summary>
     ResultRejected,
 
-    /// <summary><see cref="ReliabilityPipelineOptions{T}.ShouldRetryResult"/> throws.</summary>
+    /// <summary><see cref="RetryTaskFactory{T}.CanRetryResult"/> throws.</summary>
     ResultCheckThrows,
 
     /// <summary>The attempt timeout expires during the operation.</summary>

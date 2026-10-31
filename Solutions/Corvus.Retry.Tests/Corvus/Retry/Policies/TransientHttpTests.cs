@@ -110,8 +110,8 @@ public class TransientHttpTests
     public void ARejectionByACircuitBreakerIsRefused()
     {
         // A retry cannot pass an open or isolated circuit, so an HTTP pipeline does not retry into one.
-        Assert.IsFalse(RetryPolicies.TransientHttp.CanRetry(new BrokenCircuitException("The circuit is open.", TimeSpan.FromSeconds(5))));
-        Assert.IsFalse(RetryPolicies.TransientHttp.CanRetry(new IsolatedCircuitException()));
+        Assert.IsFalse(RetryPolicies.TransientHttp.CanRetry(new CircuitRejectedException("The circuit is open.", TimeSpan.FromSeconds(5))));
+        Assert.IsFalse(RetryPolicies.TransientHttp.CanRetry(new CircuitIsolatedException()));
     }
 
     [TestMethod]

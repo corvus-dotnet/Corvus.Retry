@@ -20,7 +20,7 @@ public class ExceptionTypeRetryPolicyTests
     [TestMethod]
     public void OrAddsATypeToRetry()
     {
-        ExceptionTypeRetryPolicy policy = RetryPolicies.Handle<HttpRequestException>().Or<TimeoutException>();
+        ExceptionTypeRetryPolicy policy = RetryPolicies.For<HttpRequestException>().Or<TimeoutException>();
 
         Assert.IsTrue(policy.CanRetry(new HttpRequestException()));
         Assert.IsTrue(policy.CanRetry(new TimeoutException()));
@@ -30,7 +30,7 @@ public class ExceptionTypeRetryPolicyTests
     [TestMethod]
     public void OrWithAPredicateRetriesOnlyTheExceptionsOfThatTypeThatThePredicateAccepts()
     {
-        ExceptionTypeRetryPolicy policy = RetryPolicies.Handle<TimeoutException>().Or<IOException>(ex => ex.Message == "transient");
+        ExceptionTypeRetryPolicy policy = RetryPolicies.For<TimeoutException>().Or<IOException>(ex => ex.Message == "transient");
 
         Assert.IsTrue(policy.CanRetry(new TimeoutException()));
         Assert.IsTrue(policy.CanRetry(new IOException("transient")));
@@ -40,7 +40,7 @@ public class ExceptionTypeRetryPolicyTests
     [TestMethod]
     public void WhenTheSameTypeHasTwoPredicates_EitherPredicateCanAccept()
     {
-        ExceptionTypeRetryPolicy policy = RetryPolicies.Handle<IOException>(ex => ex.Message == "a").Or<IOException>(ex => ex.Message == "b");
+        ExceptionTypeRetryPolicy policy = RetryPolicies.For<IOException>(ex => ex.Message == "a").Or<IOException>(ex => ex.Message == "b");
 
         Assert.IsTrue(policy.CanRetry(new IOException("a")));
         Assert.IsTrue(policy.CanRetry(new IOException("b")));
@@ -50,7 +50,7 @@ public class ExceptionTypeRetryPolicyTests
     [TestMethod]
     public void OrReturnsANewPolicyAndTheOriginalDoesNotChange()
     {
-        ExceptionTypeRetryPolicy original = RetryPolicies.Handle<HttpRequestException>();
+        ExceptionTypeRetryPolicy original = RetryPolicies.For<HttpRequestException>();
 
         ExceptionTypeRetryPolicy combined = original.Or<TimeoutException>();
 
@@ -62,7 +62,7 @@ public class ExceptionTypeRetryPolicyTests
     [TestMethod]
     public void TwoPoliciesMadeFromOneOriginalAreIndependent()
     {
-        ExceptionTypeRetryPolicy original = RetryPolicies.Handle<HttpRequestException>();
+        ExceptionTypeRetryPolicy original = RetryPolicies.For<HttpRequestException>();
 
         ExceptionTypeRetryPolicy withTimeout = original.Or<TimeoutException>();
         ExceptionTypeRetryPolicy withIo = original.Or<IOException>();
@@ -74,7 +74,7 @@ public class ExceptionTypeRetryPolicyTests
     [TestMethod]
     public void TheExtensionOrCombinesWithAnotherPolicy()
     {
-        IRetryPolicy policy = RetryPolicies.Handle<HttpRequestException>().Or(RetryPolicies.FromPredicate(ex => ex is TimeoutException));
+        IRetryPolicy policy = RetryPolicies.For<HttpRequestException>().Or(RetryPolicies.FromPredicate(ex => ex is TimeoutException));
 
         Assert.IsTrue(policy.CanRetry(new HttpRequestException()));
         Assert.IsTrue(policy.CanRetry(new TimeoutException()));
@@ -84,7 +84,7 @@ public class ExceptionTypeRetryPolicyTests
     [TestMethod]
     public async Task WhenManyThreadsUseOneInstance_EachGetsConsistentAnswers()
     {
-        ExceptionTypeRetryPolicy policy = RetryPolicies.Handle<HttpRequestException>().Or<TimeoutException>(ex => ex.Message == "transient");
+        ExceptionTypeRetryPolicy policy = RetryPolicies.For<HttpRequestException>().Or<TimeoutException>(ex => ex.Message == "transient");
         HttpRequestException accepted = new();
         TimeoutException rejectedByPredicate = new("permanent");
         InvalidOperationException rejected = new();

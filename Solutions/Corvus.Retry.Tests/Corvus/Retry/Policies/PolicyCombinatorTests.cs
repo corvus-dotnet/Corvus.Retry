@@ -12,7 +12,7 @@ using Corvus.Retry.Strategies;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
-/// The <see cref="RetryPolicies"/> combinators: <c>HandleInner</c> finds a matching exception inside another one,
+/// The <see cref="RetryPolicies"/> combinators: <c>ForInner</c> finds a matching exception inside another one,
 /// depth first; <c>Not</c>, <c>Any</c> and <c>All</c> give the logical result for each combination.
 /// </summary>
 [TestClass]
@@ -29,9 +29,9 @@ public class PolicyCombinatorTests
         [".And"] = failure => new StubRetryPolicy(true).And(Throwing(failure)).CanRetry(new TimeoutException()),
         [".Not"] = failure => Throwing(failure).Not().CanRetry(new TimeoutException()),
         ["AggregatePolicy"] = failure => new AggregatePolicy { Policies = { new StubRetryPolicy(true), Throwing(failure) } }.CanRetry(new TimeoutException()),
-        ["Handle<T>(predicate)"] = failure => RetryPolicies.Handle<TimeoutException>(_ => throw failure).CanRetry(new TimeoutException()),
-        ["Handle<T>().Or<U>(predicate)"] = failure => RetryPolicies.Handle<IOException>().Or<TimeoutException>(_ => throw failure).CanRetry(new TimeoutException()),
-        ["HandleInner<T>(predicate)"] = failure => RetryPolicies.HandleInner<TimeoutException>(_ => throw failure).CanRetry(new ArgumentException("outer", new TimeoutException())),
+        ["For<T>(predicate)"] = failure => RetryPolicies.For<TimeoutException>(_ => throw failure).CanRetry(new TimeoutException()),
+        ["For<T>().Or<U>(predicate)"] = failure => RetryPolicies.For<IOException>().Or<TimeoutException>(_ => throw failure).CanRetry(new TimeoutException()),
+        ["ForInner<T>(predicate)"] = failure => RetryPolicies.ForInner<TimeoutException>(_ => throw failure).CanRetry(new ArgumentException("outer", new TimeoutException())),
         ["FromDelegate strategy"] = failure => RetryStrategies.FromDelegate(_ => throw failure).GetRetryDelay(new RetryAttempt(1, new TimeoutException(), null, TimeSpan.Zero)),
         ["RetryAfter strategy"] = failure => RetryStrategies.RetryAfter(RetryStrategies.FromDelegate(_ => throw failure)).GetRetryDelay(new RetryAttempt(1, new TimeoutException(), null, TimeSpan.Zero)),
     };
@@ -50,21 +50,21 @@ public class PolicyCombinatorTests
     }
 
     [TestMethod]
-    public void HandleInnerAcceptsAMatchInAnAggregateExceptionInsideTheInnerExceptionChain()
+    public void ForInnerAcceptsAMatchInAnAggregateExceptionInsideTheInnerExceptionChain()
     {
         // The chain leads to an aggregate, whose inner exceptions are then searched.
         Exception failure = new InvalidOperationException("outer", new AggregateException(new ArgumentException(), new IOException()));
 
-        Assert.IsTrue(RetryPolicies.HandleInner<IOException>().CanRetry(failure));
+        Assert.IsTrue(RetryPolicies.ForInner<IOException>().CanRetry(failure));
     }
 
     [TestMethod]
-    public void HandleInnerStopsAtTheFirstMatchThatThePredicateAccepts()
+    public void ForInnerStopsAtTheFirstMatchThatThePredicateAccepts()
     {
         IOException first = new("first");
         IOException second = new("second");
         List<Exception> seen = [];
-        IRetryPolicy policy = RetryPolicies.HandleInner<IOException>(ex =>
+        IRetryPolicy policy = RetryPolicies.ForInner<IOException>(ex =>
         {
             seen.Add(ex);
             return true;
@@ -79,7 +79,7 @@ public class PolicyCombinatorTests
     {
         FileNotFoundException failure = new("missing");
         List<IOException> seen = [];
-        IRetryPolicy policy = RetryPolicies.Handle<IOException>(ex =>
+        IRetryPolicy policy = RetryPolicies.For<IOException>(ex =>
         {
             seen.Add(ex);
             return true;
@@ -90,67 +90,67 @@ public class PolicyCombinatorTests
     }
 
     [TestMethod]
-    public void HandleInnerAcceptsTheExceptionItself()
+    public void ForInnerAcceptsTheExceptionItself()
     {
-        Assert.IsTrue(RetryPolicies.HandleInner<IOException>().CanRetry(new IOException()));
+        Assert.IsTrue(RetryPolicies.ForInner<IOException>().CanRetry(new IOException()));
     }
 
     [TestMethod]
-    public void HandleInnerAcceptsAnExceptionOfADerivedType()
+    public void ForInnerAcceptsAnExceptionOfADerivedType()
     {
-        Assert.IsTrue(RetryPolicies.HandleInner<IOException>().CanRetry(new InvalidOperationException("outer", new FileNotFoundException())));
+        Assert.IsTrue(RetryPolicies.ForInner<IOException>().CanRetry(new InvalidOperationException("outer", new FileNotFoundException())));
     }
 
     [TestMethod]
-    public void HandleInnerAcceptsAnExceptionInTheInnerExceptionChain()
+    public void ForInnerAcceptsAnExceptionInTheInnerExceptionChain()
     {
         Exception failure = new InvalidOperationException("outer", new ArgumentException("middle", new IOException("inner")));
 
-        Assert.IsTrue(RetryPolicies.HandleInner<IOException>().CanRetry(failure));
+        Assert.IsTrue(RetryPolicies.ForInner<IOException>().CanRetry(failure));
     }
 
     [TestMethod]
-    public void HandleInnerAcceptsAnExceptionInAnAggregateException()
+    public void ForInnerAcceptsAnExceptionInAnAggregateException()
     {
         AggregateException failure = new(new InvalidOperationException(), new IOException());
 
-        Assert.IsTrue(RetryPolicies.HandleInner<IOException>().CanRetry(failure));
+        Assert.IsTrue(RetryPolicies.ForInner<IOException>().CanRetry(failure));
     }
 
     [TestMethod]
-    public void HandleInnerAcceptsAnExceptionInTheChainOfAnExceptionInANestedAggregateException()
+    public void ForInnerAcceptsAnExceptionInTheChainOfAnExceptionInANestedAggregateException()
     {
         AggregateException failure = new(
             new InvalidOperationException(),
             new AggregateException(new InvalidOperationException("outer", new IOException())));
 
-        Assert.IsTrue(RetryPolicies.HandleInner<IOException>().CanRetry(failure));
+        Assert.IsTrue(RetryPolicies.ForInner<IOException>().CanRetry(failure));
     }
 
     [TestMethod]
-    public void HandleInnerRefusesWhenNoExceptionMatches()
+    public void ForInnerRefusesWhenNoExceptionMatches()
     {
         AggregateException failure = new(new InvalidOperationException("outer", new ArgumentException()), new TimeoutException());
 
-        Assert.IsFalse(RetryPolicies.HandleInner<IOException>().CanRetry(failure));
+        Assert.IsFalse(RetryPolicies.ForInner<IOException>().CanRetry(failure));
     }
 
     [TestMethod]
-    public void HandleInnerWithAPredicateAcceptsOnlyAMatchThatThePredicateAccepts()
+    public void ForInnerWithAPredicateAcceptsOnlyAMatchThatThePredicateAccepts()
     {
-        IRetryPolicy policy = RetryPolicies.HandleInner<IOException>(ex => ex.Message == "transient");
+        IRetryPolicy policy = RetryPolicies.ForInner<IOException>(ex => ex.Message == "transient");
 
         Assert.IsTrue(policy.CanRetry(new AggregateException(new IOException("permanent"), new IOException("transient"))));
         Assert.IsFalse(policy.CanRetry(new InvalidOperationException("outer", new IOException("permanent"))));
     }
 
     [TestMethod]
-    public void HandleInnerSearchesDepthFirst()
+    public void ForInnerSearchesDepthFirst()
     {
         IOException first = new("first");
         IOException second = new("second");
         List<string> seen = [];
-        IRetryPolicy policy = RetryPolicies.HandleInner<IOException>(ex =>
+        IRetryPolicy policy = RetryPolicies.ForInner<IOException>(ex =>
         {
             seen.Add(ex.Message);
             return false;
@@ -230,8 +230,8 @@ public class PolicyCombinatorTests
     {
         // Retry an IOException, or any exception with an inner TimeoutException, but never a FileNotFoundException.
         IRetryPolicy policy = RetryPolicies.All(
-            RetryPolicies.Any(RetryPolicies.Handle<IOException>(), RetryPolicies.HandleInner<TimeoutException>()),
-            RetryPolicies.Not(RetryPolicies.Handle<FileNotFoundException>()));
+            RetryPolicies.Any(RetryPolicies.For<IOException>(), RetryPolicies.ForInner<TimeoutException>()),
+            RetryPolicies.Not(RetryPolicies.For<FileNotFoundException>()));
 
         Assert.IsTrue(policy.CanRetry(new IOException()));
         Assert.IsTrue(policy.CanRetry(new InvalidOperationException("outer", new TimeoutException())));

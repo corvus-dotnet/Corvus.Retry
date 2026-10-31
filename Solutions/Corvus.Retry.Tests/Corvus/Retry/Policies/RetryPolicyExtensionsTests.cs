@@ -55,9 +55,9 @@ public class RetryPolicyExtensionsTests
     [TestMethod]
     public void TheExtensionMembersReturnANewPolicyAndTheOriginalDoesNotChange()
     {
-        IRetryPolicy original = RetryPolicies.Handle<TimeoutException>();
+        IRetryPolicy original = RetryPolicies.For<TimeoutException>();
 
-        IRetryPolicy or = original.Or(RetryPolicies.Handle<InvalidOperationException>());
+        IRetryPolicy or = original.Or(RetryPolicies.For<InvalidOperationException>());
         IRetryPolicy and = original.And(new StubRetryPolicy(false));
         IRetryPolicy not = original.Not();
 
@@ -74,9 +74,9 @@ public class RetryPolicyExtensionsTests
     [TestMethod]
     public void TheExtensionMembersCanBeChained()
     {
-        IRetryPolicy policy = RetryPolicies.Handle<Exception>()
-            .And(RetryPolicies.Handle<ArgumentException>().Not())
-            .Or(RetryPolicies.Handle<ArgumentNullException>());
+        IRetryPolicy policy = RetryPolicies.For<Exception>()
+            .And(RetryPolicies.For<ArgumentException>().Not())
+            .Or(RetryPolicies.For<ArgumentNullException>());
 
         Assert.IsTrue(policy.CanRetry(new InvalidOperationException()));
         Assert.IsFalse(policy.CanRetry(new ArgumentException()));
@@ -175,7 +175,7 @@ public class RetryPolicyExtensionsTests
     public void AnAggregateInsideTheInnerExceptionChainOfAFailureIsNotUnwrapped()
     {
         // Only AggregateException.InnerExceptions are unwrapped. Another exception is passed as thrown, with its
-        // InnerException chain; HandleInner is the policy that searches that chain.
+        // InnerException chain; ForInner is the policy that searches that chain.
         InvalidOperationException failure = new("outer", new AggregateException(new TimeoutException()));
         RecordingRetryPolicy policy = new(true);
 

@@ -137,7 +137,7 @@ public class RetriableTests
         var op = new FlakyOperation(1, _ => aggregate);
         var strategy = new RecordingStrategy(TimeSpan.Zero, TimeSpan.Zero);
 
-        string? result = await RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, strategy, RetryPolicies.Handle<HttpRequestException>()).ConfigureAwait(false);
+        string? result = await RetriableDriver.RetryAsync(shape, op.Invoke, CancellationToken.None, strategy, RetryPolicies.For<HttpRequestException>()).ConfigureAwait(false);
 
         Assert.AreEqual(2, op.Invocations);
         if (shape is RetryShape.Function or RetryShape.AsyncFunction or RetryShape.AsyncFunctionWithToken)

@@ -118,7 +118,7 @@ public class RetryAfterStrategyTests
     {
         IRetryStrategy strategy = RetryStrategies.RetryAfter(RetryStrategies.Constant(3, InnerDelay), this.timeProvider);
         using HttpResponseMessage response = Response(new RetryConditionHeaderValue(TimeSpan.FromSeconds(5)));
-        BrokenCircuitException rejection = new("The circuit is open.", TimeSpan.FromSeconds(3));
+        CircuitRejectedException rejection = new("The circuit is open.", TimeSpan.FromSeconds(3));
 
         Assert.AreEqual(TimeSpan.FromSeconds(5), strategy.GetRetryDelay(new RetryAttempt(1, rejection, response, TimeSpan.Zero)));
     }
@@ -131,7 +131,7 @@ public class RetryAfterStrategyTests
     {
         IRetryStrategy strategy = RetryStrategies.RetryAfter(RetryStrategies.Constant(3, InnerDelay), this.timeProvider);
         TimeSpan retryAfter = retryAfterMilliseconds == double.MaxValue ? TimeSpan.MaxValue : TimeSpan.FromMilliseconds(retryAfterMilliseconds);
-        BrokenCircuitException rejection = new("The circuit is open.", retryAfter);
+        CircuitRejectedException rejection = new("The circuit is open.", retryAfter);
 
         Assert.AreEqual(TimeSpan.FromMilliseconds(expectedMilliseconds), strategy.GetRetryDelay(new RetryAttempt(1, rejection, null, TimeSpan.Zero)));
     }
@@ -161,7 +161,7 @@ public class RetryAfterStrategyTests
         };
         Exception? exception = kind switch
         {
-            "BreakerRejection" => new BrokenCircuitException("The circuit is open.", TimeSpan.FromSeconds(3)),
+            "BreakerRejection" => new CircuitRejectedException("The circuit is open.", TimeSpan.FromSeconds(3)),
             "PlainException" => new HttpRequestException("Failed"),
             _ => null,
         };
@@ -202,7 +202,7 @@ public class RetryAfterStrategyTests
     public void WhenAnOpenCircuitRejectedTheAttempt_TheDelayIsTheRetryAfterOfTheRejection()
     {
         IRetryStrategy strategy = RetryStrategies.RetryAfter(RetryStrategies.Constant(3, InnerDelay), this.timeProvider);
-        BrokenCircuitException rejection = new("The circuit is open.", TimeSpan.FromSeconds(3));
+        CircuitRejectedException rejection = new("The circuit is open.", TimeSpan.FromSeconds(3));
 
         Assert.AreEqual(TimeSpan.FromSeconds(3), strategy.GetRetryDelay(new RetryAttempt(1, rejection, null, TimeSpan.Zero)));
     }
@@ -212,8 +212,8 @@ public class RetryAfterStrategyTests
     {
         IRetryStrategy strategy = RetryStrategies.RetryAfter(RetryStrategies.Constant(3, InnerDelay), this.timeProvider);
 
-        Assert.AreEqual(InnerDelay, strategy.GetRetryDelay(new RetryAttempt(1, new BrokenCircuitException("Half-open"), null, TimeSpan.Zero)));
-        Assert.AreEqual(InnerDelay, strategy.GetRetryDelay(new RetryAttempt(1, new IsolatedCircuitException(), null, TimeSpan.Zero)));
+        Assert.AreEqual(InnerDelay, strategy.GetRetryDelay(new RetryAttempt(1, new CircuitRejectedException("Half-open"), null, TimeSpan.Zero)));
+        Assert.AreEqual(InnerDelay, strategy.GetRetryDelay(new RetryAttempt(1, new CircuitIsolatedException(), null, TimeSpan.Zero)));
     }
 
     [TestMethod]
@@ -221,7 +221,7 @@ public class RetryAfterStrategyTests
     {
         IRetryStrategy strategy = RetryStrategies.RetryAfter(RetryStrategies.Constant(0, InnerDelay), this.timeProvider);
 
-        Assert.IsNull(strategy.GetRetryDelay(new RetryAttempt(1, new BrokenCircuitException("Open", TimeSpan.FromSeconds(3)), null, TimeSpan.Zero)));
+        Assert.IsNull(strategy.GetRetryDelay(new RetryAttempt(1, new CircuitRejectedException("Open", TimeSpan.FromSeconds(3)), null, TimeSpan.Zero)));
     }
 
     [TestMethod]

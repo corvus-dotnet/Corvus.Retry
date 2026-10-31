@@ -19,7 +19,7 @@ public class RetryPoliciesTests
     [TestMethod]
     public void AHandlePolicyRetriesAnExceptionOfThatType()
     {
-        IRetryPolicy policy = RetryPolicies.Handle<HttpRequestException>();
+        IRetryPolicy policy = RetryPolicies.For<HttpRequestException>();
 
         Assert.IsTrue(policy.CanRetry(new HttpRequestException()));
     }
@@ -27,7 +27,7 @@ public class RetryPoliciesTests
     [TestMethod]
     public void AHandlePolicyDoesNotRetryAnExceptionOfAnotherType()
     {
-        IRetryPolicy policy = RetryPolicies.Handle<HttpRequestException>();
+        IRetryPolicy policy = RetryPolicies.For<HttpRequestException>();
 
         Assert.IsFalse(policy.CanRetry(new InvalidOperationException()));
     }
@@ -35,7 +35,7 @@ public class RetryPoliciesTests
     [TestMethod]
     public void AHandlePolicyRetriesAnExceptionOfADerivedType()
     {
-        IRetryPolicy policy = RetryPolicies.Handle<ArgumentException>();
+        IRetryPolicy policy = RetryPolicies.For<ArgumentException>();
 
         Assert.IsTrue(policy.CanRetry(new ArgumentNullException("x")));
     }
@@ -45,7 +45,7 @@ public class RetryPoliciesTests
     [DataRow(HttpStatusCode.NotFound, false)]
     public void AHandlePolicyWithAPredicateRetriesOnlyTheExceptionsThatThePredicateAccepts(HttpStatusCode status, bool expected)
     {
-        IRetryPolicy policy = RetryPolicies.Handle<HttpRequestException>(ex => ex.StatusCode == HttpStatusCode.ServiceUnavailable);
+        IRetryPolicy policy = RetryPolicies.For<HttpRequestException>(ex => ex.StatusCode == HttpStatusCode.ServiceUnavailable);
 
         Assert.AreEqual(expected, policy.CanRetry(new HttpRequestException(null, null, status)));
     }
@@ -54,7 +54,7 @@ public class RetryPoliciesTests
     public void AHandlePolicyWithAPredicateDoesNotCallThePredicateForAnotherType()
     {
         bool called = false;
-        IRetryPolicy policy = RetryPolicies.Handle<HttpRequestException>(_ => called = true);
+        IRetryPolicy policy = RetryPolicies.For<HttpRequestException>(_ => called = true);
 
         Assert.IsFalse(policy.CanRetry(new InvalidOperationException()));
         Assert.IsFalse(called);
@@ -124,8 +124,8 @@ public class RetryPoliciesTests
         IRetryPolicy[] policies =
         [
             RetryPolicies.FromPredicate(_ => true),
-            RetryPolicies.Handle<InvalidOperationException>(),
-            RetryPolicies.HandleInner<InvalidOperationException>(),
+            RetryPolicies.For<InvalidOperationException>(),
+            RetryPolicies.ForInner<InvalidOperationException>(),
             RetryPolicies.Not(valid),
             RetryPolicies.Any(valid),
             RetryPolicies.All(valid),
@@ -133,9 +133,9 @@ public class RetryPoliciesTests
             valid.Or(valid),
             valid.And(valid),
             valid.Not(),
-            RetryPolicies.Handle<InvalidOperationException>(_ => true),
-            RetryPolicies.Handle<InvalidOperationException>().Or<TimeoutException>(),
-            RetryPolicies.HandleInner<InvalidOperationException>(_ => true),
+            RetryPolicies.For<InvalidOperationException>(_ => true),
+            RetryPolicies.For<InvalidOperationException>().Or<TimeoutException>(),
+            RetryPolicies.ForInner<InvalidOperationException>(_ => true),
             new AggregatePolicy(),
             new AggregatePolicy { Policies = { valid } },
             new AnyExceptionPolicy(),
