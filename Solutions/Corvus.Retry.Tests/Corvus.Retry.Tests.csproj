@@ -30,7 +30,9 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <!-- Microsoft.Extensions.Http brings Microsoft.Extensions.DependencyInjection (ServiceCollection) with it. Pinning
+         that package in Directory.Packages.props would make it a direct dependency of Corvus.Retry.Extensions.Http,
+         because transitive pinning is on. -->
     <PackageReference Include="Microsoft.Extensions.Http" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
   </ItemGroup>
