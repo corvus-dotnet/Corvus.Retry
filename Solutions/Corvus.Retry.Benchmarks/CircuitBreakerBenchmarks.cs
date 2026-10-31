@@ -9,11 +9,12 @@ using System.Threading;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
+using Corvus.Retry.Policies;
 using Corvus.Retry.Strategies;
 
 /// <summary>
-/// The cost of a <see cref="CircuitBreaker"/> in a <see cref="ReliabilityPipeline"/> that makes one attempt, compared with the
-/// same pipeline without a breaker.
+/// The cost of a <see cref="CircuitBreaker"/> in a <see cref="RetryTaskFactory"/> that makes one attempt, compared with the
+/// same factory without a breaker.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -22,8 +23,8 @@ using Corvus.Retry.Strategies;
 /// operation that fails. The "Rejected" category has a circuit that rejects the call, so the operation does not run.
 /// </para>
 /// <para>
-/// <c>HalfOpen_Probe</c> moves the clock past the break before each call, so that the call is the test call of a
-/// half-open circuit. The test call fails, and the circuit opens again.
+/// <c>HalfOpen_Probe</c> moves the clock past the open duration before each call, so that the call is the test call of
+/// a half-open circuit. The test call fails, and the circuit opens again.
 /// </para>
 /// </remarks>
 [MemoryDiagnoser]
@@ -33,14 +34,14 @@ public class CircuitBreakerBenchmarks
 {
     private const int Result = 42;
 
-    private static readonly TimeSpan BreakDuration = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan OpenDuration = TimeSpan.FromSeconds(1);
 
     private readonly ManualTimeProvider clock = new();
-    private readonly ReliabilityPipeline noBreakerPipeline;
-    private readonly ReliabilityPipeline closedPipeline;
-    private readonly ReliabilityPipeline openPipeline;
-    private readonly ReliabilityPipeline isolatedPipeline;
-    private readonly ReliabilityPipeline probePipeline;
+    private readonly RetryTaskFactory noBreakerFactory;
+    private readonly RetryTaskFactory closedFactory;
+    private readonly RetryTaskFactory openFactory;
+    private readonly RetryTaskFactory isolatedFactory;
+    private readonly RetryTaskFactory probeFactory;
     private readonly Func<CancellationToken, ValueTask<int>> operation;
     private readonly Func<CancellationToken, ValueTask<int>> failingOperation;
 
@@ -50,61 +51,61 @@ public class CircuitBreakerBenchmarks
         this.operation = static _ => new ValueTask<int>(Result);
         this.failingOperation = static _ => throw new InvalidOperationException("Failure");
 
-        // A minimum throughput that is never reached keeps the circuit closed.
-        var closedBreaker = new CircuitBreaker(new CircuitBreakerOptions { MinimumThroughput = int.MaxValue });
-        var openBreaker = new CircuitBreaker(new CircuitBreakerOptions { MinimumThroughput = 2, BreakDuration = BreakDuration, TimeProvider = this.clock });
-        var isolatedBreaker = new CircuitBreaker(new CircuitBreakerOptions());
+        // A minimum number of calls that is never reached keeps the circuit closed.
+        var closedBreaker = new CircuitBreaker(minimumCalls: int.MaxValue);
+        var openBreaker = new CircuitBreaker(minimumCalls: 2, openDuration: OpenDuration, timeProvider: this.clock);
+        var isolatedBreaker = new CircuitBreaker();
         isolatedBreaker.Isolate();
 
-        this.noBreakerPipeline = NewPipeline(null);
-        this.closedPipeline = NewPipeline(closedBreaker);
-        this.openPipeline = NewPipeline(openBreaker);
-        this.isolatedPipeline = NewPipeline(isolatedBreaker);
-        this.probePipeline = NewPipeline(new CircuitBreaker(new CircuitBreakerOptions { MinimumThroughput = 2, BreakDuration = BreakDuration, TimeProvider = this.clock }));
+        this.noBreakerFactory = NewFactory(null);
+        this.closedFactory = NewFactory(closedBreaker);
+        this.openFactory = NewFactory(openBreaker);
+        this.isolatedFactory = NewFactory(isolatedBreaker);
+        this.probeFactory = NewFactory(new CircuitBreaker(minimumCalls: 2, openDuration: OpenDuration, timeProvider: this.clock));
 
         // Two failures open each circuit. Only HalfOpen_Probe moves the clock.
         for (int i = 0; i < 2; i++)
         {
-            _ = Observe(this.openPipeline.ExecuteAsync(this.failingOperation));
-            _ = Observe(this.probePipeline.ExecuteAsync(this.failingOperation));
+            _ = Observe(this.openFactory.RunValueTask(this.failingOperation));
+            _ = Observe(this.probeFactory.RunValueTask(this.failingOperation));
         }
     }
 
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("Closed")]
-    public ValueTask<int> NoBreaker_Success() => this.noBreakerPipeline.ExecuteAsync(this.operation);
+    public ValueTask<int> NoBreaker_Success() => this.noBreakerFactory.RunValueTask(this.operation);
 
     [Benchmark]
     [BenchmarkCategory("Closed")]
-    public ValueTask<int> Closed_Success() => this.closedPipeline.ExecuteAsync(this.operation);
+    public ValueTask<int> Closed_Success() => this.closedFactory.RunValueTask(this.operation);
 
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("Failure")]
-    public int NoBreaker_Failure() => Observe(this.noBreakerPipeline.ExecuteAsync(this.failingOperation));
+    public int NoBreaker_Failure() => Observe(this.noBreakerFactory.RunValueTask(this.failingOperation));
 
     [Benchmark]
     [BenchmarkCategory("Failure")]
-    public int Closed_Failure() => Observe(this.closedPipeline.ExecuteAsync(this.failingOperation));
+    public int Closed_Failure() => Observe(this.closedFactory.RunValueTask(this.failingOperation));
 
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("Rejected")]
-    public int Open_Rejected() => Observe(this.openPipeline.ExecuteAsync(this.operation));
+    public int Open_Rejected() => Observe(this.openFactory.RunValueTask(this.operation));
 
     [Benchmark]
     [BenchmarkCategory("Rejected")]
-    public int Isolated_Rejected() => Observe(this.isolatedPipeline.ExecuteAsync(this.operation));
+    public int Isolated_Rejected() => Observe(this.isolatedFactory.RunValueTask(this.operation));
 
     [Benchmark]
     [BenchmarkCategory("Rejected")]
     public int HalfOpen_Probe()
     {
-        this.clock.Advance(BreakDuration);
-        return Observe(this.probePipeline.ExecuteAsync(this.failingOperation));
+        this.clock.Advance(OpenDuration);
+        return Observe(this.probeFactory.RunValueTask(this.failingOperation));
     }
 
-    private static ReliabilityPipeline NewPipeline(CircuitBreaker? breaker)
+    private static RetryTaskFactory NewFactory(CircuitBreaker? breaker)
     {
-        return new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new DoNotRetry(), CircuitBreaker = breaker });
+        return new RetryTaskFactory(new DoNotRetry(), AnyExceptionPolicy.Default) { CircuitBreaker = breaker };
     }
 
     // Every call completes synchronously, so the exception is read without a wait.
@@ -118,7 +119,7 @@ public class CircuitBreakerBenchmarks
         {
             return -1;
         }
-        catch (BrokenCircuitException)
+        catch (CircuitRejectedException)
         {
             return -2;
         }
