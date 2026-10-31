@@ -188,7 +188,7 @@ A factory has three kinds of method:
 |--------|-----------|-----------------------|-----------------------|
 | `Run` | `Func<CancellationToken, Task>` or `Func<CancellationToken, Task<T>>` | All | It throws the exception of the last attempt, with its original stack trace. |
 | `RunValueTask` | `Func<CancellationToken, ValueTask>` or `Func<CancellationToken, ValueTask<T>>` | All | It throws the exception of the last attempt, with its original stack trace. |
-| `StartNew` | A synchronous `Action` or `Func<T>`, as `Task.Factory.StartNew` takes | `Strategy`, `Policy` and `TimeProvider` only | The task faults with an `AggregateException` of the failures. See [StartNew](#startnew). |
+| `StartNew` | A synchronous `Action` (`RetryTaskFactory`) or `Func<T>` (`RetryTaskFactory<T>`), as `Task.Factory.StartNew` takes | `Strategy`, `Policy` and `TimeProvider` only | The task faults with an `AggregateException` of the failures. See [StartNew](#startnew). |
 
 Use `Run` for a method that returns a `Task` or a `Task<T>`. Use `RunValueTask` for a method that returns a `ValueTask` or a `ValueTask<T>`:
 
