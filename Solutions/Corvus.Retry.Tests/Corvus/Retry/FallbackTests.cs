@@ -15,11 +15,11 @@ using Corvus.Retry.Time;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 /// <summary>
-/// The fallback of a <see cref="ReliabilityPipeline{T}"/> is the outermost part of the pipeline: it gives a value for an
-/// exception that its policy accepts (including a <see cref="RetryTimeoutException"/> from the total timeout and a
-/// <see cref="BrokenCircuitException"/>) and for a result that <see cref="FallbackOptions{T}.ShouldFallbackResult"/>
-/// rejects, it awaits <see cref="FallbackOptions{T}.OnFallback"/> before <see cref="FallbackOptions{T}.Action"/>, and it
-/// never applies when the caller cancels.
+/// The <see cref="Fallback{T}"/> of a <see cref="RetryTaskFactory{T}"/> or a <see cref="HedgedTaskFactory{T}"/> is the
+/// outermost part of a call: it gives a value for an exception that its policy accepts (including a
+/// <see cref="RetryTimeoutException"/> from the total timeout and a <see cref="CircuitRejectedException"/>) and for a
+/// result that <see cref="Fallback{T}.AppliesToResult"/> rejects, it awaits <see cref="Fallback{T}.OnFallback"/> before
+/// <see cref="Fallback{T}.Action"/>, and it never applies when the caller cancels.
 /// </summary>
 [TestClass]
 public class FallbackTests
@@ -29,21 +29,21 @@ public class FallbackTests
     private static readonly TimeSpan WaitLimit = TimeSpan.FromSeconds(10);
 
     [TestMethod]
-    public async Task AfterTheLastRetryFails_ThePipelineReturnsTheFallbackValue()
+    public async Task AfterTheLastRetryFails_TheFactoryReturnsTheFallbackValue()
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new Count(3),
             Fallback = RecordingFallback(calls),
-        });
+        };
 
-        string result = await pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).ConfigureAwait(false);
+        string result = await factory.RunValueTask(_ => new ValueTask<string>(op.Invoke())).ConfigureAwait(false);
 
         Assert.AreEqual(FallbackValue, result);
         Assert.AreEqual(3, op.Invocations);
-        FallbackArgs<string> args = Assert.ContainsSingle(calls);
+        FallbackEventArgs<string> args = Assert.ContainsSingle(calls);
         Assert.AreSame(op.LastThrown, args.Exception);
         Assert.IsNull(args.Result);
     }
@@ -51,14 +51,14 @@ public class FallbackTests
     [TestMethod]
     public async Task WhenTheOperationSucceeds_TheFallbackDoesNotApply()
     {
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new Count(3),
             Fallback = RecordingFallback(calls),
-        });
+        };
 
-        ValueTask<string> call = pipeline.ExecuteAsync(_ => new ValueTask<string>("success"));
+        ValueTask<string> call = factory.RunValueTask(_ => new ValueTask<string>("success"));
 
         // An operation that completes synchronously gives a call that completes synchronously.
         Assert.IsTrue(call.IsCompletedSuccessfully);
@@ -71,28 +71,27 @@ public class FallbackTests
     {
         var log = new List<string>();
         var rejected = new Response(503, log);
-        FallbackArgs<Response>? received = null;
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        FallbackEventArgs<Response>? received = null;
+        var factory = new RetryTaskFactory<Response>
         {
             Strategy = new DoNotRetry(),
-            Fallback = new FallbackOptions<Response>
+            Fallback = new Fallback<Response>(args =>
             {
-                ShouldFallbackResult = r => r.StatusCode >= 500,
+                log.Add($"action, disposed: {args.Result!.Disposed}");
+                return new ValueTask<Response>(new Response(200, log));
+            })
+            {
+                AppliesToResult = r => r.StatusCode >= 500,
                 OnFallback = args =>
                 {
                     received = args;
                     log.Add($"on fallback, disposed: {args.Result!.Disposed}");
                     return ValueTask.CompletedTask;
                 },
-                Action = args =>
-                {
-                    log.Add($"action, disposed: {args.Result!.Disposed}");
-                    return new ValueTask<Response>(new Response(200, log));
-                },
             },
-        });
+        };
 
-        Response result = await pipeline.ExecuteAsync(_ => new ValueTask<Response>(rejected)).ConfigureAwait(false);
+        Response result = await factory.RunValueTask(_ => new ValueTask<Response>(rejected)).ConfigureAwait(false);
 
         // OnFallback can examine the rejected result, as OnRetry can. The action gets a result that is already disposed.
         Assert.AreEqual(200, result.StatusCode);
@@ -104,18 +103,18 @@ public class FallbackTests
     }
 
     [TestMethod]
-    public async Task AResultThatShouldFallbackResultAccepts_IsReturnedAndNotDisposed()
+    public async Task AResultThatAppliesToResultAccepts_IsReturnedAndNotDisposed()
     {
         var log = new List<string>();
         var ok = new Response(200, log);
-        var calls = new List<FallbackArgs<Response>>();
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        var calls = new List<FallbackEventArgs<Response>>();
+        var factory = new RetryTaskFactory<Response>
         {
             Strategy = new DoNotRetry(),
-            Fallback = RecordingFallback(calls, new Response(0, log)) with { ShouldFallbackResult = r => r.StatusCode >= 500 },
-        });
+            Fallback = RecordingFallback(calls, new Response(0, log), appliesToResult: r => r.StatusCode >= 500),
+        };
 
-        Response result = await pipeline.ExecuteAsync(_ => new ValueTask<Response>(ok)).ConfigureAwait(false);
+        Response result = await factory.RunValueTask(_ => new ValueTask<Response>(ok)).ConfigureAwait(false);
 
         Assert.AreSame(ok, result);
         Assert.IsFalse(ok.Disposed);
@@ -123,18 +122,18 @@ public class FallbackTests
     }
 
     [TestMethod]
-    public async Task WhenShouldFallbackResultIsNull_NoResultGetsTheFallbackValue()
+    public async Task WhenAppliesToResultIsNull_NoResultGetsTheFallbackValue()
     {
         var log = new List<string>();
         var serverError = new Response(503, log);
-        var calls = new List<FallbackArgs<Response>>();
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        var calls = new List<FallbackEventArgs<Response>>();
+        var factory = new RetryTaskFactory<Response>
         {
             Strategy = new DoNotRetry(),
             Fallback = RecordingFallback(calls, new Response(200, log)),
-        });
+        };
 
-        Response result = await pipeline.ExecuteAsync(_ => new ValueTask<Response>(serverError)).ConfigureAwait(false);
+        Response result = await factory.RunValueTask(_ => new ValueTask<Response>(serverError)).ConfigureAwait(false);
 
         Assert.AreSame(serverError, result);
         Assert.IsFalse(serverError.Disposed);
@@ -146,15 +145,15 @@ public class FallbackTests
     {
         var log = new List<string>();
         var responses = new List<Response>();
-        var calls = new List<FallbackArgs<Response>>();
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        var calls = new List<FallbackEventArgs<Response>>();
+        var factory = new RetryTaskFactory<Response>
         {
             Strategy = new Count(2),
-            ShouldRetryResult = r => r.StatusCode >= 500,
-            Fallback = RecordingFallback(calls, new Response(200, log)) with { ShouldFallbackResult = r => r.StatusCode >= 500 },
-        });
+            CanRetryResult = r => r.StatusCode >= 500,
+            Fallback = RecordingFallback(calls, new Response(200, log), appliesToResult: r => r.StatusCode >= 500),
+        };
 
-        Response result = await pipeline.ExecuteAsync(
+        Response result = await factory.RunValueTask(
             _ =>
             {
                 var response = new Response(503, log);
@@ -174,26 +173,26 @@ public class FallbackTests
     [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
-    public async Task WhenShouldFallbackResultThrows_TheCallerGetsThatExceptionAndTheResultIsDisposed(bool operationCompletesAsynchronously)
+    public async Task WhenAppliesToResultThrows_TheCallerGetsThatExceptionAndTheResultIsDisposed(bool operationCompletesAsynchronously)
     {
         var log = new List<string>();
         var result = new Response(503, log);
-        var failure = new FormatException("ShouldFallbackResult failed.");
-        var calls = new List<FallbackArgs<Response>>();
+        var failure = new FormatException("AppliesToResult failed.");
+        var calls = new List<FallbackEventArgs<Response>>();
         int actions = 0;
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        var factory = new RetryTaskFactory<Response>
         {
             Strategy = new DoNotRetry(),
-            Fallback = RecordingFallback(calls, new Response(200, log)) with
-            {
-                ShouldFallbackResult = _ => throw failure,
-                Action = _ =>
+            Fallback = RecordingFallback(
+                calls,
+                new Response(200, log),
+                appliesToResult: _ => throw failure,
+                action: _ =>
                 {
                     Interlocked.Increment(ref actions);
                     return new ValueTask<Response>(new Response(200, log));
-                },
-            },
-        });
+                }),
+        };
 
         async ValueTask<Response> OperationAsync(CancellationToken cancellationToken)
         {
@@ -206,7 +205,7 @@ public class FallbackTests
         }
 
         FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
-            () => pipeline.ExecuteAsync(OperationAsync).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+            () => factory.RunValueTask(OperationAsync).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
         Assert.AreSame(failure, thrown);
         Assert.IsTrue(result.Disposed);
@@ -215,21 +214,21 @@ public class FallbackTests
     }
 
     [TestMethod]
-    public async Task WhenShouldFallbackResultThrowsAndTheDisposalOfTheResultThrows_TheCallerGetsThePredicatesException()
+    public async Task WhenAppliesToResultThrowsAndTheDisposalOfTheResultThrows_TheCallerGetsThePredicatesException()
     {
         var log = new List<string>();
         var result = new Response(503, log) { DisposeFailure = new InvalidOperationException("Dispose failed.") };
-        var failure = new FormatException("ShouldFallbackResult failed.");
-        var calls = new List<FallbackArgs<Response>>();
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        var failure = new FormatException("AppliesToResult failed.");
+        var calls = new List<FallbackEventArgs<Response>>();
+        var factory = new RetryTaskFactory<Response>
         {
             Strategy = new DoNotRetry(),
-            Fallback = RecordingFallback(calls, new Response(200, log)) with { ShouldFallbackResult = _ => throw failure },
-        });
+            Fallback = RecordingFallback(calls, new Response(200, log), appliesToResult: _ => throw failure),
+        };
 
-        // The predicate's exception is the outcome of the call. The pipeline ignores the exception from the disposal.
+        // The predicate's exception is the outcome of the call. The factory ignores the exception from the disposal.
         FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<Response>(result)).AsTask()).ConfigureAwait(false);
+            () => factory.RunValueTask(_ => new ValueTask<Response>(result)).AsTask()).ConfigureAwait(false);
 
         Assert.AreSame(failure, thrown);
         Assert.IsTrue(result.Disposed);
@@ -242,26 +241,26 @@ public class FallbackTests
         var log = new List<string>();
         var disposeFailure = new InvalidOperationException("Dispose failed.");
         var result = new Response(503, log) { DisposeFailure = disposeFailure };
-        var calls = new List<FallbackArgs<Response>>();
+        var calls = new List<FallbackEventArgs<Response>>();
         int actions = 0;
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        var factory = new RetryTaskFactory<Response>
         {
             Strategy = new DoNotRetry(),
-            Fallback = RecordingFallback(calls, new Response(200, log)) with
-            {
-                ShouldFallbackResult = r => r.StatusCode >= 500,
-                Action = _ =>
+            Fallback = RecordingFallback(
+                calls,
+                new Response(200, log),
+                appliesToResult: r => r.StatusCode >= 500,
+                action: _ =>
                 {
                     Interlocked.Increment(ref actions);
                     return new ValueTask<Response>(new Response(200, log));
-                },
-            },
-        });
+                }),
+        };
 
-        // The pipeline disposes the rejected result after OnFallback and before the action. An exception from the
+        // The factory disposes the rejected result after OnFallback and before the action. An exception from the
         // disposal stops the call.
         InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<Response>(result)).AsTask()).ConfigureAwait(false);
+            () => factory.RunValueTask(_ => new ValueTask<Response>(result)).AsTask()).ConfigureAwait(false);
 
         Assert.AreSame(disposeFailure, thrown);
         Assert.AreSequenceEqual(new[] { "dispose 503" }, log);
@@ -278,25 +277,24 @@ public class FallbackTests
         var callbackFailure = new FormatException("OnFallback failed.");
         var rejected = new Response(503, log) { DisposeFailure = disposalThrows ? new InvalidOperationException("Dispose failed.") : null };
         int actions = 0;
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        var factory = new RetryTaskFactory<Response>
         {
             Strategy = new DoNotRetry(),
-            Fallback = new FallbackOptions<Response>
+            Fallback = new Fallback<Response>(_ =>
             {
-                ShouldFallbackResult = r => r.StatusCode >= 500,
+                Interlocked.Increment(ref actions);
+                return new ValueTask<Response>(new Response(200, log));
+            })
+            {
+                AppliesToResult = r => r.StatusCode >= 500,
                 OnFallback = _ => throw callbackFailure,
-                Action = _ =>
-                {
-                    Interlocked.Increment(ref actions);
-                    return new ValueTask<Response>(new Response(200, log));
-                },
             },
-        });
+        };
 
-        // The callback's exception stops the call. The caller does not get the result, so the pipeline disposes it, and
+        // The callback's exception stops the call. The caller does not get the result, so the factory disposes it, and
         // an exception from that disposal does not hide the callback's exception.
         FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<Response>(rejected)).AsTask()).ConfigureAwait(false);
+            () => factory.RunValueTask(_ => new ValueTask<Response>(rejected)).AsTask()).ConfigureAwait(false);
 
         Assert.AreSame(callbackFailure, thrown);
         Assert.IsTrue(rejected.Disposed);
@@ -310,17 +308,17 @@ public class FallbackTests
     {
         RecordingFakeTimeProvider fake = new();
         TimeSpan totalTimeout = TimeSpan.FromMilliseconds(100);
-        var calls = new List<FallbackArgs<string>>();
+        var calls = new List<FallbackEventArgs<string>>();
         var tokens = new List<CancellationToken>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new Count(3),
             TotalTimeout = totalTimeout,
             TimeProvider = fake,
             Fallback = RecordingFallback(calls),
-        });
+        };
 
-        Task<string> call = pipeline.ExecuteAsync(
+        Task<string> call = factory.RunValueTask(
             ct =>
             {
                 lock (tokens)
@@ -349,17 +347,17 @@ public class FallbackTests
     {
         RecordingFakeTimeProvider fake = new();
         TimeSpan attemptTimeout = TimeSpan.FromMilliseconds(50);
-        var calls = new List<FallbackArgs<string>>();
+        var calls = new List<FallbackEventArgs<string>>();
         var tokens = new List<CancellationToken>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new DoNotRetry(),
             AttemptTimeout = attemptTimeout,
             TimeProvider = fake,
             Fallback = RecordingFallback(calls),
-        });
+        };
 
-        Task<string> call = pipeline.ExecuteAsync(
+        Task<string> call = factory.RunValueTask(
             ct =>
             {
                 lock (tokens)
@@ -385,26 +383,26 @@ public class FallbackTests
     {
         RecordingFakeTimeProvider fake = new();
         TimeSpan breakDuration = TimeSpan.FromSeconds(30);
-        var breaker = new CircuitBreaker(new CircuitBreakerOptions { MinimumThroughput = 2, FailureRatio = 1, BreakDuration = breakDuration, TimeProvider = fake });
-        var opener = new ReliabilityPipeline(new ReliabilityPipelineOptions { Strategy = new DoNotRetry(), CircuitBreaker = breaker, TimeProvider = fake });
+        var breaker = new CircuitBreaker(failureRate: 1, minimumCalls: 2, openDuration: breakDuration, timeProvider: fake);
+        var opener = new RetryTaskFactory { Strategy = new DoNotRetry(), CircuitBreaker = breaker, TimeProvider = fake };
         for (int i = 0; i < 2; i++)
         {
             await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-                () => opener.ExecuteAsync<int>(_ => throw new InvalidOperationException("Failure")).AsTask()).ConfigureAwait(false);
+                () => opener.RunValueTask<int>(_ => throw new InvalidOperationException("Failure")).AsTask()).ConfigureAwait(false);
         }
 
         Assert.AreEqual(CircuitState.Open, breaker.State);
-        var calls = new List<FallbackArgs<string>>();
+        var calls = new List<FallbackEventArgs<string>>();
         int invocations = 0;
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new DoNotRetry(),
             CircuitBreaker = breaker,
             TimeProvider = fake,
             Fallback = RecordingFallback(calls),
-        });
+        };
 
-        string result = await pipeline.ExecuteAsync(
+        string result = await factory.RunValueTask(
             _ =>
             {
                 Interlocked.Increment(ref invocations);
@@ -414,31 +412,31 @@ public class FallbackTests
         Assert.AreEqual(FallbackValue, result);
         Assert.AreEqual(0, invocations);
         Exception received = Assert.ContainsSingle(calls).Exception!;
-        Assert.AreEqual(typeof(BrokenCircuitException), received.GetType());
+        Assert.AreEqual(typeof(CircuitRejectedException), received.GetType());
 
         // The breaker of the options made the exception: no time has passed, so the whole break remains.
-        Assert.AreEqual(breakDuration, ((BrokenCircuitException)received).RetryAfter);
+        Assert.AreEqual(breakDuration, ((CircuitRejectedException)received).RetryAfter);
     }
 
     [TestMethod]
     public async Task AnIsolatedCircuitGivesTheFallbackValue()
     {
-        var breaker = new CircuitBreaker(new CircuitBreakerOptions());
+        var breaker = new CircuitBreaker();
         breaker.Isolate();
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new DoNotRetry(),
             CircuitBreaker = breaker,
             Fallback = RecordingFallback(calls),
-        });
+        };
 
-        string result = await pipeline.ExecuteAsync(_ => new ValueTask<string>("success")).ConfigureAwait(false);
+        string result = await factory.RunValueTask(_ => new ValueTask<string>("success")).ConfigureAwait(false);
 
         Assert.AreEqual(FallbackValue, result);
         Exception received = Assert.ContainsSingle(calls).Exception!;
-        Assert.AreEqual(typeof(IsolatedCircuitException), received.GetType());
-        Assert.IsNull(((IsolatedCircuitException)received).RetryAfter);
+        Assert.AreEqual(typeof(CircuitIsolatedException), received.GetType());
+        Assert.IsNull(((CircuitIsolatedException)received).RetryAfter);
         Assert.AreEqual(CircuitState.Isolated, breaker.State);
     }
 
@@ -446,22 +444,21 @@ public class FallbackTests
     public async Task ACancellationByTheCaller_ThrowsTheOperationCanceledExceptionAndDoesNotCallTheFallback()
     {
         using CancellationTokenSource cts = new();
-        var calls = new List<FallbackArgs<string>>();
+        var calls = new List<FallbackEventArgs<string>>();
         int actions = 0;
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new Count(3),
-            Fallback = RecordingFallback(calls) with
-            {
-                Action = _ =>
+            Fallback = RecordingFallback(
+                calls,
+                action: _ =>
                 {
                     Interlocked.Increment(ref actions);
                     return new ValueTask<string>(FallbackValue);
-                },
-            },
-        });
+                }),
+        };
 
-        Task<string> call = pipeline.ExecuteAsync(NeverCompletesAsync, cts.Token).AsTask();
+        Task<string> call = factory.RunValueTask(NeverCompletesAsync, cts.Token).AsTask();
 
         Assert.IsFalse(call.IsCompleted);
         await cts.CancelAsync().ConfigureAwait(false);
@@ -478,17 +475,17 @@ public class FallbackTests
     {
         RecordingFakeTimeProvider fake = new();
         using CancellationTokenSource cts = new();
-        var calls = new List<FallbackArgs<string>>();
+        var calls = new List<FallbackEventArgs<string>>();
         var tokens = new List<CancellationToken>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new Count(3),
             TotalTimeout = TimeSpan.FromMilliseconds(100),
             TimeProvider = fake,
             Fallback = RecordingFallback(calls),
-        });
+        };
 
-        Task<string> call = pipeline.ExecuteAsync(
+        Task<string> call = factory.RunValueTask(
             ct =>
             {
                 lock (tokens)
@@ -517,30 +514,29 @@ public class FallbackTests
     {
         using CancellationTokenSource cts = new();
         var op = new FlakyOperation(FlakyOperation.AlwaysFails, attempt => new OperationCanceledException($"Attempt {attempt} cancelled itself"));
-        var calls = new List<FallbackArgs<string>>();
+        var calls = new List<FallbackEventArgs<string>>();
         var stateChangeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseStateChange = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new Count(2),
-            CircuitBreaker = new CircuitBreaker(new CircuitBreakerOptions
-            {
-                // The failure of the second attempt opens the circuit, and the pipeline awaits the callback.
-                MinimumThroughput = 2,
-                FailureRatio = 1,
-                OnStateChanged = change =>
+
+            // The failure of the second attempt opens the circuit, and the factory awaits the callback.
+            CircuitBreaker = new CircuitBreaker(
+                failureRate: 1,
+                minimumCalls: 2,
+                onStateChanged: change =>
                 {
                     stateChangeStarted.SetResult();
                     return new ValueTask(releaseStateChange.Task);
-                },
-            }),
+                }),
             Fallback = RecordingFallback(calls),
-        });
+        };
 
-        Task<string> call = pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke()), cts.Token).AsTask();
+        Task<string> call = factory.RunValueTask(_ => new ValueTask<string>(op.Invoke()), cts.Token).AsTask();
 
         // The last attempt cancelled itself before the caller cancelled, so the engine makes that cancellation the
-        // outcome of the attempts. The caller cancels while the pipeline awaits the callback.
+        // outcome of the attempts. The caller cancels while the factory awaits the callback.
         await stateChangeStarted.Task.WaitAsync(WaitLimit).ConfigureAwait(false);
         await cts.CancelAsync().ConfigureAwait(false);
         releaseStateChange.SetResult();
@@ -557,12 +553,12 @@ public class FallbackTests
     {
         using CancellationTokenSource cts = new();
         await cts.CancelAsync().ConfigureAwait(false);
-        var calls = new List<FallbackArgs<string>>();
+        var calls = new List<FallbackEventArgs<string>>();
         int invocations = 0;
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string> { Fallback = RecordingFallback(calls) });
+        var factory = new RetryTaskFactory<string> { Fallback = RecordingFallback(calls) };
 
         OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
-            () => pipeline.ExecuteAsync(
+            () => factory.RunValueTask(
                 _ =>
                 {
                     Interlocked.Increment(ref invocations);
@@ -579,14 +575,14 @@ public class FallbackTests
     public async Task AnOperationCanceledExceptionThatTheCallerDidNotCause_GivesTheFallbackValue()
     {
         var cancellation = new OperationCanceledException("Not caused by the caller");
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new DoNotRetry(),
             Fallback = RecordingFallback(calls),
-        });
+        };
 
-        string result = await pipeline.ExecuteAsync(_ => throw cancellation).ConfigureAwait(false);
+        string result = await factory.RunValueTask(_ => throw cancellation).ConfigureAwait(false);
 
         Assert.AreEqual(FallbackValue, result);
         Assert.AreSame(cancellation, Assert.ContainsSingle(calls).Exception);
@@ -597,15 +593,15 @@ public class FallbackTests
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
         var policy = new RecordingRetryPolicy(false);
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new DoNotRetry(),
-            Fallback = RecordingFallback(calls) with { Policy = policy },
-        });
+            Fallback = RecordingFallback(calls, policy: policy),
+        };
 
         InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask()).ConfigureAwait(false);
+            () => factory.RunValueTask(_ => new ValueTask<string>(op.Invoke())).AsTask()).ConfigureAwait(false);
 
         Assert.AreSame(op.LastThrown, thrown);
         Assert.AreSame(thrown, Assert.ContainsSingle(policy.Consulted));
@@ -618,14 +614,14 @@ public class FallbackTests
         var op = new FlakyOperation(
             FlakyOperation.AlwaysFails,
             attempt => new AggregateException(new HttpRequestException($"Attempt {attempt} failed")));
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new Count(2),
-            Fallback = RecordingFallback(calls) with { Policy = RetryPolicies.Handle<HttpRequestException>() },
-        });
+            Fallback = RecordingFallback(calls, policy: RetryPolicies.For<HttpRequestException>()),
+        };
 
-        string result = await pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).ConfigureAwait(false);
+        string result = await factory.RunValueTask(_ => new ValueTask<string>(op.Invoke())).ConfigureAwait(false);
 
         // The policy accepts the exception that the operation threw inside the aggregate. The fallback receives the
         // aggregate itself.
@@ -638,15 +634,15 @@ public class FallbackTests
     public async Task WhenTheFallbackPolicyRefusesOneExceptionInsideAnAggregateException_TheAggregatePropagates()
     {
         var aggregate = new AggregateException(new HttpRequestException("Accepted"), new InvalidOperationException("Refused"));
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new DoNotRetry(),
-            Fallback = RecordingFallback(calls) with { Policy = RetryPolicies.Handle<HttpRequestException>() },
-        });
+            Fallback = RecordingFallback(calls, policy: RetryPolicies.For<HttpRequestException>()),
+        };
 
         AggregateException thrown = await Assert.ThrowsExactlyAsync<AggregateException>(
-            () => pipeline.ExecuteAsync(_ => throw aggregate).AsTask()).ConfigureAwait(false);
+            () => factory.RunValueTask(_ => throw aggregate).AsTask()).ConfigureAwait(false);
 
         Assert.AreSame(aggregate, thrown);
         Assert.IsEmpty(calls);
@@ -657,15 +653,15 @@ public class FallbackTests
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
         var policyException = new FormatException("The policy failed.");
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new DoNotRetry(),
-            Fallback = RecordingFallback(calls) with { Policy = RetryPolicies.FromPredicate(_ => throw policyException) },
-        });
+            Fallback = RecordingFallback(calls, policy: RetryPolicies.FromPredicate(_ => throw policyException)),
+        };
 
         FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask()).ConfigureAwait(false);
+            () => factory.RunValueTask(_ => new ValueTask<string>(op.Invoke())).AsTask()).ConfigureAwait(false);
 
         Assert.AreSame(policyException, thrown);
         Assert.IsEmpty(calls);
@@ -675,15 +671,15 @@ public class FallbackTests
     public async Task TheFallbackPolicyIsIndependentOfTheRetryPolicy()
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails, attempt => new FormatException($"Attempt {attempt} failed"));
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new Count(3),
-            Policy = RetryPolicies.Handle<InvalidOperationException>(),
-            Fallback = RecordingFallback(calls) with { Policy = RetryPolicies.Handle<FormatException>() },
-        });
+            Policy = RetryPolicies.For<InvalidOperationException>(),
+            Fallback = RecordingFallback(calls, policy: RetryPolicies.For<FormatException>()),
+        };
 
-        string result = await pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).ConfigureAwait(false);
+        string result = await factory.RunValueTask(_ => new ValueTask<string>(op.Invoke())).ConfigureAwait(false);
 
         // The retry policy refuses the exception, so there is one attempt. The fallback policy accepts it.
         Assert.AreEqual(FallbackValue, result);
@@ -695,14 +691,14 @@ public class FallbackTests
     public async Task AnExceptionFromTheAction_Propagates()
     {
         var actionFailure = new FormatException("The action failed");
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new DoNotRetry(),
-            Fallback = new FallbackOptions<string> { Action = _ => throw actionFailure },
-        });
+            Fallback = new Fallback<string>(_ => throw actionFailure),
+        };
 
         FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
-            () => pipeline.ExecuteAsync(_ => throw new InvalidOperationException("Failure")).AsTask()).ConfigureAwait(false);
+            () => factory.RunValueTask(_ => throw new InvalidOperationException("Failure")).AsTask()).ConfigureAwait(false);
 
         Assert.AreSame(actionFailure, thrown);
     }
@@ -712,22 +708,21 @@ public class FallbackTests
     {
         var callbackFailure = new FormatException("The callback failed");
         int actions = 0;
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new DoNotRetry(),
-            Fallback = new FallbackOptions<string>
+            Fallback = new Fallback<string>(_ =>
+            {
+                Interlocked.Increment(ref actions);
+                return new ValueTask<string>(FallbackValue);
+            })
             {
                 OnFallback = _ => throw callbackFailure,
-                Action = _ =>
-                {
-                    Interlocked.Increment(ref actions);
-                    return new ValueTask<string>(FallbackValue);
-                },
             },
-        });
+        };
 
         FormatException thrown = await Assert.ThrowsExactlyAsync<FormatException>(
-            () => pipeline.ExecuteAsync(_ => throw new InvalidOperationException("Failure")).AsTask()).ConfigureAwait(false);
+            () => factory.RunValueTask(_ => throw new InvalidOperationException("Failure")).AsTask()).ConfigureAwait(false);
 
         Assert.AreSame(callbackFailure, thrown);
         Assert.AreEqual(0, actions);
@@ -738,10 +733,18 @@ public class FallbackTests
     {
         var onFallbackCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var log = new List<string>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new DoNotRetry(),
-            Fallback = new FallbackOptions<string>
+            Fallback = new Fallback<string>(_ =>
+            {
+                lock (log)
+                {
+                    log.Add("action");
+                }
+
+                return new ValueTask<string>(FallbackValue);
+            })
             {
                 OnFallback = _ =>
                 {
@@ -752,19 +755,10 @@ public class FallbackTests
 
                     return new ValueTask(onFallbackCompletion.Task);
                 },
-                Action = _ =>
-                {
-                    lock (log)
-                    {
-                        log.Add("action");
-                    }
-
-                    return new ValueTask<string>(FallbackValue);
-                },
             },
-        });
+        };
 
-        Task<string> call = pipeline.ExecuteAsync(_ => throw new InvalidOperationException("Failure")).AsTask();
+        Task<string> call = factory.RunValueTask(_ => throw new InvalidOperationException("Failure")).AsTask();
 
         Assert.IsFalse(call.IsCompleted);
         lock (log)
@@ -782,24 +776,24 @@ public class FallbackTests
     public async Task OnFallbackAndTheActionReceiveTheCallersToken()
     {
         using CancellationTokenSource cts = new();
-        var calls = new List<FallbackArgs<string>>();
+        var calls = new List<FallbackEventArgs<string>>();
         CancellationToken actionToken = default;
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new DoNotRetry(),
             AttemptTimeout = TimeSpan.FromHours(1),
             TotalTimeout = TimeSpan.FromHours(1),
-            Fallback = RecordingFallback(calls) with
-            {
-                Action = args =>
+            TimeProvider = new RecordingFakeTimeProvider(),
+            Fallback = RecordingFallback(
+                calls,
+                action: args =>
                 {
                     actionToken = args.CancellationToken;
                     return new ValueTask<string>(FallbackValue);
-                },
-            },
-        });
+                }),
+        };
 
-        string result = await pipeline.ExecuteAsync(_ => throw new InvalidOperationException("Failure"), cts.Token).ConfigureAwait(false);
+        string result = await factory.RunValueTask(_ => throw new InvalidOperationException("Failure"), cts.Token).ConfigureAwait(false);
 
         Assert.AreEqual(FallbackValue, result);
         Assert.AreEqual(cts.Token, Assert.ContainsSingle(calls).CancellationToken);
@@ -812,26 +806,27 @@ public class FallbackTests
         using CancellationTokenSource cts = new();
         var log = new List<string>();
         var rejected = new Response(503, log);
-        var onFallbackCalls = new List<FallbackArgs<Response>>();
-        var actionCalls = new List<FallbackArgs<Response>>();
+        var onFallbackCalls = new List<FallbackEventArgs<Response>>();
+        var actionCalls = new List<FallbackEventArgs<Response>>();
         CancellationToken operationToken = default;
-        var pipeline = new ReliabilityPipeline<Response>(new ReliabilityPipelineOptions<Response>
+        var factory = new RetryTaskFactory<Response>
         {
             Strategy = new DoNotRetry(),
             AttemptTimeout = TimeSpan.FromHours(1),
             TotalTimeout = TimeSpan.FromHours(1),
-            Fallback = RecordingFallback(onFallbackCalls, new Response(0, log)) with
-            {
-                ShouldFallbackResult = r => r.StatusCode >= 500,
-                Action = args =>
+            TimeProvider = new RecordingFakeTimeProvider(),
+            Fallback = RecordingFallback(
+                onFallbackCalls,
+                new Response(0, log),
+                appliesToResult: r => r.StatusCode >= 500,
+                action: args =>
                 {
                     actionCalls.Add(args);
                     return new ValueTask<Response>(new Response(200, log));
-                },
-            },
-        });
+                }),
+        };
 
-        Response result = await pipeline.ExecuteAsync(
+        Response result = await factory.RunValueTask(
             ct =>
             {
                 operationToken = ct;
@@ -843,7 +838,7 @@ public class FallbackTests
 
         // The operation received a token of the timeouts, but the fallback receives the caller's token.
         Assert.AreNotEqual(cts.Token, operationToken);
-        foreach (FallbackArgs<Response> args in new[] { Assert.ContainsSingle(onFallbackCalls), Assert.ContainsSingle(actionCalls) })
+        foreach (FallbackEventArgs<Response> args in new[] { Assert.ContainsSingle(onFallbackCalls), Assert.ContainsSingle(actionCalls) })
         {
             Assert.AreSame(rejected, args.Result);
             Assert.IsNull(args.Exception);
@@ -852,13 +847,13 @@ public class FallbackTests
     }
 
     [TestMethod]
-    public async Task WhenFallbackIsNull_ThePipelineThrowsTheException()
+    public async Task WhenFallbackIsNull_TheFactoryThrowsTheException()
     {
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string> { Strategy = new Count(2), Fallback = null });
+        var factory = new RetryTaskFactory<string> { Strategy = new Count(2), Fallback = null };
 
         InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-            () => pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask()).ConfigureAwait(false);
+            () => factory.RunValueTask(_ => new ValueTask<string>(op.Invoke())).AsTask()).ConfigureAwait(false);
 
         Assert.AreSame(op.LastThrown, thrown);
         Assert.AreEqual(2, op.Invocations);
@@ -867,135 +862,143 @@ public class FallbackTests
     [TestMethod]
     public void ThePolicyOfTheFallbackIsAnyExceptionPolicyByDefault()
     {
-        var fallback = new FallbackOptions<string> { Action = _ => new ValueTask<string>(FallbackValue) };
+        var fallback = new Fallback<string>(_ => new ValueTask<string>(FallbackValue));
 
         Assert.AreSame(AnyExceptionPolicy.Default, fallback.Policy);
-        Assert.IsNull(fallback.ShouldFallbackResult);
+        Assert.IsNull(fallback.AppliesToResult);
         Assert.IsNull(fallback.OnFallback);
     }
 
     [TestMethod]
-    public void TheConstructorRejectsAFallbackWithANullAction()
+    public void TheConstructorOfTheFallbackRejectsANullAction()
     {
-        var options = new ReliabilityPipelineOptions<string> { Fallback = new FallbackOptions<string> { Action = null! } };
+        ArgumentNullException thrown = Assert.ThrowsExactly<ArgumentNullException>(() => new Fallback<string>(null!));
 
-        ArgumentNullException thrown = Assert.ThrowsExactly<ArgumentNullException>(() => new ReliabilityPipeline<string>(options));
-
-        Assert.AreEqual("Fallback", thrown.ParamName);
+        Assert.AreEqual("action", thrown.ParamName);
     }
 
     [TestMethod]
-    public void TheConstructorRejectsAFallbackWithANullPolicy()
+    public void ThePolicyOfTheFallbackRejectsNull()
     {
-        var options = new ReliabilityPipelineOptions<string>
-        {
-            Fallback = new FallbackOptions<string> { Action = _ => new ValueTask<string>(FallbackValue), Policy = null! },
-        };
+        ArgumentNullException thrown = Assert.ThrowsExactly<ArgumentNullException>(
+            () => new Fallback<string>(_ => new ValueTask<string>(FallbackValue)) { Policy = null! });
 
-        ArgumentNullException thrown = Assert.ThrowsExactly<ArgumentNullException>(() => new ReliabilityPipeline<string>(options));
+        Assert.AreEqual("Policy", thrown.ParamName);
+    }
 
-        Assert.AreEqual("Fallback", thrown.ParamName);
+    [TestMethod]
+    public void TheFallbackKeepsItsActionAndSettings()
+    {
+        Func<FallbackEventArgs<string>, ValueTask<string>> action = _ => new ValueTask<string>(FallbackValue);
+        Func<string, bool> appliesToResult = r => r.Length == 0;
+        Func<FallbackEventArgs<string>, ValueTask> onFallback = _ => ValueTask.CompletedTask;
+        IRetryPolicy policy = RetryPolicies.For<TimeoutException>();
+
+        var fallback = new Fallback<string>(action) { AppliesToResult = appliesToResult, OnFallback = onFallback, Policy = policy };
+
+        Assert.AreSame(action, fallback.Action);
+        Assert.AreSame(appliesToResult, fallback.AppliesToResult);
+        Assert.AreSame(onFallback, fallback.OnFallback);
+        Assert.AreSame(policy, fallback.Policy);
     }
 
     [TestMethod]
     public async Task AnExceptionFromOnRetry_PropagatesAndTheFallbackIsNotCalled()
     {
         var callbackException = new FormatException("OnRetry failed.");
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new Count(3),
             OnRetry = _ => throw callbackException,
             Fallback = RecordingFallback(calls),
-        });
+        };
 
         await AssertCallbackExceptionPropagatesAsync(
-            pipeline, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
+            factory, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
     }
 
     [TestMethod]
-    public async Task AnExceptionFromShouldRetryResult_PropagatesAndTheFallbackIsNotCalled()
+    public async Task AnExceptionFromCanRetryResult_PropagatesAndTheFallbackIsNotCalled()
     {
-        var callbackException = new FormatException("ShouldRetryResult failed.");
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var callbackException = new FormatException("CanRetryResult failed.");
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new Count(3),
-            ShouldRetryResult = _ => throw callbackException,
+            CanRetryResult = _ => throw callbackException,
             Fallback = RecordingFallback(calls),
-        });
+        };
 
         await AssertCallbackExceptionPropagatesAsync(
-            pipeline, _ => new ValueTask<string>("success"), callbackException, calls).ConfigureAwait(false);
+            factory, _ => new ValueTask<string>("success"), callbackException, calls).ConfigureAwait(false);
     }
 
     [TestMethod]
     public async Task AnExceptionFromTheStrategy_PropagatesAndTheFallbackIsNotCalled()
     {
         var callbackException = new FormatException("The strategy failed.");
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = RetryStrategies.FromDelegate(_ => throw callbackException),
             Fallback = RecordingFallback(calls),
-        });
+        };
 
         await AssertCallbackExceptionPropagatesAsync(
-            pipeline, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
+            factory, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
     }
 
     [TestMethod]
     public async Task AnExceptionFromTheRetryPolicy_PropagatesAndTheFallbackIsNotCalled()
     {
         var callbackException = new FormatException("The retry policy failed.");
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new Count(3),
             Policy = RetryPolicies.FromPredicate(_ => throw callbackException),
             Fallback = RecordingFallback(calls),
-        });
+        };
 
         await AssertCallbackExceptionPropagatesAsync(
-            pipeline, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
+            factory, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
     }
 
     [TestMethod]
     public async Task AnExceptionFromThePolicyOfTheCircuitBreaker_PropagatesAndTheFallbackIsNotCalled()
     {
         var callbackException = new FormatException("The breaker policy failed.");
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new DoNotRetry(),
-            CircuitBreaker = new CircuitBreaker(new CircuitBreakerOptions { Policy = RetryPolicies.FromPredicate(_ => throw callbackException) }),
+            CircuitBreaker = new CircuitBreaker(policy: RetryPolicies.FromPredicate(_ => throw callbackException)),
             Fallback = RecordingFallback(calls),
-        });
+        };
 
         await AssertCallbackExceptionPropagatesAsync(
-            pipeline, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
+            factory, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
     }
 
     [TestMethod]
     public async Task AnExceptionFromTheStateChangeCallbackOfTheCircuitBreaker_PropagatesAndTheFallbackIsNotCalled()
     {
         var callbackException = new FormatException("OnStateChanged failed.");
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             // The second failed attempt opens the circuit.
             Strategy = new Count(2),
-            CircuitBreaker = new CircuitBreaker(new CircuitBreakerOptions
-            {
-                MinimumThroughput = 2,
-                FailureRatio = 1,
-                OnStateChanged = change => change.To == CircuitState.Open ? throw callbackException : ValueTask.CompletedTask,
-            }),
+            CircuitBreaker = new CircuitBreaker(
+                failureRate: 1,
+                minimumCalls: 2,
+                onStateChanged: change => change.To == CircuitState.Open ? throw callbackException : ValueTask.CompletedTask),
             Fallback = RecordingFallback(calls),
-        });
+        };
 
         await AssertCallbackExceptionPropagatesAsync(
-            pipeline, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
+            factory, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
     }
 
     [TestMethod]
@@ -1004,35 +1007,33 @@ public class FallbackTests
         RecordingFakeTimeProvider fake = new();
         TimeSpan breakDuration = TimeSpan.FromSeconds(30);
         var callbackException = new FormatException("OnStateChanged failed.");
-        var calls = new List<FallbackArgs<string>>();
+        var calls = new List<FallbackEventArgs<string>>();
         int invocations = 0;
-        var breaker = new CircuitBreaker(new CircuitBreakerOptions
-        {
-            MinimumThroughput = 2,
-            FailureRatio = 1,
-            BreakDuration = breakDuration,
-            TimeProvider = fake,
-            OnStateChanged = change => change.To == CircuitState.HalfOpen ? throw callbackException : ValueTask.CompletedTask,
-        });
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var breaker = new CircuitBreaker(
+            failureRate: 1,
+            minimumCalls: 2,
+            openDuration: breakDuration,
+            onStateChanged: change => change.To == CircuitState.HalfOpen ? throw callbackException : ValueTask.CompletedTask,
+            timeProvider: fake);
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new DoNotRetry(),
             CircuitBreaker = breaker,
             TimeProvider = fake,
             Fallback = RecordingFallback(calls),
-        });
+        };
 
         // Two failed calls open the circuit. The fallback gives a value for each.
         for (int i = 0; i < 2; i++)
         {
-            Assert.AreEqual(FallbackValue, await pipeline.ExecuteAsync(_ => throw new InvalidOperationException("Failure")).ConfigureAwait(false));
+            Assert.AreEqual(FallbackValue, await factory.RunValueTask(_ => throw new InvalidOperationException("Failure")).ConfigureAwait(false));
         }
 
         Assert.AreEqual(CircuitState.Open, breaker.State);
         fake.Advance(breakDuration);
 
         Exception thrown = await Assert.ThrowsAsync<Exception>(
-            () => pipeline.ExecuteAsync(
+            () => factory.RunValueTask(
                 _ =>
                 {
                     Interlocked.Increment(ref invocations);
@@ -1048,59 +1049,57 @@ public class FallbackTests
     [TestMethod]
     public async Task AnExceptionFromOnHedging_PropagatesAndTheFallbackIsNotCalled()
     {
-        var callbackException = new FormatException("OnHedging failed.");
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var callbackException = new FormatException("OnHedgedAttempt failed.");
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new HedgedTaskFactory<string>(1, TimeSpan.Zero)
         {
-            Hedging = new HedgingOptions { MaxHedgedAttempts = 1, Delay = TimeSpan.Zero, OnHedging = _ => throw callbackException },
+            OnHedgedAttempt = _ => throw callbackException,
             Fallback = RecordingFallback(calls),
-        });
+        };
 
         await AssertCallbackExceptionPropagatesAsync(
-            pipeline, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
+            factory, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
     }
 
     [TestMethod]
     public async Task AnExceptionFromTheHedgingPolicy_PropagatesAndTheFallbackIsNotCalled()
     {
         var callbackException = new FormatException("The hedging policy failed.");
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new HedgedTaskFactory<string>(1, TimeSpan.Zero)
         {
-            Hedging = new HedgingOptions { MaxHedgedAttempts = 1, Delay = TimeSpan.Zero, Policy = RetryPolicies.FromPredicate(_ => throw callbackException) },
+            Policy = RetryPolicies.FromPredicate(_ => throw callbackException),
             Fallback = RecordingFallback(calls),
-        });
+        };
 
         await AssertCallbackExceptionPropagatesAsync(
-            pipeline, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
+            factory, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
     }
 
     [TestMethod]
-    public async Task AnExceptionFromTheHedgingActionGenerator_PropagatesAndTheFallbackIsNotCalled()
+    public async Task AnExceptionFromOperationForAttempt_PropagatesAndTheFallbackIsNotCalled()
     {
-        var callbackException = new FormatException("HedgingActionGenerator failed.");
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var callbackException = new FormatException("OperationForAttempt failed.");
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new HedgedTaskFactory<string>(1, TimeSpan.Zero)
         {
-            Hedging = new HedgingOptions { MaxHedgedAttempts = 1, Delay = TimeSpan.Zero },
-            HedgingActionGenerator = attempt => attempt == 1 ? null : throw callbackException,
+            OperationForAttempt = attempt => attempt == 1 ? null : throw callbackException,
             Fallback = RecordingFallback(calls),
-        });
+        };
 
         await AssertCallbackExceptionPropagatesAsync(
-            pipeline, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
+            factory, _ => throw new InvalidOperationException("Failure"), callbackException, calls).ConfigureAwait(false);
     }
 
     [TestMethod]
     public async Task WithHedging_TheFallbackReceivesTheExceptionOfTheLastAttempt()
     {
-        var calls = new List<FallbackArgs<string>>();
+        var calls = new List<FallbackEventArgs<string>>();
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var factory = new HedgedTaskFactory<string>(1, TimeSpan.Zero)
         {
-            Hedging = new HedgingOptions { MaxHedgedAttempts = 1, Delay = TimeSpan.Zero },
             Fallback = RecordingFallback(calls),
-        });
+        };
 
         // The first attempt fails synchronously, so the engine starts the second at once. The second fails only after
         // the engine awaits it, so it is the last attempt to fail.
@@ -1116,7 +1115,7 @@ public class FallbackTests
             }
         }
 
-        string result = await pipeline.ExecuteAsync(OperationAsync).AsTask().WaitAsync(WaitLimit).ConfigureAwait(false);
+        string result = await factory.Run(ct => OperationAsync(ct).AsTask()).WaitAsync(WaitLimit).ConfigureAwait(false);
 
         Assert.AreEqual(FallbackValue, result);
         Assert.HasCount(2, op.Thrown);
@@ -1129,16 +1128,16 @@ public class FallbackTests
     {
         RecordingFakeTimeProvider fake = new();
         TimeSpan attemptTimeout = TimeSpan.FromMilliseconds(50);
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new DoNotRetry(),
             AttemptTimeout = attemptTimeout,
             TimeProvider = fake,
-            Fallback = RecordingFallback(calls) with { Policy = RetryPolicies.Handle<InvalidOperationException>() },
-        });
+            Fallback = RecordingFallback(calls, policy: RetryPolicies.For<InvalidOperationException>()),
+        };
 
-        Task<string> call = pipeline.ExecuteAsync(NeverCompletesAsync).AsTask();
+        Task<string> call = factory.RunValueTask(NeverCompletesAsync).AsTask();
 
         Assert.IsFalse(call.IsCompleted);
         fake.Advance(attemptTimeout);
@@ -1149,28 +1148,28 @@ public class FallbackTests
     }
 
     [TestMethod]
-    public async Task AFallbackPolicyThatHandlesOnlyInvalidOperationException_LetsABrokenCircuitExceptionPropagate()
+    public async Task AFallbackPolicyThatHandlesOnlyInvalidOperationException_LetsACircuitRejectedExceptionPropagate()
     {
-        var breaker = new CircuitBreaker(new CircuitBreakerOptions { MinimumThroughput = 2, FailureRatio = 1 });
-        var calls = new List<FallbackArgs<string>>();
+        var breaker = new CircuitBreaker(failureRate: 1, minimumCalls: 2);
+        var calls = new List<FallbackEventArgs<string>>();
         int invocations = 0;
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new DoNotRetry(),
             CircuitBreaker = breaker,
-            Fallback = RecordingFallback(calls) with { Policy = RetryPolicies.Handle<InvalidOperationException>() },
-        });
+            Fallback = RecordingFallback(calls, policy: RetryPolicies.For<InvalidOperationException>()),
+        };
 
         // Two calls fail, the policy of the fallback accepts each failure, and the failures open the circuit.
         for (int i = 0; i < 2; i++)
         {
-            Assert.AreEqual(FallbackValue, await pipeline.ExecuteAsync(_ => throw new InvalidOperationException("Failure")).ConfigureAwait(false));
+            Assert.AreEqual(FallbackValue, await factory.RunValueTask(_ => throw new InvalidOperationException("Failure")).ConfigureAwait(false));
         }
 
         Assert.AreEqual(CircuitState.Open, breaker.State);
 
-        BrokenCircuitException thrown = await Assert.ThrowsExactlyAsync<BrokenCircuitException>(
-            () => pipeline.ExecuteAsync(
+        CircuitRejectedException thrown = await Assert.ThrowsExactlyAsync<CircuitRejectedException>(
+            () => factory.RunValueTask(
                 _ =>
                 {
                     Interlocked.Increment(ref invocations);
@@ -1187,17 +1186,17 @@ public class FallbackTests
     {
         RecordingFakeTimeProvider fake = new();
         TimeSpan totalTimeout = TimeSpan.FromSeconds(1);
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = RetryStrategies.FromDelegate(_ => TimeSpan.FromSeconds(10)),
             TotalTimeout = totalTimeout,
             TimeProvider = fake,
             Fallback = RecordingFallback(calls),
-        });
+        };
 
         var op = new FlakyOperation(FlakyOperation.AlwaysFails);
-        Task<string> call = pipeline.ExecuteAsync(_ => new ValueTask<string>(op.Invoke())).AsTask();
+        Task<string> call = factory.RunValueTask(_ => new ValueTask<string>(op.Invoke())).AsTask();
 
         Assert.IsFalse(call.IsCompleted);
         fake.Advance(totalTimeout);
@@ -1215,16 +1214,15 @@ public class FallbackTests
     {
         RecordingFakeTimeProvider fake = new();
         TimeSpan totalTimeout = TimeSpan.FromSeconds(1);
-        var calls = new List<FallbackArgs<string>>();
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var calls = new List<FallbackEventArgs<string>>();
+        var factory = new HedgedTaskFactory<string>(1, TimeSpan.FromSeconds(10))
         {
-            Hedging = new HedgingOptions { MaxHedgedAttempts = 1, Delay = TimeSpan.FromSeconds(10) },
             TotalTimeout = totalTimeout,
             TimeProvider = fake,
             Fallback = RecordingFallback(calls),
-        });
+        };
 
-        Task<string> call = pipeline.ExecuteAsync(NeverCompletesAsync).AsTask();
+        Task<string> call = factory.Run(ct => NeverCompletesAsync(ct).AsTask());
 
         Assert.IsFalse(call.IsCompleted);
         fake.Advance(totalTimeout);
@@ -1242,7 +1240,7 @@ public class FallbackTests
     [DataRow(false, false)]
     [DataRow(true, true)]
     [DataRow(false, true)]
-    public async Task WithContinueOnCapturedContext_TheGenericPipelineAndItsFallbackContinueOnTheCapturedContextOnlyWhenItIsTrue(
+    public async Task WithContinueOnCapturedContext_TheGenericFactoryAndItsFallbackContinueOnTheCapturedContextOnlyWhenItIsTrue(
         bool continueOnCapturedContext,
         bool aRejectedResultCausesTheFallback)
     {
@@ -1259,33 +1257,32 @@ public class FallbackTests
             }
         }
 
-        var pipeline = new ReliabilityPipeline<string>(new ReliabilityPipelineOptions<string>
+        var factory = new RetryTaskFactory<string>
         {
             Strategy = new Count(2),
             ContinueOnCapturedContext = continueOnCapturedContext,
-            ShouldRetryResult = r => r == "rejected",
+            CanRetryResult = r => r == "rejected",
             OnRetry = _ =>
             {
                 Record("OnRetry");
                 return DeferredValueTask.Completed();
             },
-            Fallback = new FallbackOptions<string>
+            Fallback = new Fallback<string>(_ =>
             {
-                ShouldFallbackResult = r => r == "rejected",
+                Record("Action");
+                return DeferredValueTask.FromResult(FallbackValue, actionGate.Task);
+            })
+            {
+                AppliesToResult = r => r == "rejected",
                 OnFallback = _ =>
                 {
                     Record("OnFallback");
                     return DeferredValueTask.Completed();
                 },
-                Action = _ =>
-                {
-                    Record("Action");
-                    return DeferredValueTask.FromResult(FallbackValue, actionGate.Task);
-                },
             },
-        });
+        };
 
-        // Each attempt completes on a thread with no context, after the pipeline awaits it.
+        // Each attempt completes on a thread with no context, after the factory awaits it.
         ValueTask<string> OperationAsync(CancellationToken cancellationToken)
         {
             Record($"attempt {Interlocked.Increment(ref attempts)}");
@@ -1296,7 +1293,7 @@ public class FallbackTests
 
         (Task<string> call, Task<SynchronizationContext?> completedOn) = context.Run(() =>
         {
-            Task<string> call = pipeline.ExecuteAsync(OperationAsync).AsTask();
+            Task<string> call = factory.RunValueTask(OperationAsync).AsTask();
             Task<SynchronizationContext?> completedOn = call.ContinueWith(
                 _ => SynchronizationContext.Current,
                 CancellationToken.None,
@@ -1319,28 +1316,52 @@ public class FallbackTests
     }
 
     private static async Task AssertCallbackExceptionPropagatesAsync(
-        ReliabilityPipeline<string> pipeline,
+        RetryTaskFactory<string> factory,
         Func<CancellationToken, ValueTask<string>> operation,
         Exception callbackException,
-        List<FallbackArgs<string>> calls)
+        List<FallbackEventArgs<string>> calls)
     {
         Exception thrown = await Assert.ThrowsAsync<Exception>(
-            () => pipeline.ExecuteAsync(operation).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
+            () => factory.RunValueTask(operation).AsTask().WaitAsync(WaitLimit)).ConfigureAwait(false);
 
         Assert.AreSame(callbackException, thrown);
         Assert.IsEmpty(calls);
     }
 
-    private static FallbackOptions<string> RecordingFallback(List<FallbackArgs<string>> calls)
+    private static async Task AssertCallbackExceptionPropagatesAsync(
+        HedgedTaskFactory<string> factory,
+        Func<CancellationToken, Task<string>> operation,
+        Exception callbackException,
+        List<FallbackEventArgs<string>> calls)
     {
-        return RecordingFallback(calls, FallbackValue);
+        Exception thrown = await Assert.ThrowsAsync<Exception>(
+            () => factory.Run(operation).WaitAsync(WaitLimit)).ConfigureAwait(false);
+
+        Assert.AreSame(callbackException, thrown);
+        Assert.IsEmpty(calls);
     }
 
-    // A fallback that records each call to OnFallback and returns the value.
-    private static FallbackOptions<T> RecordingFallback<T>(List<FallbackArgs<T>> calls, T value)
+    private static Fallback<string> RecordingFallback(
+        List<FallbackEventArgs<string>> calls,
+        Func<string, bool>? appliesToResult = null,
+        IRetryPolicy? policy = null,
+        Func<FallbackEventArgs<string>, ValueTask<string>>? action = null)
     {
-        return new FallbackOptions<T>
+        return RecordingFallback(calls, FallbackValue, appliesToResult, policy, action);
+    }
+
+    // A fallback that records each call to OnFallback and returns the value, unless the test gives its own action.
+    private static Fallback<T> RecordingFallback<T>(
+        List<FallbackEventArgs<T>> calls,
+        T value,
+        Func<T, bool>? appliesToResult = null,
+        IRetryPolicy? policy = null,
+        Func<FallbackEventArgs<T>, ValueTask<T>>? action = null)
+    {
+        return new Fallback<T>(action ?? (_ => new ValueTask<T>(value)))
         {
+            AppliesToResult = appliesToResult,
+            Policy = policy ?? AnyExceptionPolicy.Default,
             OnFallback = args =>
             {
                 lock (calls)
@@ -1350,7 +1371,6 @@ public class FallbackTests
 
                 return ValueTask.CompletedTask;
             },
-            Action = _ => new ValueTask<T>(value),
         };
     }
 
