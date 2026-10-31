@@ -23,7 +23,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 public class RetryTaskFactoryCircuitBreakerTests
 {
     private static readonly TimeSpan WaitLimit = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan BreakDuration = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan OpenDuration = TimeSpan.FromSeconds(5);
 
     private readonly RecordingFakeTimeProvider fake = new();
 
@@ -59,10 +59,10 @@ public class RetryTaskFactoryCircuitBreakerTests
         {
             CircuitRejectedException rejection = Assert.IsInstanceOfType<CircuitRejectedException>(policy.Consulted[i]);
             Assert.AreSame(rejection, retried[i]);
-            Assert.AreEqual(BreakDuration, rejection.RetryAfter);
+            Assert.AreEqual(OpenDuration, rejection.RetryAfter);
         }
 
-        Assert.AreEqual(BreakDuration, thrown.RetryAfter);
+        Assert.AreEqual(OpenDuration, thrown.RetryAfter);
 
         // A rejection is not a call: the counts are still those of the two failures that opened the circuit.
         Assert.AreEqual((2, 2), breaker.GetCounts());
@@ -94,7 +94,7 @@ public class RetryTaskFactoryCircuitBreakerTests
         Assert.IsNotNull(args);
         CircuitRejectedException rejection = Assert.IsInstanceOfType<CircuitRejectedException>(args.Value.LastException);
         Assert.AreSame(Assert.ContainsSingle(policy.Consulted), rejection);
-        Assert.AreEqual(BreakDuration, rejection.RetryAfter);
+        Assert.AreEqual(OpenDuration, rejection.RetryAfter);
         Assert.AreEqual(1, args.Value.AttemptNumber);
     }
 
@@ -203,8 +203,8 @@ public class RetryTaskFactoryCircuitBreakerTests
         Task<int> call = factory.RunValueTask(_ => new ValueTask<int>(Interlocked.Increment(ref invocations))).AsTask();
 
         Assert.IsFalse(call.IsCompleted);
-        Assert.AreSequenceEqual(new[] { BreakDuration }, this.fake.Delays);
-        this.fake.Advance(BreakDuration);
+        Assert.AreSequenceEqual(new[] { OpenDuration }, this.fake.Delays);
+        this.fake.Advance(OpenDuration);
 
         Assert.AreEqual(1, await call.WaitAsync(WaitLimit).ConfigureAwait(false));
         Assert.AreEqual(CircuitState.Closed, breaker.State);
@@ -245,7 +245,7 @@ public class RetryTaskFactoryCircuitBreakerTests
         return new CircuitBreaker(
             failureRate: failureRatio,
             minimumCalls: minimumThroughput,
-            openDuration: BreakDuration,
+            openDuration: OpenDuration,
             timeProvider: this.fake);
     }
 

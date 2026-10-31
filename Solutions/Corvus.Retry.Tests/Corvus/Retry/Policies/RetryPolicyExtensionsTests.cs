@@ -11,7 +11,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 /// <summary>
 /// The extension members <c>Or</c>, <c>And</c> and <c>Not</c> give the logical result for each combination, and return
 /// a new policy without a change to the original. <see cref="RetryPolicyExtensions.CanRetryAll"/> is the rule that every
-/// engine (<see cref="Retriable"/>, the pipelines, hedging, the breaker, the fallback, <see cref="RetryTask"/> and
+/// engine (<see cref="Retriable"/>, the factories, hedging, the breaker, the fallback, <see cref="RetryTask"/> and
 /// <see cref="ReliableTaskRunner"/>) uses to ask a policy about an <see cref="AggregateException"/>: every individual
 /// failure must be acceptable.
 /// </summary>

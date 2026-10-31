@@ -6,7 +6,7 @@ namespace Corvus.Retry;
 
 /// <summary>
 /// The ways in which an operation that returns a <see cref="System.Threading.Tasks.ValueTask"/> or a
-/// <see cref="System.Threading.Tasks.ValueTask{TResult}"/> can give its outcome to a pipeline.
+/// <see cref="System.Threading.Tasks.ValueTask{TResult}"/> can give its outcome to <c>RunValueTask</c>.
 /// </summary>
 /// <remarks>
 /// <para>
