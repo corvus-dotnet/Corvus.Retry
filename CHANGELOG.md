@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+These changes are planned for 2.1.0. The change to how `Retriable` reports cancellation is why this is a minor
+release, not a patch.
+
 ### Changed
 
 - `Retriable` reports cancellation as an `OperationCanceledException` that carries the caller's token, when
