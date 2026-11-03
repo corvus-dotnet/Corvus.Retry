@@ -6,12 +6,13 @@ namespace Corvus.Retry.Async
 {
     using System;
     using System.Collections.Generic;
+    using System.Threading;
     using System.Threading.Tasks;
 
     /// <summary>
-    /// An <see cref="ISleepService"/> that records every requested delay and returns immediately.
+    /// An <see cref="ICancellableSleepService"/> that records every requested delay and returns immediately.
     /// </summary>
-    internal sealed class RecordingSleepService : ISleepService
+    internal sealed class RecordingSleepService : ICancellableSleepService
     {
         private readonly object sync = new();
         private readonly List<SleepRecord> records = new();
@@ -43,14 +44,14 @@ namespace Corvus.Retry.Async
             }
         }
 
-        public void Sleep(TimeSpan timeSpan)
+        public void Sleep(TimeSpan timeSpan, CancellationToken cancellationToken)
         {
-            this.Record(new SleepRecord(timeSpan, isAsync: false));
+            this.Record(new SleepRecord(timeSpan, isAsync: false, cancellationToken));
         }
 
-        public Task SleepAsync(TimeSpan timeSpan)
+        public Task SleepAsync(TimeSpan timeSpan, CancellationToken cancellationToken)
         {
-            this.Record(new SleepRecord(timeSpan, isAsync: true));
+            this.Record(new SleepRecord(timeSpan, isAsync: true, cancellationToken));
             return Task.CompletedTask;
         }
 

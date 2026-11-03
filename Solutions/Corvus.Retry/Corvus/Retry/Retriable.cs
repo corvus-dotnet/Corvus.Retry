@@ -191,17 +191,25 @@ namespace Corvus.Retry
                 {
                     TimeSpan delay = strategy.PrepareToRetry(exception);
 
-                    if (!WillRetry(exception, cancellationToken, strategy, policy))
+                    if (!WillRetry(exception, strategy, policy))
                     {
                         throw;
                     }
+
+                    // Check before raising Retrying for a retry that will not run, and stop waiting as soon as
+                    // cancellation is requested rather than at the end of the delay.
+                    cancellationToken.ThrowIfCancellationRequested();
 
                     strategy.OnRetrying(new RetryEventArgs(exception, delay));
 
                     if (delay != TimeSpan.Zero)
                     {
-                        SleepService.Instance.Sleep(delay);
+                        SleepService.Instance.Sleep(delay, cancellationToken);
                     }
+
+                    // Check again before the retry, so that cancellation requested by a Retrying handler, or as the
+                    // delay ends, does not let another try run.
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
             }
         }
@@ -320,17 +328,25 @@ namespace Corvus.Retry
                 {
                     TimeSpan delay = strategy.PrepareToRetry(exception);
 
-                    if (!WillRetry(exception, cancellationToken, strategy, policy))
+                    if (!WillRetry(exception, strategy, policy))
                     {
                         throw;
                     }
+
+                    // Check before raising Retrying for a retry that will not run, and stop waiting as soon as
+                    // cancellation is requested rather than at the end of the delay.
+                    cancellationToken.ThrowIfCancellationRequested();
 
                     strategy.OnRetrying(new RetryEventArgs(exception, delay));
 
                     if (delay != TimeSpan.Zero)
                     {
-                        SleepService.Instance.Sleep(delay);
+                        SleepService.Instance.Sleep(delay, cancellationToken);
                     }
+
+                    // Check again before the retry, so that cancellation requested by a Retrying handler, or as the
+                    // delay ends, does not let another try run.
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
             }
         }
@@ -411,19 +427,27 @@ namespace Corvus.Retry
                 {
                     delay = strategy.PrepareToRetry(exception);
 
-                    if (!WillRetry(exception, cancellationToken, strategy, policy))
+                    if (!WillRetry(exception, strategy, policy))
                     {
                         // Rethrow from inside the catch block so that the exception keeps its original stack trace.
                         throw;
                     }
+
+                    // Check before raising Retrying for a retry that will not run, and stop waiting as soon as
+                    // cancellation is requested rather than at the end of the delay.
+                    cancellationToken.ThrowIfCancellationRequested();
 
                     strategy.OnRetrying(new RetryEventArgs(exception, delay));
                 }
 
                 if (delay != TimeSpan.Zero)
                 {
-                    await SleepService.Instance.SleepAsync(delay).ConfigureAwait(continueOnCapturedContext);
+                    await SleepService.Instance.SleepAsync(delay, cancellationToken).ConfigureAwait(continueOnCapturedContext);
                 }
+
+                // Check again before the retry, so that cancellation requested by a Retrying handler, or as the
+                // delay ends, does not let another try run.
+                cancellationToken.ThrowIfCancellationRequested();
             }
         }
 
@@ -442,25 +466,35 @@ namespace Corvus.Retry
                 {
                     delay = strategy.PrepareToRetry(exception);
 
-                    if (!WillRetry(exception, cancellationToken, strategy, policy))
+                    if (!WillRetry(exception, strategy, policy))
                     {
                         // Rethrow from inside the catch block so that the exception keeps its original stack trace.
                         throw;
                     }
+
+                    // Check before raising Retrying for a retry that will not run, and stop waiting as soon as
+                    // cancellation is requested rather than at the end of the delay.
+                    cancellationToken.ThrowIfCancellationRequested();
 
                     strategy.OnRetrying(new RetryEventArgs(exception, delay));
                 }
 
                 if (delay != TimeSpan.Zero)
                 {
-                    await SleepService.Instance.SleepAsync(delay).ConfigureAwait(continueOnCapturedContext);
+                    await SleepService.Instance.SleepAsync(delay, cancellationToken).ConfigureAwait(continueOnCapturedContext);
                 }
+
+                // Check again before the retry, so that cancellation requested by a Retrying handler, or as the
+                // delay ends, does not let another try run.
+                cancellationToken.ThrowIfCancellationRequested();
             }
         }
 
-        private static bool WillRetry(Exception exception, CancellationToken cancellationToken, IRetryStrategy strategy, IRetryPolicy policy)
+        // A retry that the strategy or policy refuses reports the try's own exception, even if cancellation has been
+        // requested. Cancellation is checked only for a retry that would otherwise run.
+        private static bool WillRetry(Exception exception, IRetryStrategy strategy, IRetryPolicy policy)
         {
-            return strategy.CanRetry && !cancellationToken.IsCancellationRequested && policy.CanRetry(exception);
+            return strategy.CanRetry && policy.CanRetry(exception);
         }
     }
 }

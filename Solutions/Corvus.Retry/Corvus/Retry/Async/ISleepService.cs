@@ -11,6 +11,10 @@ namespace Corvus.Retry.Async
     /// An interface implemented by services which provide the ability to put
     /// a thread to sleep for a period of time.
     /// </summary>
+    /// <remarks>
+    /// The retry methods in this library no longer use this interface, because its members cannot be cancelled. It is
+    /// kept unchanged so that code built against version 2.0 continues to work.
+    /// </remarks>
     public interface ISleepService
     {
         /// <summary>

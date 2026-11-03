@@ -8,19 +8,17 @@ namespace Corvus.Retry.Benchmarks
     using System.Threading;
     using System.Threading.Tasks;
     using BenchmarkDotNet.Attributes;
-    using Corvus.Retry.Async;
     using Corvus.Retry.Policies;
     using Corvus.Retry.Strategies;
 
     /// <summary>
     /// The cost of the delay path: a retry whose strategy asks for a delay, which the library waits for using its
-    /// default <see cref="ISleepService"/>.
+    /// default sleep service.
     /// </summary>
     /// <remarks>
-    /// <see cref="ISleepService"/> has no public implementation or injection point, so it is measured through the
-    /// retry methods that use it. The delay is one tick, which the default service rounds down to no wait, so the
-    /// benchmarks measure the sleep machinery rather than time passing. The baselines retry with no delay, which skips
-    /// the sleep service.
+    /// The sleep service is internal, so it is measured through the retry methods that use it. The delay is one tick,
+    /// which the default service rounds down to no wait, so the benchmarks measure the sleep machinery rather than time
+    /// passing. The baselines retry with no delay, which skips the sleep service.
     /// </remarks>
     [MemoryDiagnoser]
     [BenchmarkDotNet.Attributes.CategoriesColumn]

@@ -136,15 +136,15 @@ namespace Corvus.Retry
             Assert.AreSequenceEqual(expected, this.sleeps.Delays.ToArray());
         }
 
-        private sealed class NeverEndingSleepService : ISleepService
+        private sealed class NeverEndingSleepService : ICancellableSleepService
         {
             private readonly TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
             public Task Entered => this.entered.Task;
 
-            public void Sleep(TimeSpan timeSpan) => throw new NotSupportedException("RetryTask should wait on SleepAsync.");
+            public void Sleep(TimeSpan timeSpan, CancellationToken cancellationToken) => throw new NotSupportedException("RetryTask should wait on SleepAsync.");
 
-            public Task SleepAsync(TimeSpan timeSpan)
+            public Task SleepAsync(TimeSpan timeSpan, CancellationToken cancellationToken)
             {
                 this.entered.TrySetResult();
                 return new TaskCompletionSource().Task;

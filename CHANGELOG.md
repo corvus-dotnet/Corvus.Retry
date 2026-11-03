@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-These changes are planned for 2.0.0.
+These changes are planned for 2.1.0. The change to how `Retriable` reports cancellation is why this is a minor
+release, not a patch.
+
+### Changed
+
+- `Retriable` reports cancellation as an `OperationCanceledException` that carries the caller's token, when
+  cancellation is requested before a retry that would otherwise run. In 2.0, it rethrew the exception from the last
+  try. A retry that the strategy or policy has refused still reports the try's exception. The first try still runs
+  when the token is already cancelled.
+- The retry methods wait between tries through an internal sleep service that the token can cancel. The public
+  `ISleepService` interface is unchanged, and the retry methods no longer use it.
+
+### Fixed
+
+- `Retriable.Retry` and `Retriable.RetryAsync` waited for the strategy's whole delay, then ran one more try, after
+  the token was cancelled ([#242](https://github.com/corvus-dotnet/Corvus.Retry/issues/242)). They now stop waiting
+  as soon as cancellation is requested. They also check the token again after the delay, so cancellation that a
+  `Retrying` handler requests, or that arrives as the delay ends, stops the next try.
+
+## [2.0.0] - 2026-10-31
 
 ### Added
 
@@ -155,7 +174,8 @@ These changes are planned for 2.0.0.
 
 - First release: `Retriable`, `RetryTask`, `ReliableTaskRunner`, retry strategies and retry policies.
 
-[Unreleased]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.7...HEAD
+[Unreleased]: https://github.com/corvus-dotnet/Corvus.Retry/compare/2.0.0...HEAD
+[2.0.0]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.7...2.0.0
 [1.0.7]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.6...1.0.7
 [1.0.6]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.5...1.0.6
 [1.0.5]: https://github.com/corvus-dotnet/Corvus.Retry/compare/1.0.4...1.0.5
