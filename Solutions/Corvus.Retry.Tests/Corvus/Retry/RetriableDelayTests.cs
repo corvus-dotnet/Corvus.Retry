@@ -279,6 +279,59 @@ public class RetriableDelayTests
         Assert.AreSequenceEqual(Milliseconds(100, 150, 200), this.time.Delays);
     }
 
+    // Issue #242: in 2.0, a cancellation during the wait was not seen until the wait ended and one more attempt had run.
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    [DataRow(RetryShape.AsyncAction)]
+    [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
+    public async Task WhenTheOnRetryCallbackCancelsTheTokenBeforeADelay_NoFurtherAttemptRuns(RetryShape shape)
+    {
+        // The operation would succeed on its second attempt, so a retry that runs is seen as a result.
+        var op = new FlakyOperation(1);
+        using var cts = new CancellationTokenSource();
+
+        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(
+            () => Task.Run(() => RetriableDriver.RetryAsync(
+                shape,
+                op.Invoke,
+                cts.Token,
+                new Linear(TimeSpan.FromMilliseconds(100), 3),
+                new AnyExceptionPolicy(),
+                _ =>
+                {
+                    cts.Cancel();
+                    return ValueTask.CompletedTask;
+                })).WaitAsync(Timeout)).ConfigureAwait(false);
+
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
+        Assert.AreEqual(1, op.Invocations);
+    }
+
+    // Issue #242: a cancellation that arrives as the delay's timer is created must stop the call, whichever of the
+    // timer and the token completes the delay first.
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    [DataRow(RetryShape.AsyncAction)]
+    [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
+    public async Task WhenTheTokenIsCancelledAsTheDelayStarts_NoFurtherAttemptRuns(RetryShape shape)
+    {
+        var op = new FlakyOperation(1);
+        using var cts = new CancellationTokenSource();
+        this.time.OnDelay = _ => cts.Cancel();
+
+        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(
+            () => Task.Run(() => RetriableDriver.RetryAsync(shape, op.Invoke, cts.Token, new Linear(TimeSpan.FromMilliseconds(100), 3), new AnyExceptionPolicy())).WaitAsync(Timeout)).ConfigureAwait(false);
+
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
+        Assert.AreEqual(1, op.Invocations);
+    }
+
     // The changelog: the synchronous Retry uses Thread.Sleep only when the token cannot be cancelled. With a token that
     // can be cancelled, it waits for a timer, so a cancellation stops the wait at once.
     [TestMethod]
