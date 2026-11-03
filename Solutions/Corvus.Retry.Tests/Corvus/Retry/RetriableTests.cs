@@ -575,6 +575,37 @@ public class RetriableTests
         Assert.AreEqual(0, callbacks);
     }
 
+    // Issue #242: in 2.0, a retry ran after cancellation. With no delay, only the check before each attempt can stop it.
+    [TestMethod]
+    [DataRow(RetryShape.Action)]
+    [DataRow(RetryShape.Function)]
+    [DataRow(RetryShape.AsyncAction)]
+    [DataRow(RetryShape.AsyncFunction)]
+    [DataRow(RetryShape.AsyncActionWithToken)]
+    [DataRow(RetryShape.AsyncFunctionWithToken)]
+    public async Task WhenTheOnRetryCallbackCancelsTheTokenAndThereIsNoDelay_TheRetryDoesNotRun(RetryShape shape)
+    {
+        // The operation would succeed on its second attempt, so a retry that runs is seen as a result.
+        var op = new FlakyOperation(1);
+        using var cts = new CancellationTokenSource();
+
+        OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+            () => RetriableDriver.RetryAsync(
+                shape,
+                op.Invoke,
+                cts.Token,
+                new Count(5),
+                new AnyExceptionPolicy(),
+                _ =>
+                {
+                    cts.Cancel();
+                    return ValueTask.CompletedTask;
+                })).ConfigureAwait(false);
+
+        Assert.AreEqual(cts.Token, thrown.CancellationToken);
+        Assert.AreEqual(1, op.Invocations);
+    }
+
     [TestMethod]
     [DataRow(RetryShape.Action)]
     [DataRow(RetryShape.Function)]
