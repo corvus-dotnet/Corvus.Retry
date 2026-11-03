@@ -5,6 +5,7 @@
 namespace Corvus.Retry.Async
 {
     using System;
+    using System.Threading;
     using System.Threading.Tasks;
 
     /// <summary>
@@ -34,12 +35,12 @@ namespace Corvus.Retry.Async
         {
             public static readonly ForbiddenSleepService Instance = new();
 
-            public void Sleep(TimeSpan timeSpan)
+            public void Sleep(TimeSpan timeSpan, CancellationToken cancellationToken)
             {
                 throw Forbidden(timeSpan);
             }
 
-            public Task SleepAsync(TimeSpan timeSpan)
+            public Task SleepAsync(TimeSpan timeSpan, CancellationToken cancellationToken)
             {
                 throw Forbidden(timeSpan);
             }

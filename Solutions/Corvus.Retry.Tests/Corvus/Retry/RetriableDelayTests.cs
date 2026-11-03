@@ -22,6 +22,8 @@ namespace Corvus.Retry
     [DoNotParallelize]
     public class RetriableDelayTests
     {
+        private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
+
         private RecordingSleepService sleeps = null!;
 
         [TestInitialize]
@@ -153,9 +155,106 @@ namespace Corvus.Retry
             Assert.AreEqual(period, Assert.ContainsSingle(this.sleeps.Delays));
         }
 
+        [TestMethod]
+        [DataRow(RetryShape.Action)]
+        [DataRow(RetryShape.Function)]
+        [DataRow(RetryShape.AsyncAction)]
+        [DataRow(RetryShape.AsyncFunction)]
+        public async Task TheCallersTokenIsPassedToTheSleep(RetryShape shape)
+        {
+            using var cts = new CancellationTokenSource();
+            var op = new FlakyOperation(2);
+
+            await RetriableDriver.RetryAsync(shape, op.Invoke, cts.Token, new Linear(TimeSpan.FromMilliseconds(100), 3), new AnyExceptionPolicy()).ConfigureAwait(false);
+
+            Assert.AreEqual(3, op.Invocations);
+            Assert.HasCount(2, this.sleeps.Records);
+            Assert.IsTrue(this.sleeps.Records.All(r => r.Token == cts.Token), "Every sleep must be given the caller's token.");
+        }
+
+        [TestMethod]
+        [DataRow(RetryShape.Action)]
+        [DataRow(RetryShape.Function)]
+        [DataRow(RetryShape.AsyncAction)]
+        [DataRow(RetryShape.AsyncFunction)]
+        public async Task WhenCancellationIsRequestedDuringTheDelay_TheRetryStopsWithoutWaitingForTheDelayToEndOrTryingAgain(RetryShape shape)
+        {
+            // A sleep that ends only when it is cancelled: the retry can only stop waiting because of cancellation.
+            var neverEnding = new CancellableNeverEndingSleepService();
+            SleepService.SetSleepServiceForTesting(neverEnding);
+            using var cts = new CancellationTokenSource();
+            var op = new FlakyOperation(FlakyOperation.AlwaysFails);
+
+            // Run on a thread-pool thread, because the synchronous shapes block this thread while they wait.
+            Task task = Task.Run(() => RetriableDriver.RetryAsync(shape, op.Invoke, cts.Token, new Linear(TimeSpan.FromHours(1), 3), new AnyExceptionPolicy()));
+
+            bool enteredAsync = await neverEnding.Entered.WaitAsync(Timeout).ConfigureAwait(false);
+            await cts.CancelAsync().ConfigureAwait(false);
+
+            OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(() => task.WaitAsync(Timeout)).ConfigureAwait(false);
+            Assert.AreEqual(cts.Token, thrown.CancellationToken);
+            Assert.AreEqual(1, op.Invocations);
+            Assert.AreEqual(shape is RetryShape.AsyncAction or RetryShape.AsyncFunction, enteredAsync);
+        }
+
+        [TestMethod]
+        [DataRow(RetryShape.Action)]
+        [DataRow(RetryShape.Function)]
+        [DataRow(RetryShape.AsyncAction)]
+        [DataRow(RetryShape.AsyncFunction)]
+        public async Task WhenCancellationIsRequestedBeforeTheDelay_NoSleepIsRequested(RetryShape shape)
+        {
+            using var cts = new CancellationTokenSource();
+            var op = new FlakyOperation(
+                FlakyOperation.AlwaysFails,
+                attempt =>
+                {
+                    cts.Cancel();
+                    return new InvalidOperationException($"Attempt {attempt} failed");
+                });
+
+            OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+                () => RetriableDriver.RetryAsync(shape, op.Invoke, cts.Token, new Linear(TimeSpan.FromMilliseconds(100), 3), new AnyExceptionPolicy())).ConfigureAwait(false);
+
+            Assert.AreEqual(cts.Token, thrown.CancellationToken);
+            Assert.AreEqual(1, op.Invocations);
+            Assert.IsEmpty(this.sleeps.Records);
+        }
+
         private static TimeSpan[] Milliseconds(params int[] milliseconds)
         {
             return Array.ConvertAll(milliseconds, ms => TimeSpan.FromMilliseconds(ms));
+        }
+
+        /// <summary>
+        /// A sleep that ends only when its token is cancelled (or, so that a broken test cannot hang, after <see cref="Timeout"/>).
+        /// </summary>
+        private sealed class CancellableNeverEndingSleepService : ISleepService
+        {
+            private readonly TaskCompletionSource<bool> entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            /// <summary>
+            /// Gets a task which completes when a sleep starts. Its result is <see langword="true"/> for <see cref="SleepAsync"/>.
+            /// </summary>
+            public Task<bool> Entered => this.entered.Task;
+
+            public void Sleep(TimeSpan timeSpan, CancellationToken cancellationToken)
+            {
+                this.entered.TrySetResult(false);
+                if (!cancellationToken.WaitHandle.WaitOne(Timeout))
+                {
+                    throw new TimeoutException("The sleep was not cancelled.");
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            public async Task SleepAsync(TimeSpan timeSpan, CancellationToken cancellationToken)
+            {
+                this.entered.TrySetResult(true);
+                await Task.Delay(Timeout, cancellationToken).ConfigureAwait(false);
+                throw new TimeoutException("The sleep was not cancelled.");
+            }
         }
     }
 }

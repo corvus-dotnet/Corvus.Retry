@@ -195,19 +195,87 @@ namespace Corvus.Retry
         [DataRow(RetryShape.Function)]
         [DataRow(RetryShape.AsyncAction)]
         [DataRow(RetryShape.AsyncFunction)]
-        public async Task WhenTheTokenIsAlreadyCancelledAndTheOperationFails_ItIsNotRetriedAndItsOwnExceptionIsRethrown(RetryShape shape)
+        public async Task WhenTheTokenIsAlreadyCancelledAndTheOperationFails_ItIsNotRetriedAndAnOperationCanceledExceptionCarryingTheTokenIsThrown(RetryShape shape)
         {
             var op = new FlakyOperation(FlakyOperation.AlwaysFails);
             using var cts = new CancellationTokenSource();
             await cts.CancelAsync().ConfigureAwait(false);
 
-            // Cancellation is only checked after a failure, to decide whether to retry. It does not prevent the
-            // first try, and the caller sees the operation's exception rather than an OperationCanceledException.
-            InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            // Cancellation is only checked after a failure, when a retry would otherwise run. It does not prevent the
+            // first try, but it stops the retry, and the caller sees an OperationCanceledException carrying the token.
+            OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
                 () => RetriableDriver.RetryAsync(shape, op.Invoke, cts.Token, new Count(5), new AnyExceptionPolicy())).ConfigureAwait(false);
 
             Assert.AreEqual(1, op.Invocations);
+            Assert.AreEqual(cts.Token, thrown.CancellationToken);
+        }
+
+        [TestMethod]
+        [DataRow(RetryShape.Action)]
+        [DataRow(RetryShape.Function)]
+        [DataRow(RetryShape.AsyncAction)]
+        [DataRow(RetryShape.AsyncFunction)]
+        public async Task WhenTheTokenIsCancelledAndThePolicyRefusesTheRetry_TheOperationsOwnExceptionIsRethrown(RetryShape shape)
+        {
+            var op = new FlakyOperation(FlakyOperation.AlwaysFails);
+            using var cts = new CancellationTokenSource();
+            await cts.CancelAsync().ConfigureAwait(false);
+
+            // The retry would not run anyway, so the caller sees the failure rather than the cancellation.
+            InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+                () => RetriableDriver.RetryAsync(shape, op.Invoke, cts.Token, new Count(5), new RecordingRetryPolicy(false))).ConfigureAwait(false);
+
+            Assert.AreEqual(1, op.Invocations);
             Assert.AreSame(op.Thrown[0], thrown);
+        }
+
+        [TestMethod]
+        [DataRow(RetryShape.Action)]
+        [DataRow(RetryShape.Function)]
+        [DataRow(RetryShape.AsyncAction)]
+        [DataRow(RetryShape.AsyncFunction)]
+        public async Task WhenTheTokenIsCancelledAndTheStrategyIsExhausted_TheOperationsOwnExceptionIsRethrown(RetryShape shape)
+        {
+            using var cts = new CancellationTokenSource();
+            var op = new FlakyOperation(
+                FlakyOperation.AlwaysFails,
+                attempt =>
+                {
+                    if (attempt == 2)
+                    {
+                        cts.Cancel();
+                    }
+
+                    return new InvalidOperationException($"Attempt {attempt} failed");
+                });
+
+            // The second failure uses the last of the strategy's two tries, so there is no retry to cancel.
+            InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+                () => RetriableDriver.RetryAsync(shape, op.Invoke, cts.Token, new Count(2), new AnyExceptionPolicy())).ConfigureAwait(false);
+
+            Assert.AreEqual(2, op.Invocations);
+            Assert.AreSame(op.Thrown[1], thrown);
+        }
+
+        [TestMethod]
+        [DataRow(RetryShape.Action)]
+        [DataRow(RetryShape.Function)]
+        [DataRow(RetryShape.AsyncAction)]
+        [DataRow(RetryShape.AsyncFunction)]
+        public async Task WhenCancellationStopsTheRetry_TheRetryingEventIsNotRaised(RetryShape shape)
+        {
+            var op = new FlakyOperation(FlakyOperation.AlwaysFails);
+            var strategy = new Count(5);
+            int events = 0;
+            strategy.Retrying += (_, _) => Interlocked.Increment(ref events);
+            using var cts = new CancellationTokenSource();
+            await cts.CancelAsync().ConfigureAwait(false);
+
+            await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+                () => RetriableDriver.RetryAsync(shape, op.Invoke, cts.Token, strategy, new AnyExceptionPolicy())).ConfigureAwait(false);
+
+            Assert.AreEqual(1, op.Invocations);
+            Assert.AreEqual(0, events);
         }
 
         [TestMethod]
@@ -229,7 +297,7 @@ namespace Corvus.Retry
         [DataRow(RetryShape.Function)]
         [DataRow(RetryShape.AsyncAction)]
         [DataRow(RetryShape.AsyncFunction)]
-        public async Task WhenCancellationIsRequestedDuringRetries_NoFurtherRetriesHappen(RetryShape shape)
+        public async Task WhenCancellationIsRequestedDuringRetries_NoFurtherRetriesHappenAndAnOperationCanceledExceptionCarryingTheTokenIsThrown(RetryShape shape)
         {
             using var cts = new CancellationTokenSource();
             var op = new FlakyOperation(
@@ -244,11 +312,11 @@ namespace Corvus.Retry
                     return new InvalidOperationException($"Attempt {attempt} failed");
                 });
 
-            InvalidOperationException thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
                 () => RetriableDriver.RetryAsync(shape, op.Invoke, cts.Token, new Count(10), new AnyExceptionPolicy())).ConfigureAwait(false);
 
             Assert.AreEqual(2, op.Invocations);
-            Assert.AreSame(op.Thrown[1], thrown);
+            Assert.AreEqual(cts.Token, thrown.CancellationToken);
         }
 
         [TestMethod]

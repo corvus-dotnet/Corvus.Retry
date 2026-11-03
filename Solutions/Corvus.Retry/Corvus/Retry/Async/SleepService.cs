@@ -47,15 +47,28 @@ namespace Corvus.Retry.Async
         private class DefaultSleepService : ISleepService
         {
             /// <inheritdoc/>
-            public void Sleep(TimeSpan timeSpan)
+            public void Sleep(TimeSpan timeSpan, CancellationToken cancellationToken)
             {
-                Thread.Sleep(timeSpan);
+                if (!cancellationToken.CanBeCanceled)
+                {
+                    Thread.Sleep(timeSpan);
+                    return;
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // Thread.Sleep cannot be interrupted by cancellation, so wait on the token's handle instead. The wait
+                // ends early, and returns true, when cancellation is requested.
+                if (cancellationToken.WaitHandle.WaitOne(timeSpan))
+                {
+                    throw new OperationCanceledException(cancellationToken);
+                }
             }
 
             /// <inheritdoc/>
-            public Task SleepAsync(TimeSpan timeSpan)
+            public Task SleepAsync(TimeSpan timeSpan, CancellationToken cancellationToken)
             {
-                return Task.Delay(timeSpan);
+                return Task.Delay(timeSpan, cancellationToken);
             }
         }
     }

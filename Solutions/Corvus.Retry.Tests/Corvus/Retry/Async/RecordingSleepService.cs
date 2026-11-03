@@ -6,6 +6,7 @@ namespace Corvus.Retry.Async
 {
     using System;
     using System.Collections.Generic;
+    using System.Threading;
     using System.Threading.Tasks;
 
     /// <summary>
@@ -43,14 +44,14 @@ namespace Corvus.Retry.Async
             }
         }
 
-        public void Sleep(TimeSpan timeSpan)
+        public void Sleep(TimeSpan timeSpan, CancellationToken cancellationToken)
         {
-            this.Record(new SleepRecord(timeSpan, isAsync: false));
+            this.Record(new SleepRecord(timeSpan, isAsync: false, cancellationToken));
         }
 
-        public Task SleepAsync(TimeSpan timeSpan)
+        public Task SleepAsync(TimeSpan timeSpan, CancellationToken cancellationToken)
         {
-            this.Record(new SleepRecord(timeSpan, isAsync: true));
+            this.Record(new SleepRecord(timeSpan, isAsync: true, cancellationToken));
             return Task.CompletedTask;
         }
 

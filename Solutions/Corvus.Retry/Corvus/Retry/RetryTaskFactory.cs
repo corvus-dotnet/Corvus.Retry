@@ -774,7 +774,10 @@ namespace Corvus.Retry
 
                 if (delay != TimeSpan.Zero)
                 {
-                    SleepService.Instance.SleepAsync(delay).Wait(cancellationToken);
+                    // The token is applied by Wait, which throws an OperationCanceledException carrying the token. Passing
+                    // the token to the sleep as well would race Wait against a cancelled task, which can surface as an
+                    // AggregateException that RetryOperation.Complete would report as a fault rather than a cancellation.
+                    SleepService.Instance.SleepAsync(delay, CancellationToken.None).Wait(cancellationToken);
                 }
 
                 task = createTask();
