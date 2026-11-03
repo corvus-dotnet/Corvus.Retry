@@ -40,6 +40,12 @@ You can also use asynchronous methods
 Task resultTask = Retriable.RetryAsync(() => SomeOperationAsync());
 ```
 
+You can pass a cancellation token to stop retrying. `Retriable` checks the token after a try fails, and while it waits for the strategy's delay before the next try. If cancellation is requested, no more tries run, and `Retriable` throws an `OperationCanceledException` that carries the token. The wait ends as soon as cancellation is requested, not at the end of the delay. If the strategy or the policy refuses the retry, `Retriable` throws the try's own exception, even if the token is cancelled. The first try always runs, even if the token is already cancelled.
+
+```
+Task resultTask = Retriable.RetryAsync(() => SomeOperationAsync(), cancellationToken, new Linear(TimeSpan.FromSeconds(5), 10), new AnyExceptionPolicy());
+```
+
 ### Policy and Strategy
 
 Two types help you to control when a failed operation is retried, and how that retry occurs. `IRetryPolicy` and `IRetryStrategy`.
@@ -173,9 +179,9 @@ public override bool CanRetry
 ```
 
 #### `ISleepService`
-`Retriable` uses an implementation of an `ISleepService` to delay between retries. The sleep service offers synchronous `Sleep(TimeSpan)` and asynchronous `SleepAsync(TimeSpan)` methods to achieve a delay.
+`Retriable` uses an implementation of an `ISleepService` to delay between retries. The sleep service offers synchronous `Sleep(TimeSpan, CancellationToken)` and asynchronous `SleepAsync(TimeSpan, CancellationToken)` methods to achieve a delay. `Retriable` passes the caller's cancellation token to them.
 
-The default `SleepService` implementation uses `Thread.Sleep()` for the synchronous delay, and `Task.Delay()` for the asynchronous implementation.
+The default `SleepService` implementation uses `Task.Delay()` for the asynchronous delay. For the synchronous delay, it uses `Thread.Sleep()` when the token cannot be cancelled, and otherwise waits on the token's wait handle. Both end the wait when the token is cancelled, and throw an `OperationCanceledException` that carries the token.
 
 The sleep service is internal to the library, and is replaced only by this project's own tests (for example, to remove the delay entirely). See [ADR 0001](Documentation/adr/0001-centralised-access-to-isleepservice.md).
 
