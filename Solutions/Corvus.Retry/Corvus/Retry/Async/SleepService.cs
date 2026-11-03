@@ -14,12 +14,12 @@ namespace Corvus.Retry.Async
     /// </summary>
     internal static class SleepService
     {
-        private static ISleepService? instance;
+        private static ICancellableSleepService? instance;
 
         /// <summary>
         /// Gets a service that provides 'sleep' functionality.
         /// </summary>
-        internal static ISleepService Instance
+        internal static ICancellableSleepService Instance
         {
             get => instance ??= new DefaultSleepService();
         }
@@ -28,7 +28,7 @@ namespace Corvus.Retry.Async
         /// Sets the sleep service to use for testing in order to be able to control time.
         /// </summary>
         /// <param name="testingSleepService">The testing sleep service to use.</param>
-        internal static void SetSleepServiceForTesting(ISleepService testingSleepService)
+        internal static void SetSleepServiceForTesting(ICancellableSleepService testingSleepService)
         {
             instance = testingSleepService;
         }
@@ -42,9 +42,9 @@ namespace Corvus.Retry.Async
         }
 
         /// <summary>
-        /// Implements the <see cref="ISleepService"/>.
+        /// Implements the <see cref="ICancellableSleepService"/>.
         /// </summary>
-        private class DefaultSleepService : ISleepService
+        private class DefaultSleepService : ICancellableSleepService
         {
             /// <inheritdoc/>
             public void Sleep(TimeSpan timeSpan, CancellationToken cancellationToken)
@@ -72,4 +72,4 @@ namespace Corvus.Retry.Async
             }
         }
     }
-}
+}

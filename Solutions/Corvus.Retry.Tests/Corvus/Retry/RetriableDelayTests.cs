@@ -221,6 +221,27 @@ namespace Corvus.Retry
             Assert.IsEmpty(this.sleeps.Records);
         }
 
+        [TestMethod]
+        [DataRow(RetryShape.Action)]
+        [DataRow(RetryShape.Function)]
+        [DataRow(RetryShape.AsyncAction)]
+        [DataRow(RetryShape.AsyncFunction)]
+        public async Task WhenCancellationIsRequestedAsTheDelayEnds_TheRetryDoesNotRun(RetryShape shape)
+        {
+            // The recording sleep ends normally, after the token is cancelled. The operation would succeed on its second
+            // try, so only a check after the delay can stop it.
+            using var cts = new CancellationTokenSource();
+            this.sleeps.OnSleep = _ => cts.Cancel();
+            var op = new FlakyOperation(1);
+
+            OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+                () => RetriableDriver.RetryAsync(shape, op.Invoke, cts.Token, new Linear(TimeSpan.FromMilliseconds(100), 3), new AnyExceptionPolicy())).ConfigureAwait(false);
+
+            Assert.AreEqual(cts.Token, thrown.CancellationToken);
+            Assert.AreEqual(1, op.Invocations);
+            Assert.HasCount(1, this.sleeps.Records);
+        }
+
         private static TimeSpan[] Milliseconds(params int[] milliseconds)
         {
             return Array.ConvertAll(milliseconds, ms => TimeSpan.FromMilliseconds(ms));
@@ -229,7 +250,7 @@ namespace Corvus.Retry
         /// <summary>
         /// A sleep that ends only when its token is cancelled (or, so that a broken test cannot hang, after <see cref="Timeout"/>).
         /// </summary>
-        private sealed class CancellableNeverEndingSleepService : ISleepService
+        private sealed class CancellableNeverEndingSleepService : ICancellableSleepService
         {
             private readonly TaskCompletionSource<bool> entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
 

@@ -31,7 +31,7 @@ namespace Corvus.Retry.Async
             SleepService.UnsetSleepServiceForTesting();
         }
 
-        private sealed class ForbiddenSleepService : ISleepService
+        private sealed class ForbiddenSleepService : ICancellableSleepService
         {
             public static readonly ForbiddenSleepService Instance = new();
 

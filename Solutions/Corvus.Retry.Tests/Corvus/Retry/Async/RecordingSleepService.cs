@@ -10,9 +10,9 @@ namespace Corvus.Retry.Async
     using System.Threading.Tasks;
 
     /// <summary>
-    /// An <see cref="ISleepService"/> that records every requested delay and returns immediately.
+    /// An <see cref="ICancellableSleepService"/> that records every requested delay and returns immediately.
     /// </summary>
-    internal sealed class RecordingSleepService : ISleepService
+    internal sealed class RecordingSleepService : ICancellableSleepService
     {
         private readonly object sync = new();
         private readonly List<SleepRecord> records = new();

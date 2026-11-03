@@ -5,41 +5,35 @@
 namespace Corvus.Retry.Async
 {
     using System;
-    using System.Threading;
     using System.Threading.Tasks;
 
     /// <summary>
     /// An interface implemented by services which provide the ability to put
     /// a thread to sleep for a period of time.
     /// </summary>
+    /// <remarks>
+    /// The retry methods in this library no longer use this interface, because its members cannot be cancelled. It is
+    /// kept unchanged so that code built against version 2.0 continues to work.
+    /// </remarks>
     public interface ISleepService
     {
         /// <summary>
-        /// Suspend the thread for a given amount of time, or until cancellation is requested.
+        /// Suspend the thread for a given amount of time.
         /// </summary>
         /// <param name="timeSpan">The period of time for which to suspend the current thread.</param>
-        /// <param name="cancellationToken">The token with which cancellation of the wait is signalled.</param>
-        /// <exception cref="OperationCanceledException">
-        /// Cancellation was requested before or during the wait. The exception carries <paramref name="cancellationToken"/>.
-        /// </exception>
         /// <remarks>To reduce the risk of deadlocks if you are in a synchronous context, implementers should
-        /// attempt to use a low-level "suspend thread" mechanism rather than simply calling their async implementation
+        /// attempt use a low-level "suspend thread" mechanism rather than simple calling their async implementation
         /// and blocking.
         /// </remarks>
-        void Sleep(TimeSpan timeSpan, CancellationToken cancellationToken);
+        void Sleep(TimeSpan timeSpan);
 
         /// <summary>
-        /// Return a Task which completes after a certain amount of time, or is cancelled when cancellation is requested.
+        /// Return a Task which completes after a certain amount of time.
         /// </summary>
-        /// <param name="timeSpan">The period of time for which to wait.</param>
-        /// <param name="cancellationToken">The token with which cancellation of the wait is signalled.</param>
-        /// <returns>
-        /// A <see cref="Task"/> which completes when the given time has elapsed. If cancellation is requested before
-        /// or during the wait, the task is cancelled, and awaiting it throws an <see cref="OperationCanceledException"/>
-        /// which carries <paramref name="cancellationToken"/>.
-        /// </returns>
-        /// <remarks>If you are in a synchronous context, prefer the <see cref="Sleep(TimeSpan, CancellationToken)"/> method rather
+        /// <param name="timeSpan">The period of time for which to suspend the current thread.</param>
+        /// <returns>A <see cref="Task"/> which completes when the given time has elapsed.</returns>
+        /// <remarks>If you are in a synchronous context, prefer the <see cref="Sleep(TimeSpan)"/> method rather
         /// than blocking on this async method with <see cref="Task.Wait()"/> to reduce the risk of deadlocks.</remarks>
-        Task SleepAsync(TimeSpan timeSpan, CancellationToken cancellationToken);
+        Task SleepAsync(TimeSpan timeSpan);
     }
 }

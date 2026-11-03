@@ -136,7 +136,7 @@ namespace Corvus.Retry
             Assert.AreSequenceEqual(expected, this.sleeps.Delays.ToArray());
         }
 
-        private sealed class NeverEndingSleepService : ISleepService
+        private sealed class NeverEndingSleepService : ICancellableSleepService
         {
             private readonly TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
 

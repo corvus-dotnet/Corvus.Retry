@@ -27,7 +27,9 @@ namespace Corvus.Retry.Async
 
         private static readonly TimeSpan CancelAfter = TimeSpan.FromMilliseconds(25);
 
-        // Far longer than a cancelled wait takes, but far shorter than Long. The point is "not an hour".
+        // Far longer than a cancelled wait takes, but far shorter than Long. The tests wait no longer than this for a
+        // sleep to end, so a sleep that ignores cancellation fails the test with a TimeoutException instead of
+        // holding up the test run for an hour.
         private static readonly TimeSpan Prompt = TimeSpan.FromSeconds(5);
 
         [TestInitialize]
@@ -79,16 +81,14 @@ namespace Corvus.Retry.Async
         }
 
         [TestMethod]
-        public void WhenCancellationIsRequestedDuringTheSleep_TheDefaultServiceStopsWaitingAndThrowsWithTheToken()
+        public async Task WhenCancellationIsRequestedDuringTheSleep_TheDefaultServiceStopsWaitingAndThrowsWithTheToken()
         {
-            // The source's timer cancels the token from another thread while this thread is waiting.
+            // The source's timer cancels the token from another thread while the sleeping thread is waiting.
             using var cts = new CancellationTokenSource(CancelAfter);
-            var stopwatch = Stopwatch.StartNew();
 
-            OperationCanceledException thrown = Assert.ThrowsExactly<OperationCanceledException>(
-                () => SleepService.Instance.Sleep(Long, cts.Token));
+            OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+                () => SleepOnAnotherThread(cts.Token)).ConfigureAwait(false);
 
-            Assert.IsLessThan(Prompt, stopwatch.Elapsed);
             Assert.AreEqual(cts.Token, thrown.CancellationToken);
         }
 
@@ -96,27 +96,23 @@ namespace Corvus.Retry.Async
         public async Task WhenCancellationIsRequestedDuringTheAsynchronousSleep_TheDefaultServiceStopsWaitingAndThrowsWithTheToken()
         {
             using var cts = new CancellationTokenSource(CancelAfter);
-            var stopwatch = Stopwatch.StartNew();
 
             // Task.Delay reports cancellation with TaskCanceledException, which derives from OperationCanceledException.
             TaskCanceledException thrown = await Assert.ThrowsExactlyAsync<TaskCanceledException>(
-                () => SleepService.Instance.SleepAsync(Long, cts.Token)).ConfigureAwait(false);
+                () => SleepService.Instance.SleepAsync(Long, cts.Token).WaitAsync(Prompt)).ConfigureAwait(false);
 
-            Assert.IsLessThan(Prompt, stopwatch.Elapsed);
             Assert.AreEqual(cts.Token, thrown.CancellationToken);
         }
 
         [TestMethod]
-        public void WhenTheTokenIsAlreadyCancelled_TheDefaultServiceThrowsWithoutSleeping()
+        public async Task WhenTheTokenIsAlreadyCancelled_TheDefaultServiceThrowsWithoutSleeping()
         {
             using var cts = new CancellationTokenSource();
-            cts.Cancel();
-            var stopwatch = Stopwatch.StartNew();
+            await cts.CancelAsync().ConfigureAwait(false);
 
-            OperationCanceledException thrown = Assert.ThrowsExactly<OperationCanceledException>(
-                () => SleepService.Instance.Sleep(Long, cts.Token));
+            OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+                () => SleepOnAnotherThread(cts.Token)).ConfigureAwait(false);
 
-            Assert.IsLessThan(Prompt, stopwatch.Elapsed);
             Assert.AreEqual(cts.Token, thrown.CancellationToken);
         }
 
@@ -131,6 +127,12 @@ namespace Corvus.Retry.Async
             Assert.IsTrue(sleep.IsCanceled, "The task should be cancelled at once, without waiting.");
             TaskCanceledException thrown = await Assert.ThrowsExactlyAsync<TaskCanceledException>(() => sleep).ConfigureAwait(false);
             Assert.AreEqual(cts.Token, thrown.CancellationToken);
+        }
+
+        // Runs the synchronous sleep for Long on a thread-pool thread, and waits for it for no longer than Prompt.
+        private static Task SleepOnAnotherThread(CancellationToken cancellationToken)
+        {
+            return Task.Run(() => SleepService.Instance.Sleep(Long, cancellationToken)).WaitAsync(Prompt);
         }
     }
 }

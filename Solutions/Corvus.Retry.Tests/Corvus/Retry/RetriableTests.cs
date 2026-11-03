@@ -279,6 +279,26 @@ namespace Corvus.Retry
         }
 
         [TestMethod]
+        [DataRow(RetryShape.Action)]
+        [DataRow(RetryShape.Function)]
+        [DataRow(RetryShape.AsyncAction)]
+        [DataRow(RetryShape.AsyncFunction)]
+        public async Task WhenTheRetryingHandlerRequestsCancellation_TheRetryDoesNotRun(RetryShape shape)
+        {
+            // The operation would succeed on its second try, so only the check after the Retrying event can stop it.
+            var op = new FlakyOperation(1);
+            var strategy = new Count(5);
+            using var cts = new CancellationTokenSource();
+            strategy.Retrying += (_, _) => cts.Cancel();
+
+            OperationCanceledException thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+                () => RetriableDriver.RetryAsync(shape, op.Invoke, cts.Token, strategy, new AnyExceptionPolicy())).ConfigureAwait(false);
+
+            Assert.AreEqual(cts.Token, thrown.CancellationToken);
+            Assert.AreEqual(1, op.Invocations);
+        }
+
+        [TestMethod]
         [DataRow(RetryShape.Function)]
         [DataRow(RetryShape.AsyncFunction)]
         public async Task WhenTheTokenIsAlreadyCancelledButTheOperationSucceeds_TheResultIsReturned(RetryShape shape)

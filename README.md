@@ -178,12 +178,12 @@ public override bool CanRetry
 }
 ```
 
-#### `ISleepService`
-`Retriable` uses an implementation of an `ISleepService` to delay between retries. The sleep service offers synchronous `Sleep(TimeSpan, CancellationToken)` and asynchronous `SleepAsync(TimeSpan, CancellationToken)` methods to achieve a delay. `Retriable` passes the caller's cancellation token to them.
+#### The sleep service
+`Retriable` and `RetryTask` wait between retries through a sleep service. `Retriable` passes the caller's cancellation token to it.
 
-The default `SleepService` implementation uses `Task.Delay()` for the asynchronous delay. For the synchronous delay, it uses `Thread.Sleep()` when the token cannot be cancelled, and otherwise waits on the token's wait handle. Both end the wait when the token is cancelled, and throw an `OperationCanceledException` that carries the token.
+The default sleep service uses `Task.Delay()` for the asynchronous delay. For the synchronous delay, it uses `Thread.Sleep()` when the token cannot be cancelled, and otherwise waits on the token's wait handle. Both end the wait when the token is cancelled, and throw an `OperationCanceledException` that carries the token.
 
-The sleep service is internal to the library, and is replaced only by this project's own tests (for example, to remove the delay entirely). See [ADR 0001](Documentation/adr/0001-centralised-access-to-isleepservice.md).
+The sleep service is internal to the library, and is replaced only by this project's own tests (for example, to remove the delay entirely). See [ADR 0001](Documentation/adr/0001-centralised-access-to-isleepservice.md). The retry methods do not use the public `ISleepService` interface. It is kept unchanged so that code built against 2.0 continues to work.
 
 ### `RetryTask`
 
@@ -248,7 +248,7 @@ library adds. Every public type and member is benchmarked:
 | `RetryStrategyBenchmarks` | `RetryStrategy.CanRetry`, `Exception`, `OnRetrying` and the `Retrying` event, which reads `RetryEventArgs` | `CanRetry` |
 | `PolicyBenchmarks` | `AnyExceptionPolicy` and `DoNotRetryPolicy` `CanRetry` | `AnyExceptionPolicy` |
 | `AggregatePolicyBenchmarks` | `AggregatePolicy.CanRetry` with 1, 4 and 16 child policies | A single policy |
-| `SleepBenchmarks` | The default `ISleepService` (`Sleep` and `SleepAsync`), through a retry with a delay | The same retry with no delay |
+| `SleepBenchmarks` | The default sleep service (`Sleep` and `SleepAsync`), through a retry with a delay | The same retry with no delay |
 | `ConstructionBenchmarks` | Every public constructor: strategies, policies, `RetryEventArgs` and both factories | `new Count()`, `new AnyExceptionPolicy()`, `new RetryEventArgs(...)` |
 
 No benchmark waits for time to pass. Strategies calculate delays that are never waited for, and `SleepBenchmarks` asks

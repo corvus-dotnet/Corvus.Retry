@@ -206,6 +206,10 @@ namespace Corvus.Retry
                     {
                         SleepService.Instance.Sleep(delay, cancellationToken);
                     }
+
+                    // Check again before the retry, so that cancellation requested by a Retrying handler, or as the
+                    // delay ends, does not let another try run.
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
             }
         }
@@ -339,6 +343,10 @@ namespace Corvus.Retry
                     {
                         SleepService.Instance.Sleep(delay, cancellationToken);
                     }
+
+                    // Check again before the retry, so that cancellation requested by a Retrying handler, or as the
+                    // delay ends, does not let another try run.
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
             }
         }
@@ -436,6 +444,10 @@ namespace Corvus.Retry
                 {
                     await SleepService.Instance.SleepAsync(delay, cancellationToken).ConfigureAwait(continueOnCapturedContext);
                 }
+
+                // Check again before the retry, so that cancellation requested by a Retrying handler, or as the
+                // delay ends, does not let another try run.
+                cancellationToken.ThrowIfCancellationRequested();
             }
         }
 
@@ -471,6 +483,10 @@ namespace Corvus.Retry
                 {
                     await SleepService.Instance.SleepAsync(delay, cancellationToken).ConfigureAwait(continueOnCapturedContext);
                 }
+
+                // Check again before the retry, so that cancellation requested by a Retrying handler, or as the
+                // delay ends, does not let another try run.
+                cancellationToken.ThrowIfCancellationRequested();
             }
         }
 
